@@ -1,6 +1,6 @@
 # Graceful SIGINT Killing — Suggested Solutions
 
-> **Spoiler warning.** This file contains full worked solutions for `4-graceful-sigint/`. Try solving it yourself first — come back here if you're stuck or want to compare approaches.
+> **Spoiler warning.** This file contains full worked solutions for `04-graceful-sigint/`. Try solving it yourself first — come back here if you're stuck or want to compare approaches.
 
 ## The problem
 
@@ -132,7 +132,7 @@ signals via `kill -INT <pid>` (never touching the live repo):
   process was actually gone (no orphan left behind).
 
 All test binaries and background processes were cleaned up in the scratch
-directory; nothing under the live `4-graceful-sigint/` was read as code or
+directory; nothing under the live `04-graceful-sigint/` was read as code or
 written to.
 
 ## Approach 2: bound the wait with a `context.Context` timeout (alternative)

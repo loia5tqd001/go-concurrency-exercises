@@ -1,6 +1,6 @@
 # Clean Inactive Sessions to Prevent Memory Overflow — Suggested Solutions
 
-> **Spoiler warning.** This file contains full worked solutions for `5-session-cleaner/`. Try solving it yourself first — come back here if you're stuck or want to compare approaches.
+> **Spoiler warning.** This file contains full worked solutions for `05-session-cleaner/`. Try solving it yourself first — come back here if you're stuck or want to compare approaches.
 
 ## The problem
 
@@ -255,7 +255,7 @@ func main() {
   goroutine blocking on a channel when the test function returns.
 
 **Verified:** copied into a scratch directory (never touching the
-live `5-session-cleaner/`), run against the repo's current
+live `05-session-cleaner/`), run against the repo's current
 `check_test.go` — `go vet ./...` clean, `go test -race ./...` and
 `go test -race -count=3 ./...` both pass all four tests:
 `TestSessionManagersCreationAndUpdate`, `TestSessionManagersCleaner`,

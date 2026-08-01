@@ -1,6 +1,6 @@
 # Context Cancellation & Propagation: A Request Chain That Ignores Its Deadline — Suggested Solutions
 
-> **Spoiler warning.** This file contains full worked solutions for `9-context-cancellation/`. Try solving it yourself first — come back here if you're stuck or want to compare approaches.
+> **Spoiler warning.** This file contains full worked solutions for `09-context-cancellation/`. Try solving it yourself first — come back here if you're stuck or want to compare approaches.
 
 ## The problem
 

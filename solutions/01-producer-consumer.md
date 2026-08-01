@@ -1,6 +1,6 @@
 # Producer-Consumer — Suggested Solutions
 
-> **Spoiler warning.** This file contains full worked solutions for `1-producer-consumer/`. Try solving it yourself first — come back here if you're stuck or want to compare approaches.
+> **Spoiler warning.** This file contains full worked solutions for `01-producer-consumer/`. Try solving it yourself first — come back here if you're stuck or want to compare approaches.
 
 ## The problem
 
@@ -103,7 +103,7 @@ Why this works:
 - `consumer` uses `for t := range tweets`, which blocks until a value is available and exits cleanly the moment the channel is closed — no separate "done" signal needed.
 - The unbuffered channel naturally paces the two sides: the producer blocks on `out <- tweet` until the consumer is ready for the previous item, and the consumer blocks on the range until the next item exists. They run concurrently, but throughput is capped by whichever stage is slower per item (here, the consumer's 330ms vs. the producer's 320ms).
 
-**Verified** in a scratch copy (never in the live `1-producer-consumer/` directory):
+**Verified** in a scratch copy (never in the live `01-producer-consumer/` directory):
 - `go run .` → prints all 5 lines in order, `Process took 1.976337959s` (vs. 3.582158667s for the naive baseline copied from git HEAD).
 - `go run -race .` → clean, no data race reported.
 - A throwaway instrumented test confirmed the first tweet arrives on the channel after ~320ms (one stream read), not after ~1.6s (all five reads) — i.e., the producer is genuinely streaming, not silently building the whole slice first before consumption starts.

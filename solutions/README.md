@@ -10,16 +10,16 @@
 
 | # | Exercise | Solution |
 |---|----------|----------|
-| 0 | Limit your Crawler | [0-limit-crawler.md](0-limit-crawler.md) |
-| 1 | Producer-Consumer | [1-producer-consumer.md](1-producer-consumer.md) |
-| 2 | Race Condition in Caching Scenario | [2-race-in-cache.md](2-race-in-cache.md) |
-| 3 | Limit Service Time for Free-Tier Users | [3-limit-service-time.md](3-limit-service-time.md) |
-| 4 | Graceful SIGINT Killing | [4-graceful-sigint.md](4-graceful-sigint.md) |
-| 5 | Clean Inactive Sessions to Prevent Memory Overflow | [5-session-cleaner.md](5-session-cleaner.md) |
-| 6 | Fan-Out, Fan-In: Concurrent Thumbnail Generation | [6-fan-out-fan-in.md](6-fan-out-fan-in.md) |
-| 7 | Or-Done Channel: Stopping a Monitoring Feed Cleanly | [7-or-done-channel.md](7-or-done-channel.md) |
-| 8 | Pipeline: Multi-Stage Number Processing | [8-pipeline.md](8-pipeline.md) |
-| 9 | Context Cancellation & Propagation | [9-context-cancellation.md](9-context-cancellation.md) |
+| 0 | Limit your Crawler | [00-limit-crawler.md](00-limit-crawler.md) |
+| 1 | Producer-Consumer | [01-producer-consumer.md](01-producer-consumer.md) |
+| 2 | Race Condition in Caching Scenario | [02-race-in-cache.md](02-race-in-cache.md) |
+| 3 | Limit Service Time for Free-Tier Users | [03-limit-service-time.md](03-limit-service-time.md) |
+| 4 | Graceful SIGINT Killing | [04-graceful-sigint.md](04-graceful-sigint.md) |
+| 5 | Clean Inactive Sessions to Prevent Memory Overflow | [05-session-cleaner.md](05-session-cleaner.md) |
+| 6 | Fan-Out, Fan-In: Concurrent Thumbnail Generation | [06-fan-out-fan-in.md](06-fan-out-fan-in.md) |
+| 7 | Or-Done Channel: Stopping a Monitoring Feed Cleanly | [07-or-done-channel.md](07-or-done-channel.md) |
+| 8 | Pipeline: Multi-Stage Number Processing | [08-pipeline.md](08-pipeline.md) |
+| 9 | Context Cancellation & Propagation | [09-context-cancellation.md](09-context-cancellation.md) |
 | 10 | Semaphore: Bounding Parallelism Against a Rate-Limited API | [10-semaphore.md](10-semaphore.md) |
 | 11 | Worker Pool: Batch Job Processor with Partial Failures | [11-worker-pool.md](11-worker-pool.md) |
 | 12 | Pub-Sub: In-Memory Event Bus | [12-pub-sub.md](12-pub-sub.md) |

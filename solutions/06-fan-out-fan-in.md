@@ -1,6 +1,6 @@
 # Fan-Out, Fan-In: Concurrent Thumbnail Generation — Suggested Solutions
 
-> **Spoiler warning.** This file contains full worked solutions for `6-fan-out-fan-in/`. Try solving it yourself first — come back here if you're stuck or want to compare approaches.
+> **Spoiler warning.** This file contains full worked solutions for `06-fan-out-fan-in/`. Try solving it yourself first — come back here if you're stuck or want to compare approaches.
 
 ## The problem
 

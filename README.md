@@ -20,16 +20,16 @@ The exercises are numbered in the order we'd recommend doing them — difficulty
 
 | # | Challenge | Difficulty | Topics |
 | - |-----------|:---:|--------|
-| 0 | [Limit your Crawler](https://github.com/loong/go-concurrency-exercises/tree/main/0-limit-crawler) | ![warm-up](https://img.shields.io/badge/-warm--up-lightgrey) | `rate-limiting` `ticker` `goroutines-basics` |
-| 1 | [Producer-Consumer](https://github.com/loong/go-concurrency-exercises/tree/main/1-producer-consumer) | ![warm-up](https://img.shields.io/badge/-warm--up-lightgrey) | `channels` `goroutines-basics` |
-| 2 | [Race Condition in Caching Cache](https://github.com/loong/go-concurrency-exercises/tree/main/2-race-in-cache#race-condition-in-caching-szenario) | ![easy](https://img.shields.io/badge/-easy-brightgreen) | `mutex` `data-race` `lru-cache` |
-| 3 | [Limit Service Time for Free-tier Users](https://github.com/loong/go-concurrency-exercises/tree/main/3-limit-service-time) | ![medium](https://img.shields.io/badge/-medium-blue) | `context` `mutex` `rate-limiting` |
-| 4 | [Graceful SIGINT Killing](https://github.com/loong/go-concurrency-exercises/tree/main/4-graceful-sigint) | ![easy](https://img.shields.io/badge/-easy-brightgreen) | `signals` `select` `graceful-shutdown` |
-| 5 | [Clean Inactive Sessions to Prevent Memory Overflow](https://github.com/loong/go-concurrency-exercises/tree/main/5-session-cleaner) | ![medium](https://img.shields.io/badge/-medium-blue) | `mutex` `ticker` `background-worker` |
-| 6 | [Fan-Out, Fan-In: Concurrent Thumbnail Generation](https://github.com/loong/go-concurrency-exercises/tree/main/6-fan-out-fan-in) | ![easy](https://img.shields.io/badge/-easy-brightgreen) | `worker-pool` `fan-out-fan-in` `channels` |
-| 7 | [Or-Done Channel: Stopping a Monitoring Feed Cleanly](https://github.com/loong/go-concurrency-exercises/tree/main/7-or-done-channel) | ![medium](https://img.shields.io/badge/-medium-blue) | `done-channel` `channels` `goroutine-leak` |
-| 8 | [Pipeline: Multi-Stage Number Processing](https://github.com/loong/go-concurrency-exercises/tree/main/8-pipeline) | ![medium](https://img.shields.io/badge/-medium-blue) | `pipeline` `channels` `context` |
-| 9 | [Context Cancellation & Propagation](https://github.com/loong/go-concurrency-exercises/tree/main/9-context-cancellation) | ![easy](https://img.shields.io/badge/-easy-brightgreen) | `context` `cancellation` |
+| 0 | [Limit your Crawler](https://github.com/loong/go-concurrency-exercises/tree/main/00-limit-crawler) | ![warm-up](https://img.shields.io/badge/-warm--up-lightgrey) | `rate-limiting` `ticker` `goroutines-basics` |
+| 1 | [Producer-Consumer](https://github.com/loong/go-concurrency-exercises/tree/main/01-producer-consumer) | ![warm-up](https://img.shields.io/badge/-warm--up-lightgrey) | `channels` `goroutines-basics` |
+| 2 | [Race Condition in Caching Cache](https://github.com/loong/go-concurrency-exercises/tree/main/02-race-in-cache#race-condition-in-caching-szenario) | ![easy](https://img.shields.io/badge/-easy-brightgreen) | `mutex` `data-race` `lru-cache` |
+| 3 | [Limit Service Time for Free-tier Users](https://github.com/loong/go-concurrency-exercises/tree/main/03-limit-service-time) | ![medium](https://img.shields.io/badge/-medium-blue) | `context` `mutex` `rate-limiting` |
+| 4 | [Graceful SIGINT Killing](https://github.com/loong/go-concurrency-exercises/tree/main/04-graceful-sigint) | ![easy](https://img.shields.io/badge/-easy-brightgreen) | `signals` `select` `graceful-shutdown` |
+| 5 | [Clean Inactive Sessions to Prevent Memory Overflow](https://github.com/loong/go-concurrency-exercises/tree/main/05-session-cleaner) | ![medium](https://img.shields.io/badge/-medium-blue) | `mutex` `ticker` `background-worker` |
+| 6 | [Fan-Out, Fan-In: Concurrent Thumbnail Generation](https://github.com/loong/go-concurrency-exercises/tree/main/06-fan-out-fan-in) | ![easy](https://img.shields.io/badge/-easy-brightgreen) | `worker-pool` `fan-out-fan-in` `channels` |
+| 7 | [Or-Done Channel: Stopping a Monitoring Feed Cleanly](https://github.com/loong/go-concurrency-exercises/tree/main/07-or-done-channel) | ![medium](https://img.shields.io/badge/-medium-blue) | `done-channel` `channels` `goroutine-leak` |
+| 8 | [Pipeline: Multi-Stage Number Processing](https://github.com/loong/go-concurrency-exercises/tree/main/08-pipeline) | ![medium](https://img.shields.io/badge/-medium-blue) | `pipeline` `channels` `context` |
+| 9 | [Context Cancellation & Propagation](https://github.com/loong/go-concurrency-exercises/tree/main/09-context-cancellation) | ![easy](https://img.shields.io/badge/-easy-brightgreen) | `context` `cancellation` |
 | 10 | [Semaphore: Bounding Parallelism Against a Rate-Limited API](https://github.com/loong/go-concurrency-exercises/tree/main/10-semaphore) | ![medium](https://img.shields.io/badge/-medium-blue) | `semaphore` `rate-limiting` `worker-pool` |
 | 11 | [Worker Pool: Batch Job Processor with Partial Failures](https://github.com/loong/go-concurrency-exercises/tree/main/11-worker-pool) | ![easy](https://img.shields.io/badge/-easy-brightgreen) | `worker-pool` `channels` |
 | 12 | [Pub-Sub: In-Memory Event Bus](https://github.com/loong/go-concurrency-exercises/tree/main/12-pub-sub) | ![medium](https://img.shields.io/badge/-medium-blue) | `pub-sub` `channels` `mutex` |
@@ -52,45 +52,45 @@ The exercises are numbered in the order we'd recommend doing them — difficulty
 | Topic | Exercises |
 |-------|-----------|
 | `actor-model` | [19](https://github.com/loong/go-concurrency-exercises/tree/main/19-actor-model) |
-| `background-worker` | [5](https://github.com/loong/go-concurrency-exercises/tree/main/5-session-cleaner) |
+| `background-worker` | [05](https://github.com/loong/go-concurrency-exercises/tree/main/05-session-cleaner) |
 | `backpressure` | [18](https://github.com/loong/go-concurrency-exercises/tree/main/18-bounded-pipeline-backpressure) |
 | `bridge-pattern` | [13](https://github.com/loong/go-concurrency-exercises/tree/main/13-channel-of-channels) |
-| `cancellation` | [9](https://github.com/loong/go-concurrency-exercises/tree/main/9-context-cancellation) |
-| `channels` | [1](https://github.com/loong/go-concurrency-exercises/tree/main/1-producer-consumer), [6](https://github.com/loong/go-concurrency-exercises/tree/main/6-fan-out-fan-in), [7](https://github.com/loong/go-concurrency-exercises/tree/main/7-or-done-channel), [8](https://github.com/loong/go-concurrency-exercises/tree/main/8-pipeline), [11](https://github.com/loong/go-concurrency-exercises/tree/main/11-worker-pool), [12](https://github.com/loong/go-concurrency-exercises/tree/main/12-pub-sub), [13](https://github.com/loong/go-concurrency-exercises/tree/main/13-channel-of-channels), [14](https://github.com/loong/go-concurrency-exercises/tree/main/14-tee-channel), [18](https://github.com/loong/go-concurrency-exercises/tree/main/18-bounded-pipeline-backpressure) |
+| `cancellation` | [09](https://github.com/loong/go-concurrency-exercises/tree/main/09-context-cancellation) |
+| `channels` | [01](https://github.com/loong/go-concurrency-exercises/tree/main/01-producer-consumer), [06](https://github.com/loong/go-concurrency-exercises/tree/main/06-fan-out-fan-in), [07](https://github.com/loong/go-concurrency-exercises/tree/main/07-or-done-channel), [08](https://github.com/loong/go-concurrency-exercises/tree/main/08-pipeline), [11](https://github.com/loong/go-concurrency-exercises/tree/main/11-worker-pool), [12](https://github.com/loong/go-concurrency-exercises/tree/main/12-pub-sub), [13](https://github.com/loong/go-concurrency-exercises/tree/main/13-channel-of-channels), [14](https://github.com/loong/go-concurrency-exercises/tree/main/14-tee-channel), [18](https://github.com/loong/go-concurrency-exercises/tree/main/18-bounded-pipeline-backpressure) |
 | `circuit-breaker` | [22](https://github.com/loong/go-concurrency-exercises/tree/main/22-circuit-breaker) |
 | `container/heap` | [24](https://github.com/loong/go-concurrency-exercises/tree/main/24-priority-worker-pool) |
-| `context` | [3](https://github.com/loong/go-concurrency-exercises/tree/main/3-limit-service-time), [8](https://github.com/loong/go-concurrency-exercises/tree/main/8-pipeline), [9](https://github.com/loong/go-concurrency-exercises/tree/main/9-context-cancellation) |
-| `data-race` | [2](https://github.com/loong/go-concurrency-exercises/tree/main/2-race-in-cache) |
+| `context` | [03](https://github.com/loong/go-concurrency-exercises/tree/main/03-limit-service-time), [08](https://github.com/loong/go-concurrency-exercises/tree/main/08-pipeline), [09](https://github.com/loong/go-concurrency-exercises/tree/main/09-context-cancellation) |
+| `data-race` | [02](https://github.com/loong/go-concurrency-exercises/tree/main/02-race-in-cache) |
 | `deadlock` | [21](https://github.com/loong/go-concurrency-exercises/tree/main/21-dining-philosophers) |
-| `done-channel` | [7](https://github.com/loong/go-concurrency-exercises/tree/main/7-or-done-channel) |
+| `done-channel` | [07](https://github.com/loong/go-concurrency-exercises/tree/main/07-or-done-channel) |
 | `errgroup` | [16](https://github.com/loong/go-concurrency-exercises/tree/main/16-errgroup-failfast) |
-| `fan-out-fan-in` | [6](https://github.com/loong/go-concurrency-exercises/tree/main/6-fan-out-fan-in), [13](https://github.com/loong/go-concurrency-exercises/tree/main/13-channel-of-channels), [20](https://github.com/loong/go-concurrency-exercises/tree/main/20-concurrent-map-reduce) |
+| `fan-out-fan-in` | [06](https://github.com/loong/go-concurrency-exercises/tree/main/06-fan-out-fan-in), [13](https://github.com/loong/go-concurrency-exercises/tree/main/13-channel-of-channels), [20](https://github.com/loong/go-concurrency-exercises/tree/main/20-concurrent-map-reduce) |
 | `future-promise` | [17](https://github.com/loong/go-concurrency-exercises/tree/main/17-future-promise) |
-| `goroutine-leak` | [7](https://github.com/loong/go-concurrency-exercises/tree/main/7-or-done-channel) |
-| `goroutines-basics` | [0](https://github.com/loong/go-concurrency-exercises/tree/main/0-limit-crawler), [1](https://github.com/loong/go-concurrency-exercises/tree/main/1-producer-consumer) |
-| `graceful-shutdown` | [4](https://github.com/loong/go-concurrency-exercises/tree/main/4-graceful-sigint), [25](https://github.com/loong/go-concurrency-exercises/tree/main/25-graceful-multistage-shutdown) |
+| `goroutine-leak` | [07](https://github.com/loong/go-concurrency-exercises/tree/main/07-or-done-channel) |
+| `goroutines-basics` | [00](https://github.com/loong/go-concurrency-exercises/tree/main/00-limit-crawler), [01](https://github.com/loong/go-concurrency-exercises/tree/main/01-producer-consumer) |
+| `graceful-shutdown` | [04](https://github.com/loong/go-concurrency-exercises/tree/main/04-graceful-sigint), [25](https://github.com/loong/go-concurrency-exercises/tree/main/25-graceful-multistage-shutdown) |
 | `hashing` | [23](https://github.com/loong/go-concurrency-exercises/tree/main/23-sharded-cache) |
-| `lru-cache` | [2](https://github.com/loong/go-concurrency-exercises/tree/main/2-race-in-cache) |
+| `lru-cache` | [02](https://github.com/loong/go-concurrency-exercises/tree/main/02-race-in-cache) |
 | `map-reduce` | [20](https://github.com/loong/go-concurrency-exercises/tree/main/20-concurrent-map-reduce) |
-| `mutex` | [2](https://github.com/loong/go-concurrency-exercises/tree/main/2-race-in-cache), [3](https://github.com/loong/go-concurrency-exercises/tree/main/3-limit-service-time), [5](https://github.com/loong/go-concurrency-exercises/tree/main/5-session-cleaner), [12](https://github.com/loong/go-concurrency-exercises/tree/main/12-pub-sub), [20](https://github.com/loong/go-concurrency-exercises/tree/main/20-concurrent-map-reduce), [21](https://github.com/loong/go-concurrency-exercises/tree/main/21-dining-philosophers), [22](https://github.com/loong/go-concurrency-exercises/tree/main/22-circuit-breaker), [23](https://github.com/loong/go-concurrency-exercises/tree/main/23-sharded-cache) |
+| `mutex` | [02](https://github.com/loong/go-concurrency-exercises/tree/main/02-race-in-cache), [03](https://github.com/loong/go-concurrency-exercises/tree/main/03-limit-service-time), [05](https://github.com/loong/go-concurrency-exercises/tree/main/05-session-cleaner), [12](https://github.com/loong/go-concurrency-exercises/tree/main/12-pub-sub), [20](https://github.com/loong/go-concurrency-exercises/tree/main/20-concurrent-map-reduce), [21](https://github.com/loong/go-concurrency-exercises/tree/main/21-dining-philosophers), [22](https://github.com/loong/go-concurrency-exercises/tree/main/22-circuit-breaker), [23](https://github.com/loong/go-concurrency-exercises/tree/main/23-sharded-cache) |
 | `mutex-free` | [19](https://github.com/loong/go-concurrency-exercises/tree/main/19-actor-model) |
 | `or-channel` | [15](https://github.com/loong/go-concurrency-exercises/tree/main/15-or-channel-combinator) |
-| `pipeline` | [8](https://github.com/loong/go-concurrency-exercises/tree/main/8-pipeline), [18](https://github.com/loong/go-concurrency-exercises/tree/main/18-bounded-pipeline-backpressure) |
+| `pipeline` | [08](https://github.com/loong/go-concurrency-exercises/tree/main/08-pipeline), [18](https://github.com/loong/go-concurrency-exercises/tree/main/18-bounded-pipeline-backpressure) |
 | `priority-queue` | [24](https://github.com/loong/go-concurrency-exercises/tree/main/24-priority-worker-pool) |
 | `pub-sub` | [12](https://github.com/loong/go-concurrency-exercises/tree/main/12-pub-sub) |
-| `rate-limiting` | [0](https://github.com/loong/go-concurrency-exercises/tree/main/0-limit-crawler), [3](https://github.com/loong/go-concurrency-exercises/tree/main/3-limit-service-time), [10](https://github.com/loong/go-concurrency-exercises/tree/main/10-semaphore) |
+| `rate-limiting` | [00](https://github.com/loong/go-concurrency-exercises/tree/main/00-limit-crawler), [03](https://github.com/loong/go-concurrency-exercises/tree/main/03-limit-service-time), [10](https://github.com/loong/go-concurrency-exercises/tree/main/10-semaphore) |
 | `recursion` | [15](https://github.com/loong/go-concurrency-exercises/tree/main/15-or-channel-combinator) |
-| `select` | [4](https://github.com/loong/go-concurrency-exercises/tree/main/4-graceful-sigint), [14](https://github.com/loong/go-concurrency-exercises/tree/main/14-tee-channel), [15](https://github.com/loong/go-concurrency-exercises/tree/main/15-or-channel-combinator) |
+| `select` | [04](https://github.com/loong/go-concurrency-exercises/tree/main/04-graceful-sigint), [14](https://github.com/loong/go-concurrency-exercises/tree/main/14-tee-channel), [15](https://github.com/loong/go-concurrency-exercises/tree/main/15-or-channel-combinator) |
 | `semaphore` | [10](https://github.com/loong/go-concurrency-exercises/tree/main/10-semaphore) |
 | `sharding` | [23](https://github.com/loong/go-concurrency-exercises/tree/main/23-sharded-cache) |
-| `signals` | [4](https://github.com/loong/go-concurrency-exercises/tree/main/4-graceful-sigint) |
+| `signals` | [04](https://github.com/loong/go-concurrency-exercises/tree/main/04-graceful-sigint) |
 | `state-machine` | [22](https://github.com/loong/go-concurrency-exercises/tree/main/22-circuit-breaker) |
 | `sync.cond` | [24](https://github.com/loong/go-concurrency-exercises/tree/main/24-priority-worker-pool) |
 | `sync.once` | [16](https://github.com/loong/go-concurrency-exercises/tree/main/16-errgroup-failfast), [17](https://github.com/loong/go-concurrency-exercises/tree/main/17-future-promise) |
 | `sync.waitgroup` | [25](https://github.com/loong/go-concurrency-exercises/tree/main/25-graceful-multistage-shutdown) |
 | `tee-channel` | [14](https://github.com/loong/go-concurrency-exercises/tree/main/14-tee-channel) |
-| `ticker` | [0](https://github.com/loong/go-concurrency-exercises/tree/main/0-limit-crawler), [5](https://github.com/loong/go-concurrency-exercises/tree/main/5-session-cleaner) |
-| `worker-pool` | [6](https://github.com/loong/go-concurrency-exercises/tree/main/6-fan-out-fan-in), [10](https://github.com/loong/go-concurrency-exercises/tree/main/10-semaphore), [11](https://github.com/loong/go-concurrency-exercises/tree/main/11-worker-pool), [16](https://github.com/loong/go-concurrency-exercises/tree/main/16-errgroup-failfast), [25](https://github.com/loong/go-concurrency-exercises/tree/main/25-graceful-multistage-shutdown) |
+| `ticker` | [00](https://github.com/loong/go-concurrency-exercises/tree/main/00-limit-crawler), [05](https://github.com/loong/go-concurrency-exercises/tree/main/05-session-cleaner) |
+| `worker-pool` | [06](https://github.com/loong/go-concurrency-exercises/tree/main/06-fan-out-fan-in), [10](https://github.com/loong/go-concurrency-exercises/tree/main/10-semaphore), [11](https://github.com/loong/go-concurrency-exercises/tree/main/11-worker-pool), [16](https://github.com/loong/go-concurrency-exercises/tree/main/16-errgroup-failfast), [25](https://github.com/loong/go-concurrency-exercises/tree/main/25-graceful-multistage-shutdown) |
 
 ## License
 

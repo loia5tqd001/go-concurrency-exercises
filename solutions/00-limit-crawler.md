@@ -1,6 +1,6 @@
 # Limit Your Crawler — Suggested Solutions
 
-> **Spoiler warning.** This file contains full worked solutions for `0-limit-crawler/`. Try solving it yourself first — come back here if you're stuck or want to compare approaches.
+> **Spoiler warning.** This file contains full worked solutions for `00-limit-crawler/`. Try solving it yourself first — come back here if you're stuck or want to compare approaches.
 
 ## The problem
 

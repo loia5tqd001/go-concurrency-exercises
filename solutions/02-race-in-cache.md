@@ -1,6 +1,6 @@
 # Race Condition in Caching Scenario — Suggested Solutions
 
-> **Spoiler warning.** This file contains full worked solutions for `2-race-in-cache/`. Try solving it yourself first — come back here if you're stuck or want to compare approaches.
+> **Spoiler warning.** This file contains full worked solutions for `02-race-in-cache/`. Try solving it yourself first — come back here if you're stuck or want to compare approaches.
 
 ## The problem
 
