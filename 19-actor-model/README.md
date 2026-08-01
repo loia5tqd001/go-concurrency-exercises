@@ -30,6 +30,19 @@ func (a *Account) Withdraw(amount int) error
 func (a *Account) Balance() int
 ```
 
+Unlike a mutex, which needs nothing to clean up, the actor goroutine
+you start in `NewAccount` keeps running for as long as the process
+does unless something tells it to stop - so `Account` also needs a
+`Close` method that terminates that goroutine:
+
+```go
+func (a *Account) Close()
+```
+
+After `Close` returns, the actor goroutine must have exited. Calling
+`Deposit`, `Withdraw`, or `Balance` on a closed `Account` is not
+exercised by the tests, so its behavior is up to you.
+
 ## Test your solution
 
 To complete this exercise, you must pass the tests:

@@ -10,6 +10,7 @@ import (
 	"errors"
 	"sync"
 	"testing"
+	"testing/synctest"
 )
 
 // TestAccountBasicOperations exercises Deposit, Withdraw, and Balance
@@ -118,4 +119,31 @@ func TestAccountWithdrawRejectsInsufficientFunds(t *testing.T) {
 		t.Errorf("final balance = %d, want %d (initial %d minus %d successful withdrawals of %d)",
 			finalBalance, want, initial, successes, amount)
 	}
+}
+
+// TestAccountCloseStopsActorGoroutine checks that Close actually
+// terminates the actor goroutine an actor-based Account starts,
+// rather than just existing as a no-op to satisfy the API. It never
+// inspects Account's internals - it relies entirely on
+// synctest.Test's own rule that every goroutine spawned inside the
+// bubble (transitively) must have exited by the time the function
+// passed to it returns. NewAccount's actor goroutine, if any, is
+// spawned inside this bubble; if Close doesn't make it exit, it's
+// still durably blocked (e.g. on <-requests) when this test function
+// returns, and synctest.Test panics with a deadlock message instead
+// of this test merely failing an assertion.
+//
+// This passes trivially against the naive, lock-free implementation
+// above, which starts no goroutine at all - it only starts pulling
+// its weight once Deposit/Withdraw/Balance are backed by an actor.
+func TestAccountCloseStopsActorGoroutine(t *testing.T) {
+	synctest.Test(t, func(t *testing.T) {
+		account := NewAccount(100)
+		defer account.Close()
+
+		account.Deposit(50)
+		if got := account.Balance(); got != 150 {
+			t.Fatalf("balance = %d, want 150", got)
+		}
+	})
 }

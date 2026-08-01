@@ -33,6 +33,14 @@
 // so that Account remains a drop-in replacement for the naive
 // version below.
 //
+// Unlike a mutex, which needs nothing to clean up, the actor
+// goroutine started in NewAccount keeps running for as long as the
+// process does unless something tells it to stop. So Account also
+// needs a Close method - func (a *Account) Close() - that terminates
+// that goroutine; after Close returns, the actor goroutine must have
+// exited. Calling Deposit, Withdraw, or Balance on a closed Account
+// is not exercised by the tests, so its behavior is up to you.
+//
 
 package main
 
@@ -70,6 +78,11 @@ func (a *Account) Withdraw(amount int) error {
 func (a *Account) Balance() int {
 	return a.balance
 }
+
+// Close is a no-op here since the naive version above starts no
+// goroutine. An actor-based Account must override this to actually
+// stop its actor goroutine.
+func (a *Account) Close() {}
 
 var ErrInsufficientFunds = errors.New("insufficient funds")
 
