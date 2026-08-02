@@ -36,6 +36,11 @@
 | 23 | Sharded Concurrent Cache: Reducing Lock Contention | [23-sharded-cache.md](23-sharded-cache.md) |
 | 24 | Priority Worker Pool: Weighted Scheduling | [24-priority-worker-pool.md](24-priority-worker-pool.md) |
 | 25 | Graceful Multi-Stage Shutdown | [25-graceful-multistage-shutdown.md](25-graceful-multistage-shutdown.md) |
+| 26 | Pipeline Error Handling: Result Values Instead of Aborting | [26-pipeline-error-handling.md](26-pipeline-error-handling.md) |
+| 27 | Heartbeats: Detecting a Stalled Worker Before It's Too Late | [27-heartbeats.md](27-heartbeats.md) |
+| 28 | Replicated Requests: Racing Redundant Calls for Lower Tail Latency | [28-replicated-requests.md](28-replicated-requests.md) |
+| 29 | Healing Unhealthy Goroutines: A Steward That Restarts a Wedged Ward | [29-healing-goroutines.md](29-healing-goroutines.md) |
+| 30 | Livelock & Starvation: Two Failure Modes Beyond Deadlock | [30-livelock-starvation.md](30-livelock-starvation.md) |
 
 ## A note on exercises 0-5
 

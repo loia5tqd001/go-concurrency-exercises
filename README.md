@@ -6,6 +6,10 @@ The Go community has plenty resources to read about go's concurrency model and h
 
 ![Image of excited gopher](https://golang.org/doc/gopher/pkg.png)
 
+## Credit
+
+Most of the patterns exercised here (and the [Suggested order](#suggested-order-mapped-to-concurrency-in-go) below) follow the structure of Katherine Cox-Buday's [*Concurrency in Go*](https://www.oreilly.com/library/view/concurrency-in-go/9781491941294/) (O'Reilly, 2017) — race conditions, deadlock/livelock/starvation, the `sync` and channel building blocks, the pipeline/fan-out-fan-in/or-done/tee/bridge family, and the at-scale patterns (heartbeats, replicated requests, healing unhealthy goroutines). If an exercise here feels familiar, it's likely because the book covers the same idea in more depth — it's a great companion read.
+
 ## How to take this challenge
 1. *Only edit `main.go`* to solve the problem. Do not touch any of the other files.
 2. If you find a `*_test.go` file, you can test the correctness of your solution with `go test`
@@ -16,7 +20,7 @@ The Go community has plenty resources to read about go's concurrency model and h
 
 **Difficulty:** ![warm-up](https://img.shields.io/badge/-warm--up-lightgrey) &nbsp;![easy](https://img.shields.io/badge/-easy-brightgreen) &nbsp;![medium](https://img.shields.io/badge/-medium-blue) &nbsp;![hard](https://img.shields.io/badge/-hard-orange) &nbsp;![extreme](https://img.shields.io/badge/-extreme-red)
 
-The exercises are numbered in the order we'd recommend doing them — difficulty generally increases with the number, but the table below also tags each one by topic so you can jump straight to, say, everything about `context` or every `mutex` exercise. See [Browse by topic](#browse-by-topic) for the reverse index.
+The exercises are numbered in the order they were added — difficulty generally increases with the number, but the numbering doesn't exactly follow *Concurrency in Go*'s own chapter order (a few patterns the book introduces earlier, like pipelines, got added to this repo later than patterns that build on them). If you want the book-faithful sequence, see [Suggested order, mapped to *Concurrency in Go*](#suggested-order-mapped-to-concurrency-in-go) below. The table also tags each exercise by topic so you can jump straight to, say, everything about `context` or every `mutex` exercise — see [Browse by topic](#browse-by-topic) for the reverse index.
 
 | # | Challenge | Difficulty | Topics |
 | - |-----------|:---:|--------|
@@ -46,6 +50,66 @@ The exercises are numbered in the order we'd recommend doing them — difficulty
 | 23 | [Sharded Concurrent Cache: Reducing Lock Contention](https://github.com/loong/go-concurrency-exercises/tree/main/23-sharded-cache) | ![hard](https://img.shields.io/badge/-hard-orange) | `sharding` `mutex` `hashing` |
 | 24 | [Priority Worker Pool: Weighted Scheduling](https://github.com/loong/go-concurrency-exercises/tree/main/24-priority-worker-pool) | ![extreme](https://img.shields.io/badge/-extreme-red) | `priority-queue` `container/heap` `sync.cond` |
 | 25 | [Graceful Multi-Stage Shutdown](https://github.com/loong/go-concurrency-exercises/tree/main/25-graceful-multistage-shutdown) | ![hard](https://img.shields.io/badge/-hard-orange) | `graceful-shutdown` `worker-pool` `sync.waitgroup` |
+| 26 | [Pipeline Error Handling: Result Values Instead of Aborting](https://github.com/loong/go-concurrency-exercises/tree/main/26-pipeline-error-handling) | ![medium](https://img.shields.io/badge/-medium-blue) | `pipeline` `error-handling` `result-type` |
+| 27 | [Heartbeats: Detecting a Stalled Worker Before It's Too Late](https://github.com/loong/go-concurrency-exercises/tree/main/27-heartbeats) | ![medium](https://img.shields.io/badge/-medium-blue) | `heartbeats` `select` `timeout` |
+| 28 | [Replicated Requests: Racing Redundant Calls for Lower Tail Latency](https://github.com/loong/go-concurrency-exercises/tree/main/28-replicated-requests) | ![hard](https://img.shields.io/badge/-hard-orange) | `replicated-requests` `fan-out-fan-in` `goroutine-leak` |
+| 29 | [Healing Unhealthy Goroutines: A Steward That Restarts a Wedged Ward](https://github.com/loong/go-concurrency-exercises/tree/main/29-healing-goroutines) | ![extreme](https://img.shields.io/badge/-extreme-red) | `steward` `heartbeats` `supervision` |
+| 30 | [Livelock & Starvation: Two Failure Modes Beyond Deadlock](https://github.com/loong/go-concurrency-exercises/tree/main/30-livelock-starvation) | ![medium](https://img.shields.io/badge/-medium-blue) | `livelock` `starvation` `fairness` |
+
+## Suggested order, mapped to *Concurrency in Go*
+
+*Concurrency in Go* builds its own patterns in a specific order, each one leaning on ideas the previous section already established. If you're reading along, work through the exercises in this order rather than by folder number — a few (pipelines before fan-out/fan-in, tee before bridge, livelock/starvation grouped with deadlock, and the whole "at scale" tier) land better this way than strict numeric order would give you.
+
+**Ch. 1 — Why concurrency is hard**
+
+| Exercise | Failure mode |
+|---|---|
+| [02](02-race-in-cache) | Race conditions & memory access synchronization |
+| [21](21-dining-philosophers) | Deadlock |
+| [30](30-livelock-starvation) | Livelock & starvation |
+
+**Ch. 2–3 — Goroutines, `sync`, channels, `select`**
+
+| Exercise | Building block |
+|---|---|
+| [00](00-limit-crawler) | Goroutines, `time.Ticker` |
+| [01](01-producer-consumer) | Channels, goroutines |
+| [04](04-graceful-sigint) | `select`, signals |
+| [03](03-limit-service-time) | `context`, `sync.Mutex` |
+| [05](05-session-cleaner) | `sync.Mutex`, `time.Ticker`, background workers |
+| [10](10-semaphore) | Channel-as-semaphore |
+| [17](17-future-promise) | `sync.Once` |
+| [16](16-errgroup-failfast) | `sync.Once`, `sync.WaitGroup` |
+| [24](24-priority-worker-pool) | `sync.Cond`, `container/heap` |
+
+**Ch. 4 — Concurrency patterns in Go**
+
+| Exercise | Pattern |
+|---|---|
+| [20](20-concurrent-map-reduce) | Confinement |
+| [08](08-pipeline) | Pipelines |
+| [06](06-fan-out-fan-in) | Fan-out, fan-in |
+| [07](07-or-done-channel) | The or-done-channel / preventing goroutine leaks |
+| [26](26-pipeline-error-handling) | Error handling in pipelines |
+| [14](14-tee-channel) | The tee-channel |
+| [13](13-channel-of-channels) | The bridge-channel |
+| [15](15-or-channel-combinator) | The or-channel |
+| [18](18-bounded-pipeline-backpressure) | Queuing (the book argues *against* unbounded buffering — this exercise shows why) |
+| [09](09-context-cancellation) | The `context` package |
+| [11](11-worker-pool), [12](12-pub-sub) | Worker pools & pub-sub — repo extensions of the same channel-plumbing ideas |
+
+**Ch. 5 — Concurrency at scale**
+
+| Exercise | Pattern |
+|---|---|
+| [27](27-heartbeats) | Heartbeats |
+| [29](29-healing-goroutines) | Healing unhealthy goroutines (steward) |
+| [28](28-replicated-requests) | Replicated requests |
+| [25](25-graceful-multistage-shutdown) | Graceful shutdown, revisited at the "is every worker really done" level |
+
+**Beyond the book**
+
+[19](19-actor-model), [22](22-circuit-breaker), and [23](23-sharded-cache) (actor model, circuit breaker, sharded cache) aren't in the book — they're patterns that show up constantly in production Go once its core toolkit is second nature, included here as a natural next step.
 
 ## Browse by topic
 
@@ -64,32 +128,42 @@ The exercises are numbered in the order we'd recommend doing them — difficulty
 | `deadlock` | [21](https://github.com/loong/go-concurrency-exercises/tree/main/21-dining-philosophers) |
 | `done-channel` | [07](https://github.com/loong/go-concurrency-exercises/tree/main/07-or-done-channel) |
 | `errgroup` | [16](https://github.com/loong/go-concurrency-exercises/tree/main/16-errgroup-failfast) |
-| `fan-out-fan-in` | [06](https://github.com/loong/go-concurrency-exercises/tree/main/06-fan-out-fan-in), [13](https://github.com/loong/go-concurrency-exercises/tree/main/13-channel-of-channels), [20](https://github.com/loong/go-concurrency-exercises/tree/main/20-concurrent-map-reduce) |
+| `error-handling` | [26](https://github.com/loong/go-concurrency-exercises/tree/main/26-pipeline-error-handling) |
+| `fairness` | [30](https://github.com/loong/go-concurrency-exercises/tree/main/30-livelock-starvation) |
+| `fan-out-fan-in` | [06](https://github.com/loong/go-concurrency-exercises/tree/main/06-fan-out-fan-in), [13](https://github.com/loong/go-concurrency-exercises/tree/main/13-channel-of-channels), [20](https://github.com/loong/go-concurrency-exercises/tree/main/20-concurrent-map-reduce), [28](https://github.com/loong/go-concurrency-exercises/tree/main/28-replicated-requests) |
 | `future-promise` | [17](https://github.com/loong/go-concurrency-exercises/tree/main/17-future-promise) |
-| `goroutine-leak` | [07](https://github.com/loong/go-concurrency-exercises/tree/main/07-or-done-channel) |
+| `goroutine-leak` | [07](https://github.com/loong/go-concurrency-exercises/tree/main/07-or-done-channel), [28](https://github.com/loong/go-concurrency-exercises/tree/main/28-replicated-requests) |
 | `goroutines-basics` | [00](https://github.com/loong/go-concurrency-exercises/tree/main/00-limit-crawler), [01](https://github.com/loong/go-concurrency-exercises/tree/main/01-producer-consumer) |
 | `graceful-shutdown` | [04](https://github.com/loong/go-concurrency-exercises/tree/main/04-graceful-sigint), [25](https://github.com/loong/go-concurrency-exercises/tree/main/25-graceful-multistage-shutdown) |
 | `hashing` | [23](https://github.com/loong/go-concurrency-exercises/tree/main/23-sharded-cache) |
+| `heartbeats` | [27](https://github.com/loong/go-concurrency-exercises/tree/main/27-heartbeats), [29](https://github.com/loong/go-concurrency-exercises/tree/main/29-healing-goroutines) |
+| `livelock` | [30](https://github.com/loong/go-concurrency-exercises/tree/main/30-livelock-starvation) |
 | `lru-cache` | [02](https://github.com/loong/go-concurrency-exercises/tree/main/02-race-in-cache) |
 | `map-reduce` | [20](https://github.com/loong/go-concurrency-exercises/tree/main/20-concurrent-map-reduce) |
 | `mutex` | [02](https://github.com/loong/go-concurrency-exercises/tree/main/02-race-in-cache), [03](https://github.com/loong/go-concurrency-exercises/tree/main/03-limit-service-time), [05](https://github.com/loong/go-concurrency-exercises/tree/main/05-session-cleaner), [12](https://github.com/loong/go-concurrency-exercises/tree/main/12-pub-sub), [20](https://github.com/loong/go-concurrency-exercises/tree/main/20-concurrent-map-reduce), [21](https://github.com/loong/go-concurrency-exercises/tree/main/21-dining-philosophers), [22](https://github.com/loong/go-concurrency-exercises/tree/main/22-circuit-breaker), [23](https://github.com/loong/go-concurrency-exercises/tree/main/23-sharded-cache) |
 | `mutex-free` | [19](https://github.com/loong/go-concurrency-exercises/tree/main/19-actor-model) |
 | `or-channel` | [15](https://github.com/loong/go-concurrency-exercises/tree/main/15-or-channel-combinator) |
-| `pipeline` | [08](https://github.com/loong/go-concurrency-exercises/tree/main/08-pipeline), [18](https://github.com/loong/go-concurrency-exercises/tree/main/18-bounded-pipeline-backpressure) |
+| `pipeline` | [08](https://github.com/loong/go-concurrency-exercises/tree/main/08-pipeline), [18](https://github.com/loong/go-concurrency-exercises/tree/main/18-bounded-pipeline-backpressure), [26](https://github.com/loong/go-concurrency-exercises/tree/main/26-pipeline-error-handling) |
 | `priority-queue` | [24](https://github.com/loong/go-concurrency-exercises/tree/main/24-priority-worker-pool) |
 | `pub-sub` | [12](https://github.com/loong/go-concurrency-exercises/tree/main/12-pub-sub) |
 | `rate-limiting` | [00](https://github.com/loong/go-concurrency-exercises/tree/main/00-limit-crawler), [03](https://github.com/loong/go-concurrency-exercises/tree/main/03-limit-service-time), [10](https://github.com/loong/go-concurrency-exercises/tree/main/10-semaphore) |
 | `recursion` | [15](https://github.com/loong/go-concurrency-exercises/tree/main/15-or-channel-combinator) |
-| `select` | [04](https://github.com/loong/go-concurrency-exercises/tree/main/04-graceful-sigint), [14](https://github.com/loong/go-concurrency-exercises/tree/main/14-tee-channel), [15](https://github.com/loong/go-concurrency-exercises/tree/main/15-or-channel-combinator) |
+| `replicated-requests` | [28](https://github.com/loong/go-concurrency-exercises/tree/main/28-replicated-requests) |
+| `result-type` | [26](https://github.com/loong/go-concurrency-exercises/tree/main/26-pipeline-error-handling) |
+| `select` | [04](https://github.com/loong/go-concurrency-exercises/tree/main/04-graceful-sigint), [14](https://github.com/loong/go-concurrency-exercises/tree/main/14-tee-channel), [15](https://github.com/loong/go-concurrency-exercises/tree/main/15-or-channel-combinator), [27](https://github.com/loong/go-concurrency-exercises/tree/main/27-heartbeats) |
 | `semaphore` | [10](https://github.com/loong/go-concurrency-exercises/tree/main/10-semaphore) |
 | `sharding` | [23](https://github.com/loong/go-concurrency-exercises/tree/main/23-sharded-cache) |
 | `signals` | [04](https://github.com/loong/go-concurrency-exercises/tree/main/04-graceful-sigint) |
+| `starvation` | [30](https://github.com/loong/go-concurrency-exercises/tree/main/30-livelock-starvation) |
 | `state-machine` | [22](https://github.com/loong/go-concurrency-exercises/tree/main/22-circuit-breaker) |
+| `steward` | [29](https://github.com/loong/go-concurrency-exercises/tree/main/29-healing-goroutines) |
+| `supervision` | [29](https://github.com/loong/go-concurrency-exercises/tree/main/29-healing-goroutines) |
 | `sync.cond` | [24](https://github.com/loong/go-concurrency-exercises/tree/main/24-priority-worker-pool) |
 | `sync.once` | [16](https://github.com/loong/go-concurrency-exercises/tree/main/16-errgroup-failfast), [17](https://github.com/loong/go-concurrency-exercises/tree/main/17-future-promise) |
 | `sync.waitgroup` | [25](https://github.com/loong/go-concurrency-exercises/tree/main/25-graceful-multistage-shutdown) |
 | `tee-channel` | [14](https://github.com/loong/go-concurrency-exercises/tree/main/14-tee-channel) |
 | `ticker` | [00](https://github.com/loong/go-concurrency-exercises/tree/main/00-limit-crawler), [05](https://github.com/loong/go-concurrency-exercises/tree/main/05-session-cleaner) |
+| `timeout` | [27](https://github.com/loong/go-concurrency-exercises/tree/main/27-heartbeats) |
 | `worker-pool` | [06](https://github.com/loong/go-concurrency-exercises/tree/main/06-fan-out-fan-in), [10](https://github.com/loong/go-concurrency-exercises/tree/main/10-semaphore), [11](https://github.com/loong/go-concurrency-exercises/tree/main/11-worker-pool), [16](https://github.com/loong/go-concurrency-exercises/tree/main/16-errgroup-failfast), [25](https://github.com/loong/go-concurrency-exercises/tree/main/25-graceful-multistage-shutdown) |
 
 ## License
