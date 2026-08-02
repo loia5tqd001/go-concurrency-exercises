@@ -16,6 +16,12 @@ that is returned to the caller. The result must contain every input
 URL exactly once - no dropped results, no duplicated work, and no
 data races - and the function signature must stay the same:
 
+One goroutine per URL (with a `sync.WaitGroup` to fan the results
+back in) is a perfectly acceptable solution here - you don't need a
+fixed-size worker pool for this exercise. Bounding concurrency with a
+pool or semaphore is its own topic, covered later in
+[10-semaphore](../10-semaphore) and [11-worker-pool](../11-worker-pool).
+
 ```go
 func GenerateThumbnails(urls []string) []Thumbnail
 ```

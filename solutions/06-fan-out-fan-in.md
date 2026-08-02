@@ -198,6 +198,56 @@ request) and the downstream service has no meaningful concurrency
 limit worth respecting. Reach for the worker-pool version whenever the
 input size isn't bounded up front or you need a concurrency cap.
 
+## Approach 2b: Same fan-out, fan-in via an indexed slice instead of a channel
+
+A variant of Approach 2 that keeps the identical fan-out (one
+goroutine per URL) but swaps out the fan-in mechanism: instead of a
+shared `results` channel drained by a collector loop, each goroutine
+writes its own result directly into a pre-sized slice at its own
+index.
+
+```go
+func GenerateThumbnails(urls []string) []Thumbnail {
+	thumbnails := make([]Thumbnail, len(urls))
+
+	var wg sync.WaitGroup
+	for idx, url := range urls {
+		wg.Go(func() {
+			thumbnails[idx] = ProcessImage(url)
+		})
+	}
+	wg.Wait()
+
+	return thumbnails
+}
+```
+
+This is race-free without a mutex or a channel: `thumbnails` is
+preallocated to `len(urls)`, and every goroutine writes to a distinct
+index (`idx` is unique per iteration, captured directly - safe since
+Go 1.22's per-iteration loop variables). Concurrent writes to disjoint
+elements of the same slice are not a data race under Go's memory
+model, so nothing needs to guard the write itself; `wg.Wait()` is only
+there to know when every write has happened before returning
+`thumbnails`. It also uses `wg.Go(func() { ... })` - added in Go 1.24
+- instead of manual `wg.Add(1)` / `defer wg.Done()`, so it's not
+possible to forget the `Done()` call.
+
+Tradeoffs versus Approach 2:
+
+- **Order-preserving for free.** Because each goroutine writes to the
+  slot matching its position in `urls`, the result already comes back
+  in input order. Approaches 1 and 2 collect in *completion* order and
+  would need extra bookkeeping (tag each result with its index, then
+  sort or write into a pre-sized slice) to recover it.
+- **One fewer moving part.** No `results` channel and no dedicated
+  "close after Wait" goroutine to reason about.
+- **Needs the result count known upfront.** Indexing into a pre-sized
+  slice means this shape doesn't generalize to a producer whose result
+  count isn't known in advance, and the caller gets nothing until every
+  goroutine has finished - there's no way to consume results
+  incrementally the way `range results` allows in Approach 2.
+
 ## Key takeaways
 
 - The naive loop's bug here is throughput, not correctness — it never
@@ -213,9 +263,10 @@ input size isn't bounded up front or you need a concurrency cap.
   standard way to know when to close a fan-in channel — closing it
   from any single worker directly would either close it too early (if
   another worker is still sending) or panic on a double-close.
-- Both approaches return thumbnails in completion order, not input
-  order. If order matters, track the original index alongside the
-  result and reassemble afterward.
+- Approaches 1 and 2 return thumbnails in completion order, not input
+  order. If order matters, either track the original index alongside
+  the result and reassemble afterward, or write into a pre-sized slice
+  by index as Approach 2b does.
 - Bounded (worker pool) vs. unbounded (goroutine-per-item) fan-out is
   a real design choice, not a stylistic one: it trades code simplicity
   against a concurrency cap that matters once the input size isn't

@@ -75,7 +75,8 @@ func TestGenerateThumbnailsCorrectness(t *testing.T) {
 // URLs there are. synctest.Test runs the body on a fake clock that
 // jumps forward as soon as every goroutine in the bubble is durably
 // blocked, so this assertion is exact and doesn't flake on a busy
-// machine.
+// machine. This test does not require a fixed-size worker pool - one
+// goroutine per URL passes just as well as a bounded pool would.
 func TestGenerateThumbnailsConcurrency(t *testing.T) {
 	synctest.Test(t, func(t *testing.T) {
 		urls := testURLs(10)

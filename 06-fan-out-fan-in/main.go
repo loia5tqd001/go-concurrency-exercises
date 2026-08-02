@@ -25,6 +25,11 @@
 // so that it remains a drop-in replacement for the sequential
 // version below.
 //
+// One goroutine per URL, fanned back in with a sync.WaitGroup, is a
+// perfectly fine solution here - a fixed-size worker pool is not
+// required. Bounding concurrency is its own topic, covered later in
+// 10-semaphore and 11-worker-pool.
+//
 
 package main
 
