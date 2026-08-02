@@ -94,3 +94,77 @@ func TestOrDoneNoGoroutineLeakRace(t *testing.T) {
 		orDoneStopsPromptly(t)
 	}
 }
+
+// orDoneStopsPromptlyMidForward covers a gap orDoneStopsPromptly
+// can't: it never writes to c, so an implementation only has to react
+// to done while sitting idle at the outer receive. That's not enough
+// - the forwarding send onto out can block just as long if it isn't
+// also select-guarded on done.
+//
+// Here c is actively, continuously written to (like StartMetricStream
+// does). The test drains exactly one value to confirm forwarding is
+// alive, sleeps briefly so the goroutine loops back and pulls the
+// next value off c, then closes done while nobody is reading out.
+//
+// An implementation that guards the receive but not the send, e.g.
+//
+//	case v := <-c:
+//	    out <- v // unconditional - doesn't watch done
+//
+// passes orDoneStopsPromptly (c there never sends, so this code path
+// never runs) but fails here: once it already has a value in hand,
+// its bare send blocks regardless of done, and whatever eventually
+// reads out next gets that stale, post-done value instead of out
+// being closed. This is exactly what main.go demonstrates by printing
+// "unexpected: got a value after done closed".
+func orDoneStopsPromptlyMidForward(t *testing.T) {
+	t.Helper()
+
+	done := make(chan struct{})
+	c := make(chan int)
+
+	go func() {
+		v := 0
+		for {
+			v++
+			select {
+			case c <- v:
+			case <-done:
+				return
+			}
+		}
+	}()
+
+	out := orDone(done, c)
+
+	<-out
+	time.Sleep(20 * time.Millisecond)
+
+	close(done)
+
+	select {
+	case v, ok := <-out:
+		if ok {
+			t.Errorf("expected out to be closed (ok == false) once done fires, got stale value %d instead - the forwarding send must also select on done", v)
+		}
+	case <-time.After(100 * time.Millisecond):
+		t.Fatal("orDone did not stop promptly after done was closed - the forwarding goroutine appears to be leaked, blocked on a send that will never be read")
+	}
+}
+
+// TestOrDoneStopsPromptlyMidForward proves that done still shuts
+// orDone down promptly even when a value pulled from c is already in
+// flight toward out at the moment done closes.
+func TestOrDoneStopsPromptlyMidForward(t *testing.T) {
+	orDoneStopsPromptlyMidForward(t)
+}
+
+// TestOrDoneNoGoroutineLeakMidForwardRace repeats the mid-forward
+// shutdown scenario a number of times so that, run with `go test
+// -race`, it has a reasonable chance of catching a data race in a
+// select-based shutdown path that only shows up under contention.
+func TestOrDoneNoGoroutineLeakMidForwardRace(t *testing.T) {
+	for i := 0; i < 20; i++ {
+		orDoneStopsPromptlyMidForward(t)
+	}
+}

@@ -34,7 +34,10 @@
 
 package main
 
-import "fmt"
+import (
+	"fmt"
+	"time"
+)
 
 // orDone wraps c so that ranging over the returned channel stops as
 // soon as done is closed, instead of blocking forever waiting for a
@@ -48,9 +51,10 @@ func orDone(done <-chan struct{}, c <-chan int) <-chan int {
 func main() {
 	done := make(chan struct{})
 	stream := StartMetricStream()
+	out := orDone(done, stream)
 
 	count := 0
-	for v := range orDone(done, stream) {
+	for v := range out {
 		fmt.Println("metric:", v)
 		count++
 		if count == 5 {
@@ -58,6 +62,21 @@ func main() {
 			break
 		}
 	}
+	fmt.Println("done reading, done closed - checking whether orDone actually stopped...")
 
-	fmt.Println("done")
+	// If orDone worked, closing done should make out close promptly,
+	// so this receive should come back immediately with ok == false.
+	// Against the no-op passthrough, out IS stream: nothing closes it,
+	// and the goroutine inside StartMetricStream is still out there
+	// trying to send the next tick on a channel nobody drains anymore.
+	select {
+	case v, ok := <-out:
+		if ok {
+			fmt.Println("unexpected: got a value after done closed:", v)
+		} else {
+			fmt.Println("OK: out closed promptly after done was closed - no leak")
+		}
+	case <-time.After(200 * time.Millisecond):
+		fmt.Println("BUG: out did not close within 200ms of done closing - orDone leaked the forwarding goroutine")
+	}
 }
