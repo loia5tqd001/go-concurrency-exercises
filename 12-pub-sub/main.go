@@ -91,6 +91,9 @@ func (b *EventBus) Subscribe() <-chan Event {
 	return ch
 }
 
+func (b *EventBus) Unsubscribe(ch <-chan Event) {
+}
+
 // Publish delivers e to every current subscriber.
 func (b *EventBus) Publish(e Event) {
 	b.mu.Lock()
