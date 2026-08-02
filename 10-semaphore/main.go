@@ -31,13 +31,15 @@
 // that blocks until a slot is released.
 //
 // Pick a fixed maxInFlight that is strictly less than the API's own
-// maxConcurrent (e.g. limit yourself to 2 concurrent calls against an
-// API that starts rejecting at 3), so your own limiting always kicks
-// in before the API's does. At the same time, make sure requests are
-// still dispatched concurrently rather than one at a time - the point
-// of a semaphore is to cap concurrency, not eliminate it, so FetchAll
-// should still be meaningfully faster than a sequential loop. Keep
-// the function signature identical:
+// maxConcurrent budget. Below, the API is constructed with
+// NewFlakyAPI(3), meaning it happily tolerates 3 concurrent calls and
+// only rejects the 4th and beyond - so set your own maxInFlight to 2,
+// giving yourself headroom below the API's real limit rather than
+// riding the exact edge of it. At the same time, make sure requests
+// are still dispatched concurrently rather than one at a time - the
+// point of a semaphore is to cap concurrency, not eliminate it, so
+// FetchAll should still be meaningfully faster than a sequential
+// loop. Keep the function signature identical:
 //
 //     func FetchAll(api *FlakyAPI, reqs []string) []string
 //
