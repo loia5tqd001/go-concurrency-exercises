@@ -56,6 +56,55 @@ The fix has to keep going back to `chanStream` for as long as it's open, and
 has to keep draining every shard channel it has ever received, not just the
 most recent one — a fan-in where the number of inputs grows at runtime.
 
+## A tempting-but-incomplete fix: the sequential Bridge
+
+There's a second version that's easy to land on instead — it's the classic
+`bridge` shape from *Concurrency in Go* itself, and it's a natural thing to
+reach for since `orDone` (from
+[07-or-done-channel](../07-or-done-channel)) is sitting right there ready to
+reuse:
+
+```go
+func Bridge(chanStream <-chan (<-chan string), done <-chan struct{}) <-chan string {
+	valStream := make(chan string)
+
+	go func() {
+		defer close(valStream)
+
+		for lineStream := range orDone(done, chanStream) {
+			for line := range orDone(done, lineStream) {
+				select {
+				case <-done:
+					return
+				case valStream <- line:
+				}
+			}
+		}
+	}()
+
+	return valStream
+}
+```
+
+This *does* go back to `chanStream` for every shard, and it *does* drain each
+one fully, so it passes `TestBridgeFlattensAllShards` and
+`TestBridgeStopsOnDone` — it looks like a complete fix. It fails
+`TestBridgeDoesNotStarveOnSlowShard` (see `starvation_test.go` and
+`README.md`), because the outer `range` only asks `chanStream` for the
+*next* shard once the inner `range` has fully drained the *current* one.
+Concretely: with a stuck shard 0 (never sends, never closes) followed by a
+ready shard 1, this version never even reaches the receive that would pick
+shard 1 up off `chanStream` — it's still parked inside shard 0's inner loop,
+which blocks forever. A single wedged or merely slow shard therefore starves
+every shard behind it, including ones not yet read off `chanStream` at all —
+exactly the head-of-line blocking a log hub can't afford, even though
+nothing in the *first* three tests would ever catch it.
+
+The fix has to stop coupling "read the next shard" to "finish the previous
+one": `chanStream` and every open shard need to be drained concurrently, not
+one at a time. Both approaches below do that by never letting one shard's
+receive be on the critical path of reading the next.
+
 ## Approach 1: goroutine-per-shard fan-in with a `WaitGroup`
 
 Keep a single dispatcher goroutine reading `chanStream` in a loop. Each time
@@ -285,6 +334,12 @@ exercise's shard counts, Approach 1 is simpler, faster, and safer.
 - A dispatcher that only reads its channel-of-channels *once* is the
   signature bug of this pattern — the fix always involves looping on the
   outer channel for as long as it's open, not just handling its first value.
+- Looping back to `chanStream` is necessary but not sufficient: doing so
+  only *after* fully draining the current shard (the classic sequential
+  `bridge` pattern) still starves every later shard behind a stuck or slow
+  one. Draining chanStream and every open shard concurrently — not one at a
+  time — is what actually delivers on "fan-in over a dynamically arriving
+  set of channels."
 - `sync.WaitGroup.Add` must happen before the goroutine it counts is
   spawned, never inside it, or `Wait` can race a goroutine that hasn't
   registered yet.
