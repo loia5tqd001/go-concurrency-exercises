@@ -21,7 +21,15 @@ stream - a fan-in over a dynamically arriving, unbounded set of
 channels. The output channel must close once `chanStream` itself has
 been closed **and** every inner channel it ever produced has been
 fully drained. `Bridge` must also stop promptly - closing its output
-and abandoning any further reads - as soon as `done` is closed. The
+and abandoning any further reads - as soon as `done` is closed.
+
+That fan-in must also be genuinely concurrent: a shard that stalls (or
+never closes) must not delay lines from any other shard, whether
+already open or still to arrive on `chanStream`. It's not enough to
+drain each inner channel to completion before going back to
+`chanStream` for the next one - that satisfies every requirement above
+while still letting one stuck shard starve every shard behind it,
+including ones `Bridge` hasn't even read off `chanStream` yet. The
 function signature must stay the same:
 
 ```go
@@ -36,3 +44,9 @@ To complete this exercise, you must pass the tests:
 go test
 go test --race
 ```
+
+This includes `TestBridgeDoesNotStarveOnSlowShard`, which opens a shard
+that never sends and never closes alongside a shard with a line
+already waiting, and expects that line promptly regardless - a
+sequential "finish this shard, then read the next one off chanStream"
+`Bridge` passes every other test here but times out on this one.
