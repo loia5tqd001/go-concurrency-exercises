@@ -41,6 +41,10 @@
 | 28 | Replicated Requests: Racing Redundant Calls for Lower Tail Latency | [28-replicated-requests.md](28-replicated-requests.md) |
 | 29 | Healing Unhealthy Goroutines: A Steward That Restarts a Wedged Ward | [29-healing-goroutines.md](29-healing-goroutines.md) |
 | 30 | Livelock & Starvation: Two Failure Modes Beyond Deadlock | [30-livelock-starvation.md](30-livelock-starvation.md) |
+| 31 | Serve Timeout Race: First-Wins Response Under a Deadline | [31-serve-timeout-race.md](31-serve-timeout-race.md) |
+| 32 | Racing a Fan-Out Against a Deadline | [32-fanout-deadline-race.md](32-fanout-deadline-race.md) |
+| 33 | Load Balancer: Self-Scheduling Workers That Report Their Own Load | [33-load-balancer.md](33-load-balancer.md) |
+| 34 | Concurrent Prime Sieve: A Growing Pipeline That Must Learn to Shut Down | [34-prime-sieve.md](34-prime-sieve.md) |
 
 ## A note on exercises 0-5
 
