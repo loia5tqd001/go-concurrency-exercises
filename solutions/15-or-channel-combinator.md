@@ -196,10 +196,72 @@ Both are correct; which one to reach for is a call between "idiomatic Go, no ref
 
 **Verified** in the same scratch copy, swapping Approach 1's `main.go` for the `reflect.Select` version above: `go test -race -count=10 ./...` passes cleanly, 10/10 runs, no data races — including the 0-channel, 1-channel, and 20-channel (`TestOrHandlesManyChannels`) cases.
 
+## Approach 3: flat fan-out with `sync.Once`
+
+A third design, structurally closer to Approach 2 than Approach 1 in spirit — flatten instead of recurse — but built from plain `select` instead of `reflect.Select`: spawn one goroutine per input channel, each racing the shared output channel against its own input, and let `sync.Once` decide who gets to close it.
+
+```go
+package main
+
+import (
+	"fmt"
+	"sync"
+	"time"
+)
+
+// or combines any number of done/signal channels into a single
+// channel that closes as soon as ANY of the input channels closes.
+func or(channels ...<-chan struct{}) <-chan struct{} {
+	orDone := make(chan struct{})
+	var once sync.Once
+	for i := range channels {
+		go func() {
+			select {
+			case <-orDone:
+			case <-channels[i]:
+				once.Do(func() {
+					close(orDone)
+				})
+			}
+		}()
+	}
+	return orDone
+}
+
+func main() {
+	healthCheckFailed := make(chan struct{})
+	adminShutdown := make(chan struct{})
+	deadlineExceeded := make(chan struct{})
+
+	go func() {
+		time.Sleep(50 * time.Millisecond)
+		close(healthCheckFailed)
+	}()
+
+	start := time.Now()
+	combined := or(healthCheckFailed, adminShutdown, deadlineExceeded)
+	<-combined
+	elapsed := time.Since(start)
+
+	fmt.Printf("shutdown signal received after %s (triggered by healthCheckFailed)\n", elapsed)
+}
+```
+
+Why it's correct, including the two base cases the other approaches special-case explicitly:
+
+- **Zero channels**: the loop body never runs, so no goroutine ever exists to close `orDone` — it just sits there forever. Same outcome as Approaches 1 and 2, reached without a dedicated `case 0` branch.
+- **One channel**: one goroutine is spawned, racing `orDone` against that single channel. If the channel never closes, that goroutine blocks forever — but that's *correct*, not a leak: its lifetime is exactly `or`'s own intended lifetime for this call (if the only input never fires, `or` shouldn't fire either). It does cost one goroutine the README's suggested direct `return channels[0]` avoids entirely, which is this approach's one deviation from the spec's called-out guidance — harmless, just not free.
+- **N > 1**: every goroutine watches `orDone` in addition to its own channel, so whichever channel closes first wins the race for `once.Do`, and every other still-waiting goroutine wakes via the now-closed `orDone` and exits. There's no recursive tree and therefore no orphaning trap to get right in the first place — the same reason Approach 2 doesn't need one.
+
+**Trade-off vs. Approaches 1 and 2**: goroutine count. Approach 1 spawns roughly N-1 goroutines (one per recursion level); Approach 3 spawns exactly N (one per input channel, always, even for N=1) — comparable order, no asymptotic win either way. Approach 2 spawns exactly **1** goroutine total regardless of N, via a single `reflect.Select` over a flat case list. For the realistic shape of this problem — combining a handful of shutdown triggers (health check, admin signal, deadline) — the difference between N and 1 goroutines is noise. It would start to matter with N in the thousands: Approach 3 pays per-goroutine stack and scheduler overhead N times over, where Approach 2 pays it once (at the cost of `reflect.Select`'s own per-call allocation and reflection overhead instead). In exchange for that O(N)-goroutines cost, Approach 3 keeps compile-time channel typing (no `reflect`), needs no recursive tail-folding trick, and every goroutine's job is identical and symmetric — arguably the easiest of the three to convince yourself is correct by inspection.
+
+**Verified** in the same scratch copy, swapping in the version above: `go test -race -count=10 ./...` passes cleanly, 10/10 runs, no data races — including the 0-channel, 1-channel, and 20-channel (`TestOrHandlesManyChannels`) cases.
+
 ## Key takeaways
 
 - Watching only `channels[0]` is a common naive shape for variadic "combine these signals" helpers — it happens to pass any test that only ever closes the first channel, which is why `TestOrFiresOnFirstChannel` alone wouldn't have caught this bug.
 - The 0-channel and 1-channel base cases aren't just tidiness — the 1-channel case in particular has a real trap: wrapping a single passthrough channel in a relay goroutine leaks that goroutine forever whenever the channel it watches is never closed, which is the normal case for one of several independent triggers.
 - The classic recursive `or` idiom has its own trap: recursing on `or(channels[2:]...)` unmodified orphans a goroutine every time the *current* level's select wins on `channels[0]`/`channels[1]` instead of the recursive branch. Folding this level's own `orDone` into the recursive tail (`or(append(channels[2:], orDone)...)`) closes that goroutine down as a side effect of this level shutting down, at every level of the recursion.
 - `reflect.Select` offers a genuinely different structural tradeoff for the same problem: one goroutine and one flat N-way select instead of a goroutine-per-level recursive tree — no leak trap to get right, at the cost of reflection overhead and an allocation-heavy `[]reflect.SelectCase` built on every call.
+- A flat fan-out with `sync.Once` (Approach 3) sidesteps the recursive leak trap the same way `reflect.Select` does — every goroutine races the shared `orDone` against its own channel, so a winner unblocks everyone else — but without reflection. The cost is O(N) goroutines instead of Approach 2's O(1), which only matters once N gets large; for a handful of shutdown triggers it's a wash, and arguably the easiest of the three to eyeball as correct since every goroutine's job is identical.
 - Tests that must observe a *hang* (not just a value) can't safely run inside `testing/synctest`'s fake-clock bubble: a goroutine that's supposed to never unblock makes the whole bubble "durably blocked," which `synctest` treats as a fatal deadlock and panics instead of letting the test fail normally. That's why `TestOrFiresOnAnyChannel` and `TestOrHandlesManyChannels` here use the real clock with `select` + `time.After` instead.

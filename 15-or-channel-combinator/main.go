@@ -62,6 +62,7 @@ package main
 
 import (
 	"fmt"
+	"sync"
 	"time"
 )
 
@@ -75,13 +76,18 @@ import (
 // all.
 func or(channels ...<-chan struct{}) <-chan struct{} {
 	orDone := make(chan struct{})
-	if len(channels) == 0 {
-		return orDone
+	var once sync.Once
+	for i := range channels {
+		go func() {
+			select {
+			case <-orDone:
+			case <-channels[i]:
+				once.Do(func() {
+					close(orDone)
+				})
+			}
+		}()
 	}
-	go func() {
-		defer close(orDone)
-		<-channels[0]
-	}()
 	return orDone
 }
 
