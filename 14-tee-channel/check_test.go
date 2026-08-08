@@ -82,6 +82,257 @@ func TestTeeDuplicatesToBothConsumers(t *testing.T) {
 	})
 }
 
+// TestTeeDuplicatesToBothConsumersReversedRoles is
+// TestTeeDuplicatesToBothConsumers with the fast/slow roles swapped:
+// out2 drains as fast as possible and out1 is the one sleeping 2ms
+// between reads. Plain duplication shouldn't care which of the two
+// output channels happens to be read quickly - an implementation that
+// (say) special-cases index 0 somewhere in its fan-out logic instead
+// of treating both outputs identically could pass the first test while
+// failing this one. This test only checks delivery, not closing
+// behavior - see TestTeeClosesEachOutputAsSoonAsItIsFullyDelivered for
+// the stricter, independent-closing requirement.
+func TestTeeDuplicatesToBothConsumersReversedRoles(t *testing.T) {
+	synctest.Test(t, func(t *testing.T) {
+		done := make(chan struct{})
+		defer close(done)
+
+		in := StartSensor(10)
+		out1, out2 := Tee(done, in)
+
+		var fast, slow []int
+		var wg sync.WaitGroup
+
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			for v := range out2 {
+				fast = append(fast, v)
+			}
+		}()
+
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			for v := range out1 {
+				time.Sleep(2 * time.Millisecond)
+				slow = append(slow, v)
+			}
+		}()
+
+		wg.Wait()
+
+		want := expectedSequence(10)
+
+		if !reflect.DeepEqual(fast, want) {
+			t.Errorf("fast consumer (out2) got %v, want %v (every value must reach every consumer)", fast, want)
+		}
+		if !reflect.DeepEqual(slow, want) {
+			t.Errorf("slow consumer (out1) got %v, want %v (every value must reach every consumer)", slow, want)
+		}
+	})
+}
+
+// receiveWithTimeout reads one value from ch, failing the test with a
+// clear diagnostic instead of hanging forever (and, inside
+// synctest.Test, instead of the whole test binary panicking with an
+// opaque "deadlock: all goroutines in bubble are blocked" that also
+// aborts every other test in the package) if nothing arrives within
+// budget. budget is spent on synctest's fake clock here, so a healthy
+// Tee - which should deliver near-instantly - burns through none of
+// it, while a Tee stuck waiting on some other output reliably times
+// out instead of hanging.
+func receiveWithTimeout(t *testing.T, ch <-chan int, budget time.Duration) int {
+	t.Helper()
+
+	select {
+	case v := <-ch:
+		return v
+	case <-time.After(budget):
+		t.Fatalf("no value received within %v - is delivery to this output waiting on some other output being read first?", budget)
+		return 0
+	}
+}
+
+// TestTeeDeliversToOneOutputWithoutWaitingOnTheOther proves the part
+// of the exercise's instructions that TestTeeDuplicatesToBothConsumers
+// (and its reversed-roles sibling) can't catch: delivering a value to
+// one output must never require the other output to have been read
+// at all - not even once - because the two sends for a given value
+// have to race in a single select, not be attempted in a fixed order.
+//
+// The duplication tests use a consumer that sleeps 2ms between reads
+// to simulate "slow," but it still reads continuously - so a Tee that
+// tries out[0] first and only attempts out[1] once out[0]'s send
+// succeeds still passes those tests, just with (fake-clock, so
+// invisible there) extra latency on out[1]. This test closes that gap
+// directly: it reads only the very first value from one output while
+// the other is left completely untouched, with a bounded budget so a
+// Tee that's actually waiting on the fixed order times out with a
+// clear message instead of hanging. It only checks this for the first
+// value, then switches to draining both outputs concurrently for the
+// rest - deliberately not requiring a fast consumer to race arbitrarily
+// far ahead of a completely unread one, since that's a stronger,
+// separate property already covered by
+// TestTeeClosesEachOutputAsSoonAsItIsFullyDelivered.
+func TestTeeDeliversToOneOutputWithoutWaitingOnTheOther(t *testing.T) {
+	cases := []struct {
+		name        string
+		firstIsOut1 bool
+	}{
+		{name: "out1 read first, out2 untouched", firstIsOut1: true},
+		{name: "out2 read first, out1 untouched", firstIsOut1: false},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			synctest.Test(t, func(t *testing.T) {
+				done := make(chan struct{})
+				defer close(done)
+
+				const n = 3
+				in := StartSensor(n)
+				out1, out2 := Tee(done, in)
+
+				firstOut, otherOut := out1, out2
+				if !tc.firstIsOut1 {
+					firstOut, otherOut = out2, out1
+				}
+
+				budget := 4 * SensorInterval
+				got := receiveWithTimeout(t, firstOut, budget)
+				if got != 0 {
+					t.Fatalf("first value received was %d, want 0", got)
+				}
+
+				// Now drain both outputs concurrently for the rest -
+				// this part is just a correctness check, not a probe
+				// for the fixed-order bug.
+				want := expectedSequence(n)
+				var firstRest, other []int
+				var wg sync.WaitGroup
+
+				wg.Add(1)
+				go func() {
+					defer wg.Done()
+					for v := range firstOut {
+						firstRest = append(firstRest, v)
+					}
+				}()
+
+				wg.Add(1)
+				go func() {
+					defer wg.Done()
+					for v := range otherOut {
+						other = append(other, v)
+					}
+				}()
+
+				wg.Wait()
+
+				first := append([]int{got}, firstRest...)
+				if !reflect.DeepEqual(first, want) {
+					t.Fatalf("first output got %v, want %v", first, want)
+				}
+				if !reflect.DeepEqual(other, want) {
+					t.Fatalf("other output got %v, want %v", other, want)
+				}
+			})
+		})
+	}
+}
+
+// TestTeeClosesEachOutputAsSoonAsItIsFullyDelivered proves that
+// out1 and out2 close independently of each other: the moment every
+// value has reached a given output, that output closes right away -
+// even if the other one is still sitting on a large backlog because
+// its consumer hasn't read anything yet. A Tee that only closes both
+// outputs together (gated on the SLOWEST consumer) would fail this:
+// the fast output would still be open when checked below, since the
+// slow one hasn't been touched at all yet.
+//
+// It runs the scenario from both directions - out1 fast/out2 slow,
+// AND out2 fast/out1 slow - as subtests. This is deliberate: an
+// implementation could special-case index 0 (e.g. hard-code out[0]
+// or wg[0] somewhere instead of looping generically over both
+// outputs) and still pass a version of this test that only ever
+// drains out1 first. Running it in both orders catches that
+// asymmetry regardless of which index the bug favors.
+//
+// Whichever output is "fast" is drained completely with ordinary
+// sequential receives (no second goroutine, nothing for -race to
+// complain about), each bounded by receiveWithTimeout: a Tee whose
+// per-value fan-out is order-dependent (see
+// TestTeeDeliversToOneOutputWithoutWaitingOnTheOther) would otherwise
+// hang here forever waiting on the untouched slow output, which under
+// synctest surfaces as a raw "deadlock" panic that kills the whole
+// test binary instead of a clean, isolated failure for this test.
+// Once the drain completes, every value the sensor will ever produce
+// has already reached the fast output - there is no future send that
+// could still target it - so it must be free to close immediately,
+// independent of the other output. A synctest.Wait() is used before
+// checking: closing the fast output happens on a background goroutine
+// reacting to the last delivery, which needs a chance to run; Wait()
+// is the right tool here because it's confirming something that has
+// already been triggered has finished, not asking the fake clock to
+// advance through unrelated future timers.
+func TestTeeClosesEachOutputAsSoonAsItIsFullyDelivered(t *testing.T) {
+	cases := []struct {
+		name        string
+		fastIsFirst bool
+	}{
+		{name: "out1 is the fast one", fastIsFirst: true},
+		{name: "out2 is the fast one", fastIsFirst: false},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			synctest.Test(t, func(t *testing.T) {
+				done := make(chan struct{})
+				defer close(done)
+
+				const n = 5
+				in := StartSensor(n)
+				out1, out2 := Tee(done, in)
+
+				fastOut, slowOut := out1, out2
+				if !tc.fastIsFirst {
+					fastOut, slowOut = out2, out1
+				}
+
+				want := expectedSequence(n)
+
+				budget := 4 * SensorInterval
+				var fast []int
+				for i := 0; i < n; i++ {
+					fast = append(fast, receiveWithTimeout(t, fastOut, budget))
+				}
+				if !reflect.DeepEqual(fast, want) {
+					t.Fatalf("fast=%v, want %v (every value should have reached the fast output by now)", fast, want)
+				}
+
+				synctest.Wait()
+				select {
+				case v, ok := <-fastOut:
+					if ok {
+						t.Fatalf("fast output produced an extra value (%d) it shouldn't have", v)
+					}
+				default:
+					t.Fatalf("fast output should already be closed: every value has been delivered to it, regardless of whether the slow output (never read yet) has caught up")
+				}
+
+				var slow []int
+				for v := range slowOut {
+					slow = append(slow, v)
+				}
+				if !reflect.DeepEqual(slow, want) {
+					t.Fatalf("slow=%v, want %v", slow, want)
+				}
+			})
+		})
+	}
+}
+
 // assertClosesPromptly reads once from ch and fails unless it observes
 // ch already closed within a short, real-time safety-net window. It is
 // used to detect a Tee that ignores `done` and keeps its outputs open
