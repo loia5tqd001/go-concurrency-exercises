@@ -8,9 +8,15 @@ package main
 
 import (
 	"errors"
+	"go/ast"
+	"go/parser"
+	"go/token"
+	"runtime"
+	"strconv"
 	"sync"
 	"testing"
 	"testing/synctest"
+	"time"
 )
 
 // TestAccountBasicOperations exercises Deposit, Withdraw, and Balance
@@ -146,4 +152,104 @@ func TestAccountCloseStopsActorGoroutine(t *testing.T) {
 			t.Fatalf("balance = %d, want 150", got)
 		}
 	})
+}
+
+// TestMainDoesNotUseLocks statically rejects any solution that reaches
+// for sync.Mutex, sync.RWMutex, sync.Map, or sync/atomic - no behavioral
+// test can catch this, since a lock-guarded Account is observationally
+// identical to an actor-based one on every property the tests above
+// check (serialized access, atomic check-then-debit, correct balances).
+// It parses main.go's AST rather than scanning its text, so it isn't
+// tripped up by the exercise's own doc comment above mentioning
+// "sync.Mutex" in prose, and it flags the identifiers rather than the
+// "sync" import itself, since main()'s demo below legitimately uses
+// sync.WaitGroup.
+func TestMainDoesNotUseLocks(t *testing.T) {
+	fset := token.NewFileSet()
+	file, err := parser.ParseFile(fset, "main.go", nil, 0)
+	if err != nil {
+		t.Fatalf("parsing main.go: %v", err)
+	}
+
+	syncAlias := ""
+	for _, imp := range file.Imports {
+		path, err := strconv.Unquote(imp.Path.Value)
+		if err != nil {
+			continue
+		}
+		switch path {
+		case "sync/atomic":
+			t.Fatalf("main.go imports %q - atomic operations bypass the actor goroutine just like a lock would; "+
+				"correctness must come purely from serializing access through that single goroutine", path)
+		case "sync":
+			if imp.Name != nil {
+				syncAlias = imp.Name.Name
+			} else {
+				syncAlias = "sync"
+			}
+		}
+	}
+	if syncAlias == "" {
+		return
+	}
+
+	forbidden := map[string]bool{"Mutex": true, "RWMutex": true, "Map": true}
+	ast.Inspect(file, func(n ast.Node) bool {
+		sel, ok := n.(*ast.SelectorExpr)
+		if !ok {
+			return true
+		}
+		ident, ok := sel.X.(*ast.Ident)
+		if !ok || ident.Name != syncAlias || !forbidden[sel.Sel.Name] {
+			return true
+		}
+		t.Fatalf("main.go uses %s.%s - no sync.Mutex, sync.RWMutex, or sync.Map (or any other lock) may be used "+
+			"anywhere; Account must serialize access purely through its actor goroutine", syncAlias, sel.Sel.Name)
+		return true
+	})
+}
+
+// numGoroutinesToSettle polls runtime.NumGoroutine() until it drops to
+// (or below) a threshold, or a deadline passes, and returns whatever it
+// last observed. Mirrors the helper in
+// 34-prime-sieve/check_test.go, which faces the same need to wait out a
+// goroutine's exit without hardcoding a sleep.
+func numGoroutinesToSettle(threshold int, timeout time.Duration) int {
+	deadline := time.Now().Add(timeout)
+	for {
+		n := runtime.NumGoroutine()
+		if n <= threshold || time.Now().After(deadline) {
+			return n
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+}
+
+// TestNewAccountStartsActorGoroutineAndCloseStopsIt checks the one
+// property that actually distinguishes an actor-based Account from a
+// mutex-guarded one: the actor owns a long-lived goroutine, and a lock
+// does not. TestAccountCloseStopsActorGoroutine above already proves
+// Close doesn't leave that goroutine dangling - but its doc comment says
+// outright that it passes trivially when no goroutine was ever started,
+// which is exactly what a mutex-based Account does. This test closes
+// that gap directly: NewAccount must raise the goroutine count by at
+// least one, and Close must bring it back down.
+func TestNewAccountStartsActorGoroutineAndCloseStopsIt(t *testing.T) {
+	before := runtime.NumGoroutine()
+
+	account := NewAccount(100)
+	afterNew := runtime.NumGoroutine()
+	if afterNew <= before {
+		t.Fatalf("goroutine count was %d before NewAccount and %d right after (want it to increase) - "+
+			"NewAccount must start a long-lived actor goroutine that owns balance, not just return a "+
+			"struct guarded by a lock", before, afterNew)
+	}
+
+	account.Close()
+
+	afterClose := numGoroutinesToSettle(before, 500*time.Millisecond)
+	if afterClose > before {
+		t.Errorf("goroutine count was %d before NewAccount and %d after Close (want it back down to %d) - "+
+			"Close must terminate the actor goroutine", before, afterClose, before)
+	}
 }
