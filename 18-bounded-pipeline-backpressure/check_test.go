@@ -13,7 +13,7 @@ import (
 )
 
 // TestRunPipelineProcessesAllItems checks that every item makes it
-// through exactly once: produced and consumed are each called exactly
+// through exactly once: produce and consume are each called exactly
 // once per index in [0, itemCount). It makes no assumption about
 // timing or how the producer and consumer are wired together, so it
 // passes against both the naive unbounded-buffer implementation and a
@@ -26,24 +26,25 @@ func TestRunPipelineProcessesAllItems(t *testing.T) {
 	consumedCount := make(map[int]int, itemCount)
 
 	RunPipeline(itemCount,
-		func(i int) {
+		func(i int) int {
 			mu.Lock()
 			defer mu.Unlock()
 			producedCount[i]++
+			return i
 		},
-		func(i int) {
+		func(item int) {
 			mu.Lock()
 			defer mu.Unlock()
-			consumedCount[i]++
+			consumedCount[item]++
 		},
 	)
 
 	for i := 0; i < itemCount; i++ {
 		if got := producedCount[i]; got != 1 {
-			t.Errorf("produced(%d) called %d times, want exactly 1", i, got)
+			t.Errorf("produce(%d) called %d times, want exactly 1", i, got)
 		}
 		if got := consumedCount[i]; got != 1 {
-			t.Errorf("consumed(%d) called %d times, want exactly 1", i, got)
+			t.Errorf("consume(%d) called %d times, want exactly 1", i, got)
 		}
 	}
 }
@@ -51,10 +52,12 @@ func TestRunPipelineProcessesAllItems(t *testing.T) {
 // TestRunPipelineAppliesBackpressure asserts that RunPipeline actually
 // throttles the producer to (roughly) the consumer's pace instead of
 // letting it race ahead and buffer the entire run in memory. Every
-// time produced(i) fires, the test records how many items have
-// already been fully consumed at that instant; the gap between the
-// two (i - consumedSoFar) measures how far ahead of the consumer the
-// producer has been allowed to get.
+// time produce(i) fires, the test records how many items have already
+// been fully consumed at that instant; the gap between the two
+// (i - consumedSoFar) measures how far ahead of the consumer the
+// producer has been allowed to get. consume itself owns the slow
+// work (SlowConsume) here - RunPipeline has no idea it's even
+// happening, which is exactly the point: it's just plumbing.
 //
 // With an unbounded channel (buffer = itemCount), the producer never
 // has to wait for anything: it can - and does - produce every one of
@@ -80,12 +83,14 @@ func TestRunPipelineAppliesBackpressure(t *testing.T) {
 		gapAtProduce := make([]int, itemCount)
 
 		RunPipeline(itemCount,
-			func(i int) {
+			func(i int) int {
 				mu.Lock()
 				gapAtProduce[i] = i - consumedSoFar
 				mu.Unlock()
+				return i
 			},
-			func(i int) {
+			func(item int) {
+				SlowConsume(item)
 				mu.Lock()
 				consumedSoFar++
 				mu.Unlock()
