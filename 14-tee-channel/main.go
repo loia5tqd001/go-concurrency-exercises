@@ -40,52 +40,6 @@ import (
 	"sync"
 )
 
-func orDone[T any](done <-chan struct{}, c <-chan T) <-chan T {
-	out := make(chan T)
-	go func() {
-		defer close(out)
-
-		for {
-			select {
-			case <-done:
-				return
-
-			case value, ok := <-c:
-				if !ok {
-					return
-				}
-
-				select {
-				case out <- value:
-				case <-done:
-					return
-				}
-			}
-		}
-	}()
-	return out
-}
-
-func LoopSliceConcurrently[T any](arr []T, itemFn func(index int, item T)) {
-	var wg sync.WaitGroup
-	for index, item := range arr {
-		wg.Go(func() {
-			itemFn(index, item)
-		})
-	}
-	wg.Wait()
-}
-
-func LoopChanConcurrently[T any, TChan ~chan T | ~<-chan T](channel TChan, itemFn func(item T)) {
-	var wg sync.WaitGroup
-	for item := range channel {
-		wg.Go(func() {
-			itemFn(item)
-		})
-	}
-	wg.Wait()
-}
-
 // Tee is supposed to duplicate every value read from `in` so that TWO
 // independent consumers can each see the full sequence, even if one
 // consumer reads slower than the other. Right now it does nothing of
@@ -95,104 +49,7 @@ func LoopChanConcurrently[T any, TChan ~chan T | ~<-chan T](channel TChan, itemF
 // never sees that value at all. Values get split between the two
 // consumers instead of duplicated to both.
 func Tee(done <-chan struct{}, in <-chan int) (<-chan int, <-chan int) {
-	out := make([]chan int, 2)
-
-	for i := range out {
-		out[i] = make(chan int)
-	}
-
-	go func() {
-		// var wg sync.WaitGroup
-		// // TODO: close each channel individually early
-		// defer func() {
-		// 	for i := range out {
-		// 		close(out[i])
-		// 	}
-		// }()
-
-		// ===== My first attempt that didn't pass the strict requirement + use Loop...Concurrently util
-		// LoopChanConcurrently(orDone(done, in), func(value int) {
-		// 	LoopSliceConcurrently(out, func(index int, outChan chan int) {
-		// 		select {
-		// 		case <-done:
-		// 			return
-		// 		case outChan <- value:
-		// 		}
-		// 	})
-		// })
-
-		// ===== My first attempt that didn't pass the strict requirement
-		// for value := range orDone(done, in) {
-		// 	wg.Go(func() {
-		// 		var wg2 sync.WaitGroup
-		// 		for i := range out {
-		// 			wg2.Go(func() {
-		// 				select {
-		// 				case <-done:
-		// 					return
-		// 				case out[i] <- value:
-		// 				}
-		// 			})
-		// 		}
-		// 		wg2.Wait()
-		// 	})
-		// }
-		// wg.Wait()
-
-		// ===== BEST SOLUTION (Approach 2 from Solution)
-		wgs := make([]sync.WaitGroup, len(out))
-		for value := range orDone(done, in) {
-			for i := range out {
-				wgs[i].Go(func() {
-					select {
-					case <-done:
-						return
-					case out[i] <- value:
-					}
-				})
-			}
-		}
-		for i := range out {
-			go func() {
-				wgs[i].Wait()
-				close(out[i])
-			}()
-		}
-
-		// ===== My own attempts without orDone that passed all test cases
-		// wgs := make([]sync.WaitGroup, len(out))
-		// drainAndCloseOutChannelsConcurrently := func() {
-		// 	for i := range out {
-		// 		go func() {
-		// 			wgs[i].Wait()
-		// 			close(out[i])
-		// 		}()
-		// 	}
-		// }
-		// for {
-		// 	select {
-		// 	case <-done:
-		// 		drainAndCloseOutChannelsConcurrently()
-		// 		return
-		// 	case value, ok := <-in:
-		// 		if !ok {
-		// 			drainAndCloseOutChannelsConcurrently()
-		// 			return
-		// 		}
-		// 		for i := range out {
-		// 			wgs[i].Go(func() {
-		// 				select {
-		// 				case <-done:
-		// 					return
-		// 				case out[i] <- value:
-		// 				}
-		// 			})
-		// 		}
-		// 	}
-		// }
-	}()
-
-	return out[0], out[1]
+	return in, in
 }
 
 func main() {
@@ -205,17 +62,21 @@ func main() {
 	var wg sync.WaitGroup
 	var fast, slow []int
 
-	wg.Go(func() {
+	wg.Add(1)
+	go func() {
+		defer wg.Done()
 		for v := range out1 {
 			fast = append(fast, v)
 		}
-	})
+	}()
 
-	wg.Go(func() {
+	wg.Add(1)
+	go func() {
+		defer wg.Done()
 		for v := range out2 {
 			slow = append(slow, v)
 		}
-	})
+	}()
 
 	wg.Wait()
 

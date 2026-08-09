@@ -23,20 +23,7 @@ each value, hold onto it and, using an inner select per output channel
 other, and a slow reader on one output doesn't stall forever if `done`
 fires), send it to whichever output(s) haven't received it yet, until
 both have. Respect `done` throughout, abandoning early if it closes.
-
-Closing the outputs has two parts:
-
-- If `done` fires, abandon everything and close both outputs right
-  away, regardless of how much of `in` has been delivered.
-- Otherwise, once `in` is exhausted, each output must close **on its
-  own**, the moment every value has actually reached it - independent
-  of the other output. A fast consumer that has already received every
-  value must see its channel close immediately, even if the other
-  consumer hasn't read a single value yet and is sitting on a full
-  backlog. Gating both outputs' close on whichever consumer is
-  slowest (e.g. one shared "wait for everything, then close both"
-  step) is not good enough.
-
+Close both output channels once `in` is exhausted (or `done` fires).
 The function signature must stay the same:
 
 ```go

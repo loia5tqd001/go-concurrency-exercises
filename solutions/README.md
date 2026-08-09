@@ -25,6 +25,7 @@
 | 12 | Pub-Sub: In-Memory Event Bus | [12-pub-sub.md](12-pub-sub.md) |
 | 13 | Channel of Channels (Bridge Pattern): Merging Dynamic Log Shards | [13-channel-of-channels.md](13-channel-of-channels.md) |
 | 14 | Tee Channel: Duplicating a Sensor Stream | [14-tee-channel.md](14-tee-channel.md) |
+| 14b | Tee Channel, Independent Closing: Racing a Fast Consumer Past a Silent One | [14b-tee-channel-independent-close.md](14b-tee-channel-independent-close.md) |
 | 15 | Or-Channel Combinator: Combining Shutdown Triggers | [15-or-channel-combinator.md](15-or-channel-combinator.md) |
 | 16 | Your Own errgroup: Concurrent Tasks with First-Error Capture | [16-errgroup-failfast.md](16-errgroup-failfast.md) |
 | 16b | errgroup.WithContext: Cancel-on-First-Error | [16b-errgroup-withcontext.md](16b-errgroup-withcontext.md) |
