@@ -1,34 +1,37 @@
 //////////////////////////////////////////////////////////////////////
 //
-// Future is supposed to represent an asynchronous, memoized result:
-// creating one should kick off ComputeExpensive (see mockcompute.go)
-// in the background and return immediately, and Get() should block
-// until the result is ready, be safely callable from multiple
-// goroutines at once, and only ever trigger ONE underlying call to
-// ComputeExpensive no matter how many times Get() is called or from
-// how many goroutines.
+// Future is supposed to represent an asynchronous, memoized, keyed
+// computation: calling Future(key) should kick off ComputeExpensive
+// (see mockcompute.go) in the background and return a channel
+// immediately - receiving from that channel blocks until the result
+// is ready. Calling Future again for the SAME key - whether while the
+// first call is still in flight, or long after its result is cached,
+// and no matter how many goroutines call it at once - must never
+// trigger a second call to ComputeExpensive for that key; every
+// caller gets a channel that delivers the same result.
 //
-// Right now NewFuture is not async at all - it calls ComputeExpensive
+// Right now Future is not async at all - it calls ComputeExpensive
 // synchronously, on the calling goroutine, before returning - so
-// creating a Future blocks the caller for the full 150ms up front,
+// calling Future blocks the caller for the full 150ms up front,
 // defeating the entire point of a future (you can't do other work
-// while it's computing).
+// while it's computing). It also recomputes from scratch on every
+// single call, even for a key it has already computed before.
 //
 // Your task is to fix Future so that:
 //
-//   - NewFuture(key string) *Future kicks off ComputeExpensive(key)
-//     in its own goroutine and returns near-instantly.
-//   - Get() int blocks until the result is ready (e.g. via a channel
-//     that's closed once the result is stored, or a
-//     sync.WaitGroup/sync.Once) and is safe to call concurrently
-//     from many goroutines, and multiple times, always returning the
-//     same cached result without triggering any additional calls to
-//     ComputeExpensive.
+//   - Future(key string) <-chan int kicks off ComputeExpensive(key)
+//     in its own goroutine and returns a channel near-instantly,
+//     instead of blocking the caller.
+//   - The returned channel delivers exactly one value: the result for
+//     key. Receiving from it blocks until that result is ready.
+//   - Calling Future(key) again for a key that's already in flight or
+//     already cached always returns a channel that delivers the same
+//     result, and never triggers another call to ComputeExpensive for
+//     that key.
 //
-// The signatures must stay the same:
+// The signature must stay the same:
 //
-//     func NewFuture(key string) *Future
-//     func (f *Future) Get() int
+//     func Future(key string) <-chan int
 //
 
 package main
@@ -38,30 +41,23 @@ import (
 	"time"
 )
 
-// Future represents the result of an asynchronous computation that
-// may not have finished yet.
-type Future struct {
-	result int
-}
+// Future kicks off ComputeExpensive(key) and returns a channel that
+// will receive the single result once it's ready.
+func Future(key string) <-chan int {
+	ch := make(chan int, 1)
+	ch <- ComputeExpensive(key)
+	close(ch)
 
-// NewFuture starts computing the result for key and returns a Future
-// representing it.
-func NewFuture(key string) *Future {
-	return &Future{result: ComputeExpensive(key)}
-}
-
-// Get returns the result, blocking until it is ready.
-func (f *Future) Get() int {
-	return f.result
+	return ch
 }
 
 func main() {
 	start := time.Now()
-	f := NewFuture("report-42")
+	ch := Future("report-42")
 	constructTime := time.Since(start)
 
-	fmt.Printf("NewFuture returned after %s\n", constructTime)
+	fmt.Printf("Future returned after %s\n", constructTime)
 
-	result := f.Get()
+	result := <-ch
 	fmt.Printf("Result: %d (total elapsed %s)\n", result, time.Since(start))
 }
