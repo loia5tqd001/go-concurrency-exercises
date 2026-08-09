@@ -27,6 +27,7 @@
 | 14 | Tee Channel: Duplicating a Sensor Stream | [14-tee-channel.md](14-tee-channel.md) |
 | 15 | Or-Channel Combinator: Combining Shutdown Triggers | [15-or-channel-combinator.md](15-or-channel-combinator.md) |
 | 16 | Your Own errgroup: Concurrent Tasks with First-Error Capture | [16-errgroup-failfast.md](16-errgroup-failfast.md) |
+| 16b | errgroup.WithContext: Cancel-on-First-Error | [16b-errgroup-withcontext.md](16b-errgroup-withcontext.md) |
 | 17 | Future/Promise Pattern: Async, Memoized Computation | [17-future-promise.md](17-future-promise.md) |
 | 18 | Bounded Pipeline with Backpressure | [18-bounded-pipeline-backpressure.md](18-bounded-pipeline-backpressure.md) |
 | 19 | Actor Model: A Bank Account with No Locks | [19-actor-model.md](19-actor-model.md) |
