@@ -38,6 +38,7 @@ package main
 
 import (
 	"fmt"
+	"sync"
 	"time"
 )
 
@@ -52,12 +53,31 @@ func Future(key string) <-chan int {
 }
 
 func main() {
+	const key = "report-42"
+	const callers = 3
+
+	ResetCallCount()
+
+	var wg sync.WaitGroup
 	start := time.Now()
-	ch := Future("report-42")
-	constructTime := time.Since(start)
 
-	fmt.Printf("Future returned after %s\n", constructTime)
+	for i := 0; i < callers; i++ {
+		i := i
+		wg.Add(1)
 
-	result := <-ch
-	fmt.Printf("Result: %d (total elapsed %s)\n", result, time.Since(start))
+		go func() {
+			defer wg.Done()
+
+			ch := Future(key)
+			constructTime := time.Since(start)
+
+			result := <-ch
+			fmt.Printf("caller %d: Future returned after %s, result=%d (total elapsed %s)\n",
+				i, constructTime, result, time.Since(start))
+		}()
+	}
+
+	wg.Wait()
+
+	fmt.Printf("%q was computed %d time(s) across %d concurrent callers\n", key, CallCount(), callers)
 }
