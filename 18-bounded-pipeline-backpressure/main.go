@@ -10,10 +10,11 @@
 // consumer falls behind, the producer is forced to slow down too
 // (backpressure) instead of piling up unboundedly-buffered,
 // unconsumed work in memory. Right now it does the opposite: it
-// produces every item into a giant unbounded buffered channel (buffer
-// size = the full item count) before the consumer even starts, so the
-// "fast producer, slow consumer" mismatch never actually pushes back
-// on the producer at all - it just silently buffers everything.
+// produces every item into an in-memory slice up front - calling
+// produced(i) for every one of them - before the consumer gets to
+// touch a single item, so the "fast producer, slow consumer" mismatch
+// never actually pushes back on the producer at all; it just silently
+// buffers the entire run in memory and runs everything sequentially.
 //
 // produced and consumed, both provided by the caller, must be called
 // exactly once per item (produced(i) right when item i is generated,
@@ -25,11 +26,15 @@
 // itself doesn't need to worry about that; it just needs to call them
 // at the right moments.
 //
-// Your task is to fix RunPipeline so the channel between producer and
-// consumer has a small, fixed buffer (e.g. size 2) instead of
-// itemCount, so that once the buffer (plus the one item the consumer
-// may be actively processing) is full, the producer's next send
-// blocks until the consumer drains an item - i.e. real backpressure.
+// Your task is to rewrite RunPipeline so production and consumption
+// run concurrently, connected by a channel with a small, fixed buffer
+// (e.g. size 2) instead of collecting everything into a slice up
+// front: start a goroutine that produces items and sends them on the
+// channel, closing the channel once it's done, while the consumer
+// ranges over the channel calling SlowConsume and consumed for each
+// item it receives. Once the buffer (plus the one item the consumer
+// may be actively processing) is full, the producer's next send must
+// block until the consumer drains an item - i.e. real backpressure.
 // The function signature must stay the same:
 //
 //     func RunPipeline(itemCount int, produced func(i int), consumed func(i int))
@@ -40,21 +45,17 @@ package main
 import "fmt"
 
 // RunPipeline streams itemCount items (0..itemCount-1) from a fast
-// producer to SlowConsume through a channel. For now the channel is
-// sized to hold the entire run, so the producer never has to wait for
-// the consumer.
+// producer to SlowConsume. For now it produces every item up front
+// into an in-memory slice, so the consumer never gets to push back on
+// the producer.
 func RunPipeline(itemCount int, produced func(i int), consumed func(i int)) {
-	ch := make(chan int, itemCount) // unbounded: buffers the whole run
+	items := make([]int, 0, itemCount)
+	for i := 0; i < itemCount; i++ {
+		produced(i)
+		items = append(items, i)
+	}
 
-	go func() {
-		defer close(ch)
-		for i := 0; i < itemCount; i++ {
-			produced(i)
-			ch <- i
-		}
-	}()
-
-	for i := range ch {
+	for _, i := range items {
 		SlowConsume(i)
 		consumed(i)
 	}

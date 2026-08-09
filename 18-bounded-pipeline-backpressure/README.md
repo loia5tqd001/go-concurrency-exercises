@@ -7,17 +7,22 @@ Given is a fast producer feeding a slow consumer through `SlowConsume`
 consumer through a *bounded* channel, so that if the consumer falls
 behind, the producer is forced to slow down too - backpressure -
 instead of piling up unboundedly-buffered, unconsumed work in memory.
-Right now it does the opposite: it produces every item into a giant
-buffered channel sized to hold the entire run, before the consumer
-even gets a chance to start, so the "fast producer, slow consumer"
-mismatch never actually pushes back on the producer - it just silently
-buffers everything.
+Right now it does the opposite: it produces every item into an
+in-memory slice up front - calling `produced(i)` for every one of
+them - before the consumer gets to touch a single item, so the "fast
+producer, slow consumer" mismatch never actually pushes back on the
+producer - it just silently buffers the entire run in memory and runs
+everything sequentially.
 
-Your task is to fix `RunPipeline` so the channel between producer and
-consumer has a small, fixed buffer (e.g. size 2) instead of one sized
-to the full item count, so that once the buffer (plus the one item the
-consumer may be actively processing) is full, the producer's next send
-blocks until the consumer drains an item - i.e. real backpressure. The
+Your task is to rewrite `RunPipeline` so production and consumption
+run concurrently, connected by a channel with a small, fixed buffer
+(e.g. size 2) instead of collecting everything into a slice up front:
+start a goroutine that produces items and sends them on the channel,
+closing the channel once it's done, while the consumer ranges over the
+channel calling `SlowConsume` and `consumed` for each item it
+receives. Once the buffer (plus the one item the consumer may be
+actively processing) is full, the producer's next send must block
+until the consumer drains an item - i.e. real backpressure. The
 function signature must stay the same:
 
 ```go
