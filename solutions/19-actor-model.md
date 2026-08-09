@@ -110,6 +110,12 @@ func (a *Account) run(balance int) {
 	}
 }
 
+// Close terminates the actor goroutine by closing requests, which ends
+// run's range loop.
+func (a *Account) Close() {
+	close(a.requests)
+}
+
 func (a *Account) Deposit(amount int) {
 	reply := make(chan response)
 	a.requests <- request{kind: opDeposit, amount: amount, reply: reply}
@@ -157,12 +163,131 @@ func main() {
 }
 ```
 
-**Verified**: `go test -race -count=5 ./...` passes 5/5 with no races and the exact expected balances, including the insufficient-funds test (no more than `initial/amount` withdrawals ever succeed, balance never goes negative).
+**Verified**: `go test -race -count=5 ./...` passes 5/5 with no races and the exact expected balances, including the insufficient-funds test (no more than `initial/amount` withdrawals ever succeed, balance never goes negative) and both `Close`-related tests (the actor goroutine visibly starts in `NewAccount` and is gone again after `Close`).
 
 Two correctness details worth calling out because they're easy to get wrong when hand-rolling this pattern:
 
 - The `check_test.go` for `Withdraw` requires the funds check and the debit to be atomic together. That falls out for free here: both happen inside the same `case opWithdraw:` in the single actor goroutine, so no other request can interleave between the check and the debit — there's no separate lock to "hold across" the sequence, because there's only ever one goroutine touching `balance` in the first place.
 - `Deposit` sends its request and then unconditionally waits on `<-reply`, even though it discards the result. This isn't optional bookkeeping — `req.reply <- response{...}` inside `run` is a *send* on an unbuffered channel, so if `Deposit` didn't receive it, the actor goroutine would block forever trying to reply to the first deposit and the entire account would wedge. Verified directly: deleting the `<-reply` line and re-running `TestAccountBasicOperations` hangs the actor goroutine mid-send and the test suite times out, confirming the drain is load-bearing, not decorative.
+
+## Approach 1b: actor goroutine with typed messages instead of a tagged struct
+
+Same idea as Approach 1 — a single actor goroutine owns `balance` as a local variable, no locks anywhere — but the message shape is different: instead of one `request` struct with a `kind` enum field, each operation gets its own concrete message type, and the actor `switch`es on the message's dynamic type rather than an `int`.
+
+```go
+package main
+
+import (
+	"errors"
+	"fmt"
+	"sync"
+)
+
+// Command is any of DepositCommand, WithdrawCommand, or
+// GetBalanceCommand - the actor type-switches on it instead of
+// branching on a tag field.
+type Command any
+
+type DepositCommand struct {
+	amount int
+}
+
+type WithdrawCommand struct {
+	amount  int
+	replyCh chan error
+}
+
+type GetBalanceCommand struct {
+	replyCh chan int
+}
+
+type Account struct {
+	cmdCh chan Command
+}
+
+func NewAccount(initial int) *Account {
+	a := &Account{cmdCh: make(chan Command)}
+	go a.loop(initial)
+	return a
+}
+
+// loop is the actor: balance lives only as its local variable, so no
+// other goroutine can ever reach it - ownership is structural, not a
+// matter of every method remembering to go through a lock.
+func (a *Account) loop(balance int) {
+	for cmd := range a.cmdCh {
+		switch c := cmd.(type) {
+		case DepositCommand:
+			balance += c.amount
+
+		case WithdrawCommand:
+			newBalance := balance - c.amount
+			if newBalance < 0 {
+				c.replyCh <- ErrInsufficientFunds
+			} else {
+				balance = newBalance
+			}
+			close(c.replyCh)
+
+		case GetBalanceCommand:
+			c.replyCh <- balance
+			close(c.replyCh)
+		}
+	}
+}
+
+func (a *Account) Deposit(amount int) {
+	a.cmdCh <- DepositCommand{amount}
+}
+
+func (a *Account) Withdraw(amount int) error {
+	replyCh := make(chan error)
+	a.cmdCh <- WithdrawCommand{amount, replyCh}
+	return <-replyCh
+}
+
+func (a *Account) Balance() int {
+	replyCh := make(chan int)
+	a.cmdCh <- GetBalanceCommand{replyCh}
+	return <-replyCh
+}
+
+func (a *Account) Close() {
+	close(a.cmdCh)
+}
+
+var ErrInsufficientFunds = errors.New("insufficient funds")
+
+func main() {
+	account := NewAccount(1000)
+
+	var wg sync.WaitGroup
+	for i := 0; i < 100; i++ {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			account.Deposit(1)
+		}()
+	}
+	wg.Wait()
+
+	fmt.Printf("final balance after 100 concurrent deposits of 1: %d (want 1100)\n", account.Balance())
+
+	if err := account.Withdraw(2000); err != nil {
+		fmt.Printf("withdraw correctly rejected: %v\n", err)
+	} else {
+		fmt.Printf("withdraw of 2000 from a smaller balance was allowed - balance is now %d\n", account.Balance())
+	}
+}
+```
+
+**Verified**: `go test -race -count=3 ./...` passes cleanly, including both `Close`-related tests.
+
+Versus Approach 1:
+
+- **`Deposit` needs no reply channel at all.** `DepositCommand` carries no `replyCh`, and `loop` never tries to send one back for it. This sidesteps Approach 1's documented gotcha entirely — there's no drain to forget, because there's nothing to drain. Correctness doesn't depend on remembering the drain; it falls out of the same unbuffered-channel rendezvous that makes any of these designs work: `Deposit`'s send only completes once `loop` receives it, and `loop` finishes that `case` (updating `balance`) before it goes back to ranging for the next message, so any later `Withdraw`/`Balance` call is guaranteed to see the deposit.
+- **Weaker compile-time safety.** `Command any` accepts any value, and the `switch` has no `default` — a message of a type nobody handles is silently dropped instead of causing a compile error, and if that dropped message carried a reply channel, its caller blocks forever. Approach 1's closed `request` struct can't be constructed with the wrong shape in the first place. This is a real cost of the type-switch style, not just a style preference — it trades a compile-time guarantee for one line less boilerplate per message type.
+- **One fewer indirection to reason about.** There's no `response`/`kind` pair shared across three unrelated operations — each message's fields are exactly what that operation needs (`WithdrawCommand` has an `amount` and an `err`-shaped reply, `GetBalanceCommand` has neither `amount` nor `err`). Whether that's clearer or just "different boilerplate" is a matter of taste; unlike the two points above, it isn't a correctness or safety difference.
 
 ## Approach 2: mutex-based (also valid — but not for this exercise)
 
@@ -214,6 +339,9 @@ func (a *Account) Balance() int {
 	return a.balance
 }
 
+// Close is a no-op: there's no background goroutine to stop.
+func (a *Account) Close() {}
+
 var ErrInsufficientFunds = errors.New("insufficient funds")
 
 func main() {
@@ -239,11 +367,11 @@ func main() {
 }
 ```
 
-**Verified**: `go test -race -count=5 ./...` passes 5/5 against this version too, with the exact same assertions as Approach 1 (identical final balances, insufficient-funds behavior, no negative balance).
+**Verified**: this one now fails the suite on two separate grounds, not just the letter-of-the-assignment one the paragraph above already calls out: `TestMainDoesNotUseLocks` fails as expected (it imports `sync.Mutex`), and — even with the no-op `Close` above added just to make it compile — `TestNewAccountStartsActorGoroutineAndCloseStopsIt` also fails, because `NewAccount` never raises the goroutine count the way an actor's `NewAccount` must. That second failure isn't a technicality: it's the same property the "concrete differences" list below already named as the structural difference between the two approaches, now enforced by a test rather than left as prose.
 
 Concrete differences worth knowing, all readable straight off the two implementations above:
 
-- **Resource lifecycle.** The actor's `requests` channel is never closed and there's no `Close`/shutdown method, so every `NewAccount` leaks its `run` goroutine for the lifetime of the process. The mutex version has nothing to leak or clean up — it's just a struct.
+- **Resource lifecycle.** The actor's `requests` channel is closed by `Close`, which ends `run`'s range loop and lets the goroutine exit. The mutex version has nothing to leak or clean up — it's just a struct, so its `Close` is a no-op — but that also means it can never satisfy `TestNewAccountStartsActorGoroutineAndCloseStopsIt`, which requires `NewAccount` to visibly start a goroutine.
 - **Zero value usability.** `var a Account` is a perfectly usable, empty mutex-based account. The actor version's zero value is not: `a.requests` is a nil channel, so any method call blocks forever sending on it. `NewAccount` is mandatory for the actor version in a way it isn't for the mutex version.
 - **Per-call cost.** Each actor call does two channel operations (one send, one receive) plus a `reply` channel allocation; the mutex version does one uncontended `Lock`/`Unlock` pair, which is typically cheaper per call, especially under low contention.
 - **What doesn't differ:** don't read "message passing" as buying you FIFO fairness across callers — Go's channel send-queue ordering is a runtime implementation detail, not a language guarantee, and `sync.Mutex` explicitly allows barging (a newly-arriving goroutine can grab the lock ahead of one that's been waiting). Neither approach gives you an ordering guarantee here; both just give you correctness (no lost updates, no torn reads, atomic check-then-mutate).
