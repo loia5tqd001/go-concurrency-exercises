@@ -75,13 +75,8 @@ func WordCount(chunks []string) map[string]int {
 	partials := make([]map[string]int, len(chunks))
 
 	var wg sync.WaitGroup
-	wg.Add(len(chunks))
-
 	for i, chunk := range chunks {
-		i, chunk := i, chunk
-		go func() {
-			defer wg.Done()
-
+		wg.Go(func() {
 			time.Sleep(ProcessDelay)
 
 			local := make(map[string]int)
@@ -89,7 +84,7 @@ func WordCount(chunks []string) map[string]int {
 				local[word]++
 			}
 			partials[i] = local
-		}()
+		})
 	}
 
 	wg.Wait()
@@ -113,23 +108,76 @@ Walking through why this is race-free:
   reference to. Assigning `partials[i] = local` is the only shared
   write, and each `i` is unique per goroutine, so there's no
   overlapping access — writing to distinct slice indices concurrently
-  is safe in Go.
+  is safe in Go. `i` and `chunk` don't need to be re-captured per
+  iteration (no `i, chunk := i, chunk` shadowing trick) — since Go
+  1.22, `for` loop variables are already scoped to each iteration.
 - **Reduce phase**: `wg.Wait()` establishes a happens-before edge
   between every map-phase goroutine's completion and the reduce loop,
   so by the time the reduce loop runs, all `partials` entries are
   fully populated and visible. The reduce loop itself is single-
   threaded, so merging into `result` needs no locking at all.
-- Fanning the partials in over a `chan map[string]int` instead of a
-  pre-sized `[]map[string]int` + `sync.WaitGroup` works identically
-  well and is mentioned as an equally valid option in the exercise
-  text — the essential invariant is the same either way: no map is
-  ever written by more than one goroutine.
+- `wg.Go(func() { ... })` - added in Go 1.24 - replaces the manual
+  `wg.Add(1)` / `defer wg.Done()` pair, so there's no way to forget
+  the `Done()` call.
 
 This passed `go test -race -count=3` in a scratch copy with no
 flakiness: `TestWordCountCorrectness`, `TestWordCountConcurrency`, and
 `TestWordCountRace` (which reruns `WordCount` five times over 30
 chunks) all passed in ~0.03s–0.16s per run, well under the 100ms
 concurrency budget and with the race detector silent throughout.
+
+## Approach 1b (alternative): channel-of-partials fan-in instead of an indexed slice
+
+The exercise text also calls out "fanning the partials in over a
+channel of maps" as an equally valid map phase. It is — but it costs
+one more moving part than Approach 1: a `chan map[string]int` plus a
+dedicated goroutine whose only job is to close that channel once every
+map-phase goroutine has finished, so the reduce loop's `range` knows
+when to stop.
+
+```go
+func WordCount(chunks []string) map[string]int {
+	var wg sync.WaitGroup
+	resultCh := make(chan map[string]int)
+
+	for _, chunk := range chunks {
+		wg.Go(func() {
+			time.Sleep(ProcessDelay)
+
+			local := make(map[string]int)
+			for _, word := range strings.Fields(chunk) {
+				local[word]++
+			}
+			resultCh <- local
+		})
+	}
+	go func() {
+		wg.Wait()
+		close(resultCh)
+	}()
+
+	result := make(map[string]int)
+	for partial := range resultCh {
+		for word, count := range partial {
+			result[word] += count
+		}
+	}
+
+	return result
+}
+```
+
+This is just as race-free as Approach 1 (same invariant: no map is
+ever written by more than one goroutine) and also passed
+`go test -race -count=3` cleanly. Reach for it over Approach 1 when
+the number of partials isn't known upfront, or when the reduce side
+wants to start consuming partials as they arrive rather than waiting
+for every map-phase goroutine to finish. Neither applies here — the
+chunk count is known before the loop starts, and the reduce phase
+never runs until every partial exists anyway — so Approach 1's
+pre-sized slice is the better default for this exercise specifically:
+one fewer moving part (no channel, no dedicated closer goroutine) for
+the same guarantee.
 
 ## Common mistake to avoid: goroutine-per-chunk writing into ONE shared map
 
