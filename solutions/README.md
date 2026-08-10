@@ -50,6 +50,7 @@
 | 35 | Your Own singleflight: Deduping In-Flight Duplicate Calls | [35-singleflight.md](35-singleflight.md) |
 | 36 | Batch Collector: Coalescing N Concurrent Calls Into One Batch API Request | [36-batch-collector.md](36-batch-collector.md) |
 | 37 | Safe Pool Shutdown: Closing a Multi-Producer Job Queue Without Panicking | [37-safe-pool-shutdown.md](37-safe-pool-shutdown.md) |
+| 38 | Flash-Sale Inventory: Lock-Free Stock Claims with CompareAndSwap | [38-flash-sale-inventory.md](38-flash-sale-inventory.md) |
 
 ## A note on exercises 0-5
 
