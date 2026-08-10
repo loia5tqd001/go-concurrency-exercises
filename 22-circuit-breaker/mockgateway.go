@@ -9,6 +9,7 @@ package main
 import (
 	"errors"
 	"sync"
+	"time"
 )
 
 // ErrGatewayDown is returned by Charge whenever the gateway has been
@@ -22,6 +23,7 @@ type PaymentGateway struct {
 	mu      sync.Mutex
 	failing bool
 	calls   int
+	delay   time.Duration
 }
 
 // NewPaymentGateway creates a new, initially healthy, PaymentGateway.
@@ -46,16 +48,31 @@ func (g *PaymentGateway) Calls() int {
 	return g.calls
 }
 
+// SetDelay makes every subsequent call to Charge block for d before
+// returning, simulating a slow downstream call. Used by tests that
+// check a caller isn't stuck waiting on the breaker's own lock while
+// an unrelated call is in flight.
+func (g *PaymentGateway) SetDelay(d time.Duration) {
+	g.mu.Lock()
+	defer g.mu.Unlock()
+	g.delay = d
+}
+
 // Charge simulates charging amountCents to the gateway. It always
 // counts as a call regardless of outcome. If the gateway is currently
 // set to failing, it returns ErrGatewayDown; otherwise it succeeds.
 func (g *PaymentGateway) Charge(amountCents int) error {
 	g.mu.Lock()
-	defer g.mu.Unlock()
-
 	g.calls++
+	delay := g.delay
+	failing := g.failing
+	g.mu.Unlock()
 
-	if g.failing {
+	if delay > 0 {
+		time.Sleep(delay)
+	}
+
+	if failing {
 		return ErrGatewayDown
 	}
 	return nil

@@ -87,6 +87,102 @@ func TestCircuitHalfOpenRecovery(t *testing.T) {
 	})
 }
 
+// TestCircuitClosedDoesNotSerializeOnGatewayCall checks that the
+// breaker's own lock isn't held across the (potentially slow) call to
+// the wrapped gateway. If it were, two callers arriving while the
+// circuit is Closed and the gateway happens to be slow would be
+// serialized behind the breaker itself - exactly the kind of
+// bottleneck a circuit breaker is supposed to prevent, not cause.
+//
+// This uses real wall-clock timing rather than testing/synctest:
+// synctest's fake clock only advances once every goroutine in the
+// bubble is "durably blocked", and per its own docs, blocking on a
+// sync.Mutex does NOT count as durably blocked. A buggy
+// lock-held-across-the-call implementation would leave one goroutine
+// merely blocked on cb.mu while the other sleeps inside the bubble,
+// which never satisfies synctest's all-durably-blocked condition -
+// so the test would hang instead of failing.
+func TestCircuitClosedDoesNotSerializeOnGatewayCall(t *testing.T) {
+	gateway := NewPaymentGateway()
+	cb := NewCircuitBreaker(gateway)
+
+	const delay = 150 * time.Millisecond
+	gateway.SetDelay(delay)
+
+	start := time.Now()
+	var wg sync.WaitGroup
+	wg.Add(2)
+	for i := 0; i < 2; i++ {
+		go func() {
+			defer wg.Done()
+			_ = cb.Execute(100)
+		}()
+	}
+	wg.Wait()
+	elapsed := time.Since(start)
+
+	// Run concurrently: ~1x delay. Serialized behind the breaker's own
+	// lock: ~2x delay. The threshold sits well in between.
+	if elapsed >= delay*3/2 {
+		t.Fatalf("two concurrent Closed-state calls took %v (gateway delay %v) - the breaker appears to serialize callers behind its own lock instead of releasing it during the gateway call", elapsed, delay)
+	}
+}
+
+// TestCircuitHalfOpenTrialFailsFastForOthers checks that while the
+// single Half-Open trial call is in flight, a concurrent caller is
+// rejected immediately with ErrCircuitOpen rather than blocking until
+// the trial finishes. Blocking instead of failing fast would mean the
+// breaker's own lock is held across the trial's gateway call, which
+// defeats the fail-fast guarantee Open/Half-Open is supposed to give
+// every other caller.
+//
+// Real wall-clock timing is used for the same reason as
+// TestCircuitClosedDoesNotSerializeOnGatewayCall: the failure mode
+// this test targets is a goroutine stuck on cb.mu, which
+// testing/synctest cannot recognize as blocked.
+func TestCircuitHalfOpenTrialFailsFastForOthers(t *testing.T) {
+	gateway := NewPaymentGateway()
+	cb := NewCircuitBreaker(gateway)
+
+	gateway.SetFailing(true)
+	for i := 1; i <= 5; i++ {
+		_ = cb.Execute(100)
+	}
+
+	gateway.SetFailing(false)
+	const delay = 150 * time.Millisecond
+	gateway.SetDelay(delay)
+	time.Sleep(2*time.Second + 10*time.Millisecond)
+
+	var trialErr error
+	trialDone := make(chan struct{})
+	go func() {
+		trialErr = cb.Execute(100)
+		close(trialDone)
+	}()
+
+	// Give the trial goroutine time to claim the half-open slot and
+	// start its (slow) call to the gateway, without waiting for it to
+	// finish.
+	time.Sleep(delay / 3)
+
+	secondStart := time.Now()
+	secondErr := cb.Execute(100)
+	secondElapsed := time.Since(secondStart)
+
+	if !errors.Is(secondErr, ErrCircuitOpen) {
+		t.Fatalf("expected concurrent call during the half-open trial to get ErrCircuitOpen, got %v", secondErr)
+	}
+	if secondElapsed >= delay/2 {
+		t.Fatalf("concurrent call during the half-open trial took %v to fail fast (gateway delay %v) - it was likely blocked on the breaker's own lock instead of being rejected immediately", secondElapsed, delay)
+	}
+
+	<-trialDone
+	if trialErr != nil {
+		t.Fatalf("expected the half-open trial call to succeed, got %v", trialErr)
+	}
+}
+
 // TestCircuitConcurrentSafety hammers Execute from many goroutines at
 // once while the gateway is failing, to catch data races on the
 // breaker's internal state (run with `go test -race`).
