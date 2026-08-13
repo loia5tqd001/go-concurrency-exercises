@@ -91,6 +91,21 @@ sidesteps it by letting the send queue instead of blocking — the same
 reason Pike's original version buffers its worker channels. This is
 already in place in the given code and isn't part of the fix above.
 
+## `requestBacklogPerWorker` is load-bearing, not cosmetic
+
+Empirically confirmed while reviewing this exercise: shrinking
+`requestBacklogPerWorker` to `0` reproduces the original bug's exact
+failure (`request N was never dispatched - balancer looks wedged`),
+and even `1` deadlocks a single-`Worker` pool under a burst faster than
+that `Worker` can drain. This isn't backpressure that just slows things
+down — it's a real circular wait: `Balance`'s dispatch send blocks
+*inside* the same goroutine that reads `done`, so a full buffer freezes
+`done`-draining for every `Worker` in the pool, not only the backed-up
+one. `16` is sized for this exercise's own traffic, nothing more.
+[33b](../33b-load-balancer-nonblocking-dispatch) removes the buffer
+entirely (capacity `0`) and asks for a dispatcher that's correct
+without leaning on one.
+
 ## Key takeaways
 
 - A self-scheduling pool's `done` channel must be drained by the *same*

@@ -69,6 +69,24 @@ func (b *Balancer) Balance(work <-chan Request)
 
 You should not need to change `Request`, `Worker`, or `Pool`.
 
+## A note on `requestBacklogPerWorker`
+
+That constant isn't just a performance knob — it's load-bearing for
+correctness, and its value (`16`) is sized for this exercise's own
+traffic (a burst of a few times `numWorkers`), not derived from
+anything. Shrink it enough relative to the load thrown at a single
+`Worker` and the *fixed* `Balance` above wedges again, in the same
+shape as [the bug](#the-bug) this exercise asks you to fix: `Balance`'s
+dispatch send — `w.requests <- req` — runs inside its own single
+goroutine, so if that send blocks because a `Worker`'s buffer is full,
+`Balance` can't reach its `done` case either, for *any* `Worker` — not
+just the one it's stuck sending to. At `requestBacklogPerWorker = 0`
+this reproduces the original wedge exactly, on the very first request
+that lands on a `Worker` that isn't idle. See
+[33b](../33b-load-balancer-nonblocking-dispatch) for a direct sequel
+that removes the buffer entirely and asks for a `Balance` that's
+correct without one.
+
 ## Test your solution
 
 ```
