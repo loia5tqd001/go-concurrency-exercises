@@ -51,6 +51,14 @@ Balance later dispatches a 2nd request to that same Worker:
 
 ## Your task
 
+> **Heads up:** this one also tests `container/heap` at usage level, not
+> just concurrency. "Updates the pool accordingly" means calling
+> `heap.Fix` on the `Worker` that just changed load — not
+> `Pop`+`Push`, and not touching `Pool`'s own methods. If `heap.Fix`
+> is new to you, skim [`container/heap`'s
+> docs](https://pkg.go.dev/container/heap) first; you're using the
+> heap, not reimplementing one.
+
 Fix `Balance` so it also drains `b.done` and updates the pool
 accordingly. Exported surface stays the same:
 
