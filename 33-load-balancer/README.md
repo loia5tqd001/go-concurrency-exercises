@@ -1,59 +1,67 @@
 # Load Balancer: Self-Scheduling Workers That Report Their Own Load
 
-Given is a self-scheduling load balancer, modeled directly on the one
-from Rob Pike's 2012 "Go Concurrency Patterns" talk: a `Pool` of
-`Worker`s ordered as a min-heap by how many requests each is currently
-carrying (`pending`), so `heap.Pop` always hands back whichever
-`Worker` is least loaded right now. Every `Worker` runs its own
-goroutine (`Worker.work`, already correct - do not touch it) that
-executes requests off its own inbox one at a time and, after each one,
-sends itself back on a shared `done` channel to report "I just freed
-up."
+Modeled on Rob Pike's 2012 "Go Concurrency Patterns" talk: a `Pool` of
+`Worker`s kept as a min-heap ordered by `pending` (current load), so
+`heap.Pop(&pool)` always hands back whichever `Worker` is least loaded
+right now.
 
-`Balancer.Balance` is supposed to run forever, doing two things:
-dispatch every incoming `Request` to the currently least-loaded
-`Worker`, AND process every value that arrives on `done` by
-decrementing that `Worker`'s pending count and fixing its position in
-the heap - otherwise the heap's whole reason for existing (knowing
-who's actually free) silently rots the moment a `Worker` finishes its
-very first request.
+```
+                dispatch: heap.Pop → least-loaded Worker
+       ┌─────────────────────────────────────────────┐
+       ▼                                              │
+work ─▶ Balance ◀──────────── done ◀──── Worker.work ─┘
+         (pool: min-heap by pending)      (runs req, then
+                                            reports itself
+                                            back on done)
+```
 
-The naive implementation below only does the first half. Its select
-loop has exactly one case: read from `work`, dispatch it. Nothing in
-`Balance` ever receives from `b.done`. That looks completely fine for
-exactly as many requests as there are `Worker`s - each gets its own
-`Worker` on the first round of dispatch, and every one of them
-finishes correctly. But watch what happens to a `Worker` after it
-finishes: it calls `done <- w`, and since nothing is ever listening on
-`b.done`, that send blocks forever. The `Worker`'s goroutine is now
-permanently stuck one line before it would loop back to receive its
-next request - it will never process another one, no matter how long
-the program runs.
+`Worker.work` (already correct — do not touch) runs requests off its
+own inbox one at a time, then sends itself on `done` to say "I just
+freed up."
 
-The instant a request arrives that has to be routed to a `Worker`
-that's already finished its first job (which happens as soon as there
-have been more requests than there are `Worker`s), `dispatch`'s own
-`w.requests <- req` blocks forever waiting for a `Worker.work` goroutine
-that is never coming back to receive it. Since `dispatch` is called
-synchronously from inside `Balance`'s only loop, THAT blocks the entire
-`Balancer` - every request behind it in the `work` channel, no matter
-which `Worker` it was destined for, now waits forever too.
+## The bug
 
-Your task is to fix `Balance` so it also drains `b.done` and updates
-the pool accordingly, so the load balancer keeps working correctly no
-matter how many requests arrive over its `Worker`s' lifetime - not just
-for the first burst. The exported surface must stay the same:
+`Balance`'s select loop only has a `work` case — it never reads
+`b.done`:
+
+```go
+func (b *Balancer) Balance(work <-chan Request) {
+	for {
+		req := <-work
+		b.dispatch(req)
+	}
+}
+```
+
+That's invisible for a first burst of up to `numWorkers` requests —
+every `Worker` is fresh and nobody needs `done` yet. It wedges the
+instant a request has to route to a `Worker` that already finished its
+first job:
+
+```
+Worker finishes 1st request ──▶ done <- w blocks forever (nobody's listening)
+                                          │
+Balance later dispatches a 2nd request to that same Worker:
+    w.requests <- req ──▶ blocks forever (Worker never comes back to receive)
+                                          │
+        Balance's ONE goroutine is now stuck on that send
+                                          │
+      every later request queued behind it in `work` waits forever too
+```
+
+## Your task
+
+Fix `Balance` so it also drains `b.done` and updates the pool
+accordingly. Exported surface stays the same:
 
 ```go
 func NewBalancer(numWorkers int) *Balancer
 func (b *Balancer) Balance(work <-chan Request)
 ```
 
-You should not need to change `Request`, `Worker`, or `Pool` at all.
+You should not need to change `Request`, `Worker`, or `Pool`.
 
 ## Test your solution
-
-To complete this exercise, you must pass the tests:
 
 ```
 go test

@@ -1,52 +1,40 @@
 //////////////////////////////////////////////////////////////////////
 //
-// Given is a self-scheduling load balancer, modeled directly on the
-// one from Rob Pike's 2012 "Go Concurrency Patterns" talk: a Pool of
-// Workers ordered as a min-heap by how many requests each is currently
-// carrying (pending), so heap.Pop always hands back whichever Worker
-// is least loaded right now. Every Worker runs its own goroutine
-// (Worker.work, already correct - do not touch it) that executes
-// requests off its own inbox one at a time and, after each one, sends
-// itself back on a shared done channel to report "I just freed up."
+// A self-scheduling load balancer (Rob Pike, "Go Concurrency
+// Patterns", 2012): a Pool of Workers kept as a min-heap by pending
+// load, so heap.Pop always returns whichever Worker is least loaded
+// right now.
 //
-// Balancer.Balance is supposed to run forever, doing two things:
-// dispatch every incoming Request to the currently least-loaded
-// Worker, AND process every value that arrives on done by decrementing
-// that Worker's pending count and fixing its position in the heap -
-// otherwise the heap's whole reason for existing (knowing who's
-// actually free) silently rots the moment a Worker finishes its very
-// first request.
+//               dispatch: heap.Pop → least-loaded Worker
+//      ┌─────────────────────────────────────────────┐
+//      ▼                                              │
+// work ─▶ Balance ◀──────────── done ◀──── Worker.work ┘
+//          (pool: min-heap by pending)      (runs req, then
+//                                             reports itself
+//                                             back on done)
 //
-// The naive implementation below only does the first half. Its select
-// loop has exactly one case: read from work, dispatch it. Nothing in
-// Balance ever receives from b.done. That looks completely fine for
-// exactly as many requests as there are Workers - each gets its own
-// Worker on the first round of dispatch, and every one of them
-// finishes correctly. But watch what happens to a Worker after it
-// finishes: it calls `done <- w`, and since nothing is ever listening
-// on b.done, that send blocks forever. The Worker's goroutine is now
-// permanently stuck one line before it would loop back to receive its
-// next request - it will never process another one, no matter how
-// long the program runs.
+// Worker.work (below, already correct - do not touch) runs requests
+// off its own inbox one at a time, then sends itself on done to say
+// "I just freed up."
 //
-// The instant a request arrives that has to be routed to a Worker
-// that's already finished its first job (which happens as soon as
-// there have been more requests than there are Workers), dispatch's
-// own `w.requests <- req` blocks forever waiting for a Worker.work
-// goroutine that is never coming back to receive it. Since dispatch is
-// called synchronously from inside Balance's only loop, THAT blocks
-// the entire Balancer - every request behind it in the work channel,
-// no matter which Worker it was destined for, now waits forever too.
+// BROKEN: Balance's select loop only has a `work` case - it never
+// reads b.done. Invisible for a first burst of up to numWorkers
+// requests. Wedges the instant a request routes to a Worker that
+// already finished its first job:
 //
-// Your task is to fix Balance so it also drains b.done and updates the
-// pool accordingly, so the load balancer keeps working correctly no
-// matter how many requests arrive over its Workers' lifetime - not
-// just for the first burst. The exported surface must stay the same:
+//   Worker finishes 1st request -> done <- w blocks (nobody's listening)
+//   Balance dispatches a 2nd request to that same Worker:
+//       w.requests <- req -> blocks too (Worker never comes back to receive)
+//   -> Balance's ONE goroutine is now stuck on that send
+//   -> every later request queued behind it in `work` waits forever
+//
+// Fix Balance so it also drains b.done and updates the pool. Keep the
+// exported surface the same:
 //
 //     func NewBalancer(numWorkers int) *Balancer
 //     func (b *Balancer) Balance(work <-chan Request)
 //
-// You should not need to change Request, Worker, or Pool at all.
+// Don't change Request, Worker, or Pool.
 //
 
 package main
@@ -67,22 +55,17 @@ type Request struct {
 	c  chan int
 }
 
-// Worker is one backend able to run Requests, one at a time, off its
-// own inbox. pending tracks how many requests are currently queued or
-// in flight on this Worker (including the one it's actively running).
-// index is bookkeeping required by container/heap - do not set it
-// yourself, Pool's Push/Swap/Pop already maintain it.
+// Worker is one backend that runs Requests, one at a time, off its own
+// inbox. pending is how many requests it's currently carrying (queued
+// + in-flight). index is container/heap bookkeeping - Pool's
+// Push/Swap/Pop maintain it; don't set it yourself.
 type Worker struct {
 	requests chan Request
 	pending  int
 	index    int
 }
 
-// work is this Worker's own goroutine: it runs requests one at a time
-// off its inbox, delivers each result on that request's own reply
-// channel, and then reports itself back on done so the Balancer learns
-// it just freed up. This is already correct - nothing here needs to
-// change.
+// work is this Worker's own goroutine. Already correct - do not touch.
 func (w *Worker) work(done chan *Worker) {
 	for req := range w.requests {
 		req.c <- req.fn()
@@ -90,10 +73,8 @@ func (w *Worker) work(done chan *Worker) {
 	}
 }
 
-// Pool is a min-heap of *Worker ordered by pending load, so the
-// least-loaded Worker is always at the root: heap.Pop(&pool) hands
-// back whichever Worker currently has the fewest requests queued or
-// running. Already correct - nothing here needs to change either.
+// Pool is a min-heap of *Worker ordered by pending, so heap.Pop always
+// returns the least-loaded Worker. Already correct.
 type Pool []*Worker
 
 func (p Pool) Len() int           { return len(p) }
@@ -120,29 +101,25 @@ func (p *Pool) Pop() any {
 	return w
 }
 
-// Balancer fans work out across a Pool of Workers, always handing a
-// new Request to whichever Worker is currently least loaded, and
-// keeping that ordering current as Workers report completions.
+// Balancer fans work out across a Pool of Workers, always to whichever
+// is currently least loaded, keeping that ordering current as Workers
+// report completions.
 type Balancer struct {
 	pool Pool
 	done chan *Worker
 }
 
-// requestBacklogPerWorker sizes each Worker's inbox. dispatch's send to
-// a Worker's requests channel happens synchronously inside Balance's
-// only goroutine, so if that channel were unbuffered, dispatching to a
-// Worker that's mid-flight - already running one request and about to
-// report a PRIOR completion on done before it loops back to receive
-// again - would block Balance on that exact Worker, which in turn
-// can't loop back to receive until Balance (stuck in that very send)
-// gets around to receiving its done report. A generous buffer avoids
-// that circular wait; it's unrelated to the bug this exercise is
-// about.
+// requestBacklogPerWorker buffers each Worker's inbox so dispatch's
+// synchronous send can queue instead of deadlocking: an unbuffered
+// inbox would block Balance on a Worker that's mid-flight (about to
+// send its PRIOR completion on done before it loops back to receive) -
+// and that Worker can't loop back until Balance, stuck on that very
+// send, gets around to receiving the done report. Unrelated to this
+// exercise's bug - already correct.
 const requestBacklogPerWorker = 16
 
-// NewBalancer creates a Balancer backed by numWorkers Workers, each
-// already running its own goroutine, ready for Balance to be called on
-// it.
+// NewBalancer starts numWorkers Workers, each already running its own
+// goroutine, ready for Balance to be called on it.
 func NewBalancer(numWorkers int) *Balancer {
 	b := &Balancer{done: make(chan *Worker)}
 	for i := 0; i < numWorkers; i++ {
@@ -153,15 +130,10 @@ func NewBalancer(numWorkers int) *Balancer {
 	return b
 }
 
-// Balance is supposed to run forever, dispatching every Request that
-// arrives on work to the currently least-loaded Worker, and updating
-// the pool's load ordering every time a Worker reports completion on
-// b.done.
+// Balance should dispatch every Request from work to the least-loaded
+// Worker AND update the pool as Workers report completions on b.done.
 //
-// NAIVE / BROKEN: it only ever looks at work. Nothing here ever
-// receives from b.done, so the pool's pending counts only ever go up,
-// never down - and once every Worker has finished one request, every
-// subsequent dispatch blocks forever.
+// BROKEN: it only ever looks at work - see the top-of-file diagram.
 func (b *Balancer) Balance(work <-chan Request) {
 	for {
 		req := <-work
@@ -169,11 +141,8 @@ func (b *Balancer) Balance(work <-chan Request) {
 	}
 }
 
-// dispatch hands req to whichever Worker currently has the fewest
-// pending requests, and re-inserts it into the pool with pending
-// incremented to reflect the new request it's now carrying. Already
-// correct - the bug in this exercise is entirely about what Balance
-// does (or rather, doesn't do) with b.done, not about dispatch itself.
+// dispatch hands req to the least-loaded Worker and re-inserts it with
+// pending incremented. Already correct.
 func (b *Balancer) dispatch(req Request) {
 	w := heap.Pop(&b.pool).(*Worker)
 	w.requests <- req
