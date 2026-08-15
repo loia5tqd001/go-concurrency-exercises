@@ -4,15 +4,15 @@
 // balancer. Submit below is the balancer's only entry point now -
 // there's no exported work channel for a caller to pick their own
 // buffering strategy on. Everything after Submit - the Worker/Pool
-// self-scheduling, the unbuffered inboxes, the nil-channel select that
-// dispatches without ever blocking on a busy Worker - is already
-// correct and doesn't need touching; it's 33b's fix, ported wholesale.
+// self-scheduling, the nil-channel select that dispatches without ever
+// blocking on a busy Worker - is already correct; it's 33b's fix,
+// ported wholesale.
 //
 // What's new: incoming is a real bounded channel (capacity
-// maxBacklog), not an unbounded slice. That's the fix for 33b's own
-// loose end - a sustained overload now hits a hard ceiling instead of
-// growing memory forever - but a bounded queue raises a question 33b
-// never had to answer: what happens when it's full?
+// maxBacklog), not an unbounded slice - closing 33b's own loose end,
+// sustained overload now hits a hard ceiling instead of growing memory
+// forever. But a bounded queue raises a question 33b never had to
+// answer: what happens when it's full?
 //
 // BROKEN: Submit just blocks.
 //
@@ -21,25 +21,23 @@
 //		return nil
 //	}
 //
-// Once incoming, the run loop's own one-item staging slot, and every
-// Worker are all occupied, the NEXT Submit call sits there waiting for
-// something to finish - indefinitely, if the caller never gives up.
-// That's not a deadlock (the system is still making progress; it'll
-// eventually drain), but it's exactly the failure mode a real load
-// balancer can't have: a caller that expected a fast yes/no now hangs
-// for as long as the balancer stays saturated, with no way to know
-// whether to retry, fail over, or give up.
+//   incoming (cap maxBacklog): FULL, staging slot: occupied, every
+//   Worker: busy
+//
+//   next Submit(req) ──▶ b.incoming <- req ──▶ blocks... waiting for
+//                          ANYTHING to free up (not a deadlock - the
+//                          system is draining - but the caller has no
+//                          idea how long)
 //
 // Your task: make Submit fail fast. The instant incoming has no room,
 // Submit must return ErrOverloaded immediately - never block waiting
 // for space to free up.
 //
-// Hint: the idiom is select with a default case - "try to send; if
-// nobody's ready for it right now, take the other branch instead of
-// waiting." That's a different flavor of non-blocking select than
-// 33b's nil-channel trick: there, a case was conditionally disabled
-// entirely; here, every case is real, and default is what runs when
-// none of them can proceed at this instant.
+// Hint: select+default tries a send once; if nothing's ready this
+// instant, default runs instead of waiting. Different flavor of
+// non-blocking select than 33b's nil-channel trick: there, a case was
+// disabled entirely; here every case is real, and default is what
+// runs when none of them can proceed right now.
 //
 // Keep the exported surface the same:
 //

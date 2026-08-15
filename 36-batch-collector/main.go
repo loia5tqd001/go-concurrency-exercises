@@ -1,32 +1,28 @@
 //////////////////////////////////////////////////////////////////////
 //
-// Collector is meant to coalesce many independent, concurrent calls
-// into ONE call to a batch API. Imagine 30 goroutines each need a
-// shipping quote for their own order, and the quoting API supports
-// batch requests (send N orders, get N quotes back) but charges you a
-// full round-trip for every call regardless of batch size. Calling it
-// once per order wastes 29 of those round-trips; calling it once with
-// all 30 orders is the efficient move - but the 30 goroutines don't
-// know about each other, don't know when the 30th one shows up, and
-// each still needs to get back exactly its own quote, not the whole
-// batch's worth.
+// Collector coalesces many independent, concurrent calls into ONE
+// call to a batch API:
 //
-// Collector is supposed to let each goroutine call Add with its own
-// request, block on the channel Add hands back, and receive exactly
-// its own Result once the whole batch has run - as if it had called
-// the batch API all by itself - while under the hood, fn only
-// actually runs ONCE, the moment the expected-th request arrives.
+//   Add(order 0) ─┐
+//   Add(order 1) ─┼─▶ buffer requests ──expected-th Add──▶ fn(all) ── once
+//   Add(order 2) ─┘                                            │
+//                                          fan back out: each caller gets
+//                                          its own matching response
 //
-// Right now Collector does none of that safely. Add appends to two
-// shared slices and increments a shared counter with NO
-// synchronization at all, from however many goroutines call it
-// concurrently. That is a data race on every one of those fields, and
-// it doesn't fail gracefully: lost increments can mean nQueued never
-// actually reaches expected, so fn never runs and every caller's
-// channel blocks forever; corrupted slices can panic outright; and if
-// you "fix" this by simply wrapping the increment in a mutex without
-// thinking about WHEN the batch is allowed to fire, you can just as
-// easily end up calling fn twice for the same batch instead.
+// Imagine 30 goroutines each needing a shipping quote for their own
+// order, from an API that supports batches (N orders in, N quotes
+// out) but charges a full round-trip per call regardless of size. One
+// batched call is the efficient move - but the 30 goroutines don't
+// know about each other, don't know when the 30th shows up, and each
+// still needs exactly its own quote back.
+//
+// Right now Add appends to two shared slices and increments a shared
+// counter with NO synchronization at all. That's a data race on every
+// field, and it doesn't fail gracefully: lost increments can mean
+// nQueued never reaches expected (fn never runs, every caller blocks
+// forever); corrupted slices can panic outright; and a mutex around
+// the increment ALONE, without thinking about WHEN the batch may
+// fire, can just as easily let fn run twice for the same batch.
 //
 // Your task is to fix Collector so that:
 //

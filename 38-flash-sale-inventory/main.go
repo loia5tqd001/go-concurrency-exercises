@@ -1,10 +1,9 @@
 //////////////////////////////////////////////////////////////////////
 //
-// Given is a Store selling a limited number of units of a flash-sale
-// item. Any number of unrelated goroutines - one per incoming
-// "buy" request - call Claim concurrently, each trying to grab exactly
-// one unit for their buyer. Right now Claim reads and writes stock
-// with no synchronization of any kind:
+// Store sells a limited number of units of a flash-sale item. Any
+// number of unrelated goroutines - one per "buy" request - call Claim
+// concurrently, each trying to grab exactly one unit. Right now Claim
+// reads and writes stock with no synchronization at all:
 //
 //	func (s *Store) Claim() bool {
 //		if s.stock > 0 {
@@ -14,14 +13,17 @@
 //		return false
 //	}
 //
-// Reading s.stock and then writing it back are two separate steps.
-// If two goroutines both read stock as 1 before either one writes,
-// both see "stock > 0", both decrement, and both report success -
-// selling the same last unit twice. Run enough concurrent buyers
-// against a small stock and the opposite failure shows up too: claims
-// go missing, and fewer buyers succeed than the stock should allow.
-// This isn't a rare corner case - it's the ordinary way a flash-sale
-// endpoint gets hammered the moment it goes live.
+//   stock = 1
+//   goroutine A: reads stock (1) ──▶ stock>0 ──▶ stock-- ──▶ true
+//   goroutine B: reads stock (1) ──▶ stock>0 ──▶ stock-- ──▶ true
+//                                       ↑ same last unit, sold twice
+//
+// Read-then-write are two separate steps. If two goroutines both read
+// stock as 1 before either writes, both decrement, both report
+// success. The opposite failure shows up too under enough pressure:
+// claims go missing, fewer buyers succeed than the stock allows. This
+// is the ordinary way a flash-sale endpoint gets hammered the moment
+// it goes live.
 //
 // Your task is to fix Store so that:
 //
@@ -33,13 +35,18 @@
 //     fewer.
 //   - Remaining always reflects exactly how many units are left.
 //
-// This must be solved without a sync.Mutex, sync.RWMutex, or any
-// other lock - Claim is a hot path called on every single request, so
-// serializing every caller behind one lock is exactly the cost this
-// exercise asks you to avoid. Use sync/atomic instead, and reach for
-// its CompareAndSwap idiom: read the current stock, compute the value
-// you'd like to write, and atomically install it ONLY IF nothing else
-// changed the stock in between - retrying if something did.
+// No sync.Mutex, sync.RWMutex, or any other lock - Claim is a hot path
+// on every request, and serializing every caller behind one lock is
+// exactly the cost this exercise asks you to avoid. Use sync/atomic's
+// CompareAndSwap idiom instead:
+//
+//   loop:
+//     cur := Load(&stock)           read
+//     if cur <= 0: return false     check
+//     ok := CAS(&stock, cur, cur-1) install - ONLY IF nothing changed
+//                                   stock since cur was read
+//     if ok: return true
+//     else: retry from the top      someone beat us to it - retry
 //
 // The signatures must stay the same:
 //

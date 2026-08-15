@@ -2,20 +2,25 @@
 //
 // Pool is a fixed-size worker pool meant to be safe to submit to from
 // any number of unrelated goroutines, even while it is concurrently
-// being shut down. Picture an HTTP handler that submits a background
-// job to a shared Pool on every request: dozens of requests can be
-// in-flight, each calling Submit from its own goroutine, at the exact
-// moment the process starts a graceful shutdown and calls Close.
+// being shut down. Picture an HTTP handler submitting a background job
+// on every request: dozens can be in-flight, each calling Submit from
+// its own goroutine, at the exact moment the process starts a
+// graceful shutdown and calls Close.
 //
-// Right now Pool does not coordinate Submit and Close AT ALL. Close
-// waits for every job accepted so far to finish, then closes the
-// jobs channel. Submit just sends on that channel, unconditionally.
-// If ANY goroutine calls Submit while another goroutine is running
-// Close, there is a real race between that send and Close's
-// `close(p.jobs)` - and sending on a closed channel panics. This
-// isn't a rare corner case: it's the normal, expected way Submit and
-// Close get called in any program where more than one goroutine
-// might reach for the same Pool near shutdown time.
+// Right now there is ZERO coordination between the two:
+//
+//   goroutine A: Submit(job) ──▶ p.jobs <- job  ─────┐
+//                                                      ├──▶ race
+//   goroutine B: Close()     ──▶ close(p.jobs)  ─────┘
+//                                                      send on a
+//                                                      closed channel
+//                                                      → PANIC
+//
+// Close waits for jobs accepted so far, then closes jobs. Submit sends
+// on that channel unconditionally. If ANY goroutine calls Submit while
+// another runs Close, that send can race the close. This isn't a rare
+// corner case: it's the normal way Submit/Close get called wherever
+// more than one goroutine might reach for the same Pool near shutdown.
 //
 // Your task is to fix Pool so that:
 //

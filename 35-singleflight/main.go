@@ -1,41 +1,46 @@
 //////////////////////////////////////////////////////////////////////
 //
-// Group is meant to be your own tiny version of
-// golang.org/x/sync/singleflight's Group: a way to make sure that, no
-// matter how many goroutines call Do for the SAME key at the same
-// time, the slow underlying call (see Call in mockbackend.go) only
-// actually runs once - every concurrent caller for that key blocks
-// and shares the one result (or error) instead of triggering a
-// redundant call of its own.
+// Group is your own tiny version of golang.org/x/sync/singleflight's
+// Group: N concurrent Do calls for the SAME key should share one call
+// to the slow underlying fn (see Call in mockbackend.go), instead of
+// each triggering it separately.
 //
-// Right now Group does none of that. Do just calls fn directly, right
-// on the calling goroutine - so N concurrent callers for the same key
-// trigger N separate calls to fn, each paying the full latency and
-// each hitting the backend independently. shared is always reported
-// as false, which also happens to be correct for this naive version,
-// for the worst possible reason: nothing is ever actually shared.
+//   today (broken):                     goal:
+//   3 concurrent Do("k", fn)            3 concurrent Do("k", fn)
+//      │      │      │                    │      │      │
+//      ▼      ▼      ▼                    └──┬───┴──────┘
+//     fn()   fn()   fn()  ← 3 calls          first one in becomes
+//                                             leader, runs fn() ONCE
+//                                                     │
+//                                        other 2 wait, share its
+//                                        (v, err), shared = true
 //
-// Unlike exercise 17 (Future), this is NOT permanent memoization: once
-// a call for key finishes, Group forgets about it completely. A new
-// Do(key, ...) call made afterwards - even a split second later - is
-// a brand new call, not a cache hit. Only callers who are genuinely
-// concurrent with an in-flight call for the same key should ever share
-// its result.
+// Right now Do just calls fn directly on the calling goroutine, so
+// shared is always false - for the worst possible reason: nothing is
+// ever actually shared.
+//
+// NOT exercise 17 again: 17's Future memoizes one result forever, for
+// one key, built once. This Group is keyed like the fixed 17, but
+// never caches - once a call for key finishes, Group forgets it:
+//
+//   no entry for "k" ──Do("k")──▶ leader runs fn ──fn returns──▶ entry deleted
+//           ▲                                                        │
+//           └──────────────── next Do("k") is a brand-new call ──────┘
+//
+// Only callers genuinely concurrent with an in-flight call get to
+// share its result - and share its ERROR too, not just a success.
 //
 // Your task is to fix Group so that:
 //
 //   - Do(key string, fn func() (int, error)) (int, error, bool) runs
-//     fn and returns its result, making sure at most one call to fn
-//     is ever in flight for a given key at a time.
-//   - Any Do call that arrives for a key while another call for that
-//     SAME key is still in flight does not call fn again - it waits
-//     for the in-flight call to finish and returns its result (value
-//     AND error) instead, with shared = true.
-//   - The Do call that actually ran fn (or found no in-flight call to
-//     join) returns shared = false.
-//   - Once a call for key finishes, Group forgets it: the next Do(key,
-//     ...) call, even moments later, starts a genuinely new call to
-//     fn rather than replaying a cached result.
+//     fn, making sure at most one call to fn is ever in flight per key.
+//   - A Do call arriving while another call for that SAME key is in
+//     flight waits for it and returns its result (value AND error)
+//     with shared = true, instead of calling fn again.
+//   - The call that actually ran fn (or found nothing to join) returns
+//     shared = false.
+//   - Once a key's call finishes, it's forgotten - the next Do(key,
+//     ...) starts a genuinely new call, even a split second later.
 //   - Safe to call concurrently, for any number of distinct keys at
 //     once, from any number of goroutines.
 //
