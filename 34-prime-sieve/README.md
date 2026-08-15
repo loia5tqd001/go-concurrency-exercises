@@ -1,43 +1,76 @@
 # Concurrent Prime Sieve: A Growing Pipeline That Must Learn to Shut Down
 
-Given is a concurrent Sieve of Eratosthenes, modeled directly on the
-classic concurrent prime sieve from Rob Pike's 2012 "Go Concurrency
-Patterns" talk: `generate` emits 2, 3, 4, 5, ... forever, and every
-time a new prime falls out of the chain, a new `filter` stage gets
-spliced onto the end of it that strips that prime's multiples out of
-everything flowing past. Ask for the first `n` primes and you get a
-pipeline that's `n+1` goroutines deep by the time it's done: one
-`generate`, and one `filter` per prime found so far.
+Modeled directly on the classic concurrent prime sieve from Rob Pike's
+2012 "Go Concurrency Patterns" talk — a pipeline that grows one stage
+per prime found:
 
-`generate` and `filter` both already correctly respect a `done`
-channel - each one's `select` watches `done` on every receive AND every
-send it makes, exactly like the or-done idiom from
-[exercise 07](../07-or-done-channel). That part of this exercise is
-already solved for you; don't change either function.
+```
+generate ──▶ filter(2) ──▶ filter(3) ──▶ filter(5) ──▶ ...  ──▶ Primes reads n values
+ 2,3,4,5,..   drops evens    drops ×3      drops ×5
+```
 
-The bug is entirely in `Primes`. It builds the chain exactly as
-described and reads exactly `n` primes off the end of it, and every
-value it returns is correct - but look at what it hands `generate` and
-every `filter` as their `done` channel: `nil`. A receive on a nil
-channel inside a `select` is never ready, so the `done` case in every
-stage's `select` can never fire. Once `Primes` has its n-th prime and
-returns, every one of those `n+1` goroutines is still out there,
-blocked forever trying to send the NEXT candidate integer to a
-pipeline nobody is reading from anymore. Call `Primes(50)` a few times
-in a row and you leak dozens of goroutines every single call, forever.
+`generate` emits 2, 3, 4, 5, ... forever. Every value that survives the
+whole chain is prime, and the moment one falls out the end, `Primes`
+splices a *new* `filter` stage onto the chain for it. Ask for the first
+`n` primes and by the time you have them, the chain is `n+1`
+goroutines deep — one `generate`, one `filter` per prime found so far.
 
-Your task is to fix `Primes` so that once it has collected `n` primes,
-it shuts the entire chain down - `generate` and every `filter` stage it
-spliced in - instead of abandoning it mid-flight. The signature must
-stay the same:
+`generate` and `filter` (below) both already respect a `done` channel
+correctly — every `select` watches `done` on receive *and* send, same
+idiom as [exercise 07](../07-or-done-channel). They're already
+correct; don't change either one.
+
+## The bug
+
+`Primes` wires the whole chain up with `nil` as `done`:
+
+```go
+ch := generate(nil)
+...
+ch = filter(nil, ch, prime)
+```
+
+A receive on a nil channel inside `select` is never ready, so every
+stage's shutdown case is dead code:
+
+```go
+select {
+case out <- i:     // ← the only case that can ever fire
+case <-done:        // ← done is nil: blocks forever, never wins
+}
+```
+
+The primes `Primes` returns are all correct — the leak happens *after*
+it returns:
+
+```
+Primes(50) returns its 50 primes
+        │
+        ▼
+nobody is reading from the chain anymore ──▶ but every stage is still
+                                              trying to send its next
+                                              candidate downstream
+        │
+generate:  out <- 51        ⇐ blocks forever, no done to rescue it
+filter(2): out <- 53        ⇐ blocks forever
+filter(3): out <- 53        ⇐ blocks forever
+   ...                          (one blocked goroutine per stage)
+```
+
+51 goroutines, leaked, every single call. Call `Primes(50)` in a loop
+and it never stops growing.
+
+## Your task
+
+Fix `Primes` so that once it has its `n` primes, it shuts the whole
+chain down — `generate` and every spliced-in `filter` — instead of
+walking away from it. Signature stays the same:
 
 ```go
 func Primes(n int) []int
 ```
 
 ## Test your solution
-
-To complete this exercise, you must pass the tests:
 
 ```
 go test
