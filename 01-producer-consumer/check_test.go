@@ -21,7 +21,7 @@ import (
 // producer/consumer are wired up internally, since main() is the only
 // part of the contract this exercise doesn't let you change.
 func TestMainProducesCorrectOutput(t *testing.T) {
-	output := captureStdout(t, main)
+	output := captureStdout(t, main, 10*time.Second)
 
 	want := [][2]string{
 		{"davecheney", "tweets about golang"},
@@ -55,7 +55,7 @@ func TestMainProducesCorrectOutput(t *testing.T) {
 // much the pipeline saves.
 func TestMainRunsProducerAndConsumerConcurrently(t *testing.T) {
 	start := time.Now()
-	captureStdout(t, main)
+	captureStdout(t, main, 10*time.Second)
 	elapsed := time.Since(start)
 
 	if elapsed > 2500*time.Millisecond {
@@ -63,9 +63,21 @@ func TestMainRunsProducerAndConsumerConcurrently(t *testing.T) {
 	}
 }
 
-// captureStdout redirects os.Stdout for the duration of fn and
-// returns everything written to it.
-func captureStdout(t *testing.T, fn func()) string {
+// captureStdout redirects os.Stdout for the duration of fn and returns
+// everything written to it. fn is bounded to timeout: a producer and
+// consumer wired together incorrectly (e.g. a send on a channel nobody
+// is left to receive from, or a range over a channel that's never
+// closed) can deadlock, and calling fn directly with no guard would
+// hang the test toward Go's default 10-minute -timeout instead of
+// failing fast - go test's own alarm goroutine means the runtime's
+// deadlock detector never fires inside a test binary, timeout or not,
+// so this guard is the only thing that catches it quickly.
+//
+// If fn truly deadlocks, its goroutine is left running - there's no
+// way to force it to exit - but the test still fails within timeout
+// instead of hanging. Its writes (if any ever happen) land on the now
+// -closed pipe and are silently dropped, which is harmless.
+func captureStdout(t *testing.T, fn func(), timeout time.Duration) string {
 	t.Helper()
 
 	orig := os.Stdout
@@ -75,18 +87,32 @@ func captureStdout(t *testing.T, fn func()) string {
 	}
 	os.Stdout = w
 
-	done := make(chan struct{})
+	doneCopy := make(chan struct{})
 	var buf bytes.Buffer
 	go func() {
 		io.Copy(&buf, r)
-		close(done)
+		close(doneCopy)
 	}()
 
-	fn()
+	doneFn := make(chan struct{})
+	go func() {
+		fn()
+		close(doneFn)
+	}()
+
+	select {
+	case <-doneFn:
+	case <-time.After(timeout):
+		os.Stdout = orig
+		w.Close()
+		r.Close()
+		t.Fatalf("main() did not return within %s - producer and consumer are likely deadlocked", timeout)
+		return ""
+	}
 
 	w.Close()
 	os.Stdout = orig
-	<-done
+	<-doneCopy
 
 	return buf.String()
 }
