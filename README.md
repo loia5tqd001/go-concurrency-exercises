@@ -183,9 +183,9 @@ whichever comes first - and then immediately starts collecting the
 next batch, indefinitely, rather than running once and being done.
 Three separate triggers (the count, the deadline, and an explicit
 `Close`) all racing to fire the very same batch exactly once is what
-earns this one `extreme` rather than `hard`: a stale deadline timer for
-a batch that already fired by count must never touch whatever newer
-batch has opened in its place, `time.Timer.Stop()` doesn't actually
+makes this one `extreme`: a stale deadline timer for a batch that
+already fired by count must never touch whatever newer batch has
+opened in its place, `time.Timer.Stop()` doesn't actually
 guarantee its callback isn't already running, and `Close` - modeled
 directly on `net/http.Server.Shutdown(ctx)` - has to flush whatever's
 still queued and wait for it to finish without blocking forever if the

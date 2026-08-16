@@ -2,24 +2,6 @@
 
 > **Spoiler warning.** Try solving it yourself first — come back if you're stuck.
 
-## Why this exercise changed shape
-
-The original version of 36 was a one-shot join: `NewCollector(expected,
-fn)` fired exactly once and was done. That's a fine teaching device for
-the double-fire race, but it quietly assumed callers always stop
-calling `Add` exactly at `expected` — an assumption that turned out to
-be the exercise's own weakest point (a caller that keeps calling `Add`
-past that point either wedges the whole `Collector` or leaks a
-goroutine per late caller, depending on which fix you picked). Rather
-than patch that gap in place a second time, this version goes the rest
-of the way to what a real batching client actually looks like — the
-shape a Kafka producer's `linger.ms`, a Google Pub/Sub publisher's
-`DelayThreshold`/`CountThreshold`, or Segment's analytics client all
-converge on: batches fire on a count *or* a deadline, whichever comes
-first, the collector keeps running indefinitely instead of being spent
-after one batch, and shutdown is an explicit, `context`-bounded
-operation modeled directly on `net/http.Server.Shutdown`.
-
 ## The problem
 
 `Add` mutates shared state with **no synchronization**, `MaxWait` is
@@ -80,12 +62,11 @@ nobody will ever fire:
 
 ### Data model: one struct per batch, not scattered fields
 
-The one-shot version kept `requests`/`resultChs`/`nQueued` directly on
-`Collector`. A rolling batcher needs each batch to have its own
-identity — its own slice, its own deadline timer, its own "have I
-already fired" flag — so that firing one batch and opening the next
-doesn't require resetting fields out from under whatever the *next*
-batch has already started accumulating:
+A rolling batcher needs each batch to have its own identity — its own
+slice, its own deadline timer, its own "have I already fired" flag —
+so that firing one batch and opening the next doesn't require
+resetting fields out from under whatever the *next* batch has already
+started accumulating:
 
 ```go
 type batch struct {
@@ -207,21 +188,21 @@ func (c *Collector) executeBatch(b *batch) {
 }
 ```
 
-This is the same discipline the original 36 taught for its single
-double-fire race, applied to three trigger sources instead of one:
-whichever of {count reached inside `Add`, deadline timer, `Close`}
+Whichever of {count reached inside `Add`, deadline timer, `Close`}
 gets to `detach(b)` first is the only one that ever sees `b.fired ==
-false`. `c.batch == b` guards against a *different* hazard covered
-below — clobbering a newer batch that's already open by the time a
-stale trigger for an old one gets the lock.
+false` — the same "check-and-set as one atomic step under the lock"
+discipline needed any time more than one trigger could plausibly fire
+the same thing. `c.batch == b` guards against a *different* hazard
+covered below — clobbering a newer batch that's already open by the
+time a stale trigger for an old one gets the lock.
 
 `fn` itself runs **outside** the lock, in its own goroutine, so `Add`
-never blocks waiting for a slow `fn` call — a deliberate difference
-from the original 36's Approach 1. There, holding the lock across `fn`
-was fine because nothing else was ever going to call `Add` again once
-the one batch fired. Here it would be actively harmful: the whole point
-of rolling to a new batch immediately is that callers for the *next*
-batch shouldn't have to wait for the *previous* batch's `fn` to finish.
+never blocks waiting for a slow `fn` call. This matters specifically
+because the Collector keeps rolling: the whole point of opening a new
+batch the instant the previous one fires is that callers filling the
+*next* batch shouldn't have to wait for the *previous* batch's `fn` to
+finish — holding the lock across that call would serialize every
+future `Add` behind whichever `fn` call happens to be running.
 
 ### Why `Timer.Stop()` alone doesn't close the race
 
@@ -412,20 +393,18 @@ several small batches still processes each request exactly once. This
 is a more robust check precisely because it doesn't care how many
 batches the race happened to produce.
 
-## Contrast with the original 36
+## Contrast with 35 (singleflight)
 
-The original one-shot `Collector`'s headline lesson was a deliberate
-*inversion* of [35](../35-singleflight)'s "never hold the mutex across
-the call to `fn`" rule — holding the lock across `fn` was fine there
-because nothing else would ever call `Add` again. This version needs
-the opposite discipline for the opposite reason: because a new batch
-*should* be accepting requests while the previous one's `fn` is still
-running, `fn` here runs deliberately unlocked, in its own goroutine,
-closer to 35's own rule than to the original 36's. The two exercises
-now bracket the same design question from both sides: hold the lock
-across the slow call only when every caller you'd block is already
-waiting on that exact call anyway - never when a *different* caller's
-unrelated work is what's waiting behind the lock.
+[35](../35-singleflight)'s rule is "never hold the mutex across the
+call to `fn`" — unrelated keys must never wait on each other. This
+Collector follows the same rule, for the same underlying reason: `fn`
+runs unlocked, in its own goroutine, precisely because a new batch's
+callers are unrelated work that shouldn't have to wait behind whichever
+`fn` call happens to be running for the previous batch. The general
+principle both exercises share: hold the lock across a slow call only
+when every caller you'd block is already waiting on that exact call
+anyway - never when a *different* caller's unrelated work is what's
+waiting behind the lock.
 
 ## Key takeaways
 

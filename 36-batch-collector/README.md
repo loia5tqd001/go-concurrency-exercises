@@ -58,10 +58,11 @@ Fix `Collector` so that:
   its first request, whichever happens first. Whichever trigger wins,
   `fn` must run exactly once for that batch - never zero, never twice.
 - The instant one batch fires, the `Collector` opens a fresh one and
-  keeps working - this isn't a one-shot join, it runs indefinitely.
-  Every caller gets back the `Result` at `fn`'s response index matching
-  the position **its own** request ended up at in **its own** batch -
-  never another caller's, and never a different batch's.
+  keeps working indefinitely, for as many batches as callers keep
+  submitting. Every caller gets back the `Result` at `fn`'s response
+  index matching the position **its own** request ended up at in
+  **its own** batch - never another caller's, and never a different
+  batch's.
 - If `fn` errors, every caller in that batch gets that same error.
 - `Close(ctx) error` stops the `Collector` from accepting any further
   `Add` calls (each gets `ErrCollectorClosed` immediately instead),
@@ -81,14 +82,14 @@ func (c *Collector) Add(request int) <-chan Result
 func (c *Collector) Close(ctx context.Context) error
 ```
 
-## The double-fire trap, now with two triggers
+## The double-fire trap
 
-36's original version of this trap was one race: two goroutines both
-observing "the count just reached `MaxBatchSize`" and both firing.
-Adding `MaxWait` doesn't remove that race, it adds a second party to
-it - now a batch can be fired by whichever of **three** things happens
-first: its count trigger, its own deadline timer, or `Close`. All three
-must agree on "whoever gets there first, exactly once":
+A batch can be fired by whichever of **three** things happens first:
+its count trigger, its own deadline timer, or `Close`. All three must
+agree on "whoever gets there first, exactly once" - two of them
+racing to observe "this batch just reached its trigger" and both
+firing is the classic version of this bug, and here there are three
+ways to reach it instead of one:
 
 ```
 Add pushes count to MaxBatchSize ──┐
@@ -96,11 +97,10 @@ batch's MaxWait timer fires  ──────┼──▶  EXACTLY ONE of thes
 Close is called            ────────┘      call fn for this one batch
 ```
 
-The fix generalizes the same discipline 36 already taught: a
-`fired`-style flag on the batch itself, checked-and-set as one atomic
-step under the same lock that guards the batch's state, so whichever
-of the three gets there first is the only one that ever sees `false`.
-The other two see `true` and back off - no re-running `fn`, no
+The fix is a `fired`-style flag on the batch itself, checked-and-set as
+one atomic step under the same lock that guards the batch's state, so
+whichever of the three gets there first is the only one that ever sees
+`false`. The other two see `true` and back off - no re-running `fn`, no
 touching a channel that already got its `Result`.
 
 There's a second, quieter version of this same race worth calling out
