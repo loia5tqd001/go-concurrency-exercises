@@ -13,9 +13,9 @@ The hidden test (`check_test.go`) hooks `fetchSignalInstance()` from `mockfetche
 The starting code has no shared throttle at all — every spawned goroutine calls `fetcher.Fetch` the moment it runs, so with 4 URLs fanning out across depth levels, most fetches happen within milliseconds of each other. Confirmed empirically: running the unmodified stub finishes (and fails) in well under a second:
 
 ```
+    check_test.go:53: There exists a two crawls that were executed less than 1 second apart.
+    check_test.go:54: Solution is incorrect.
 --- FAIL: TestMain (0.00s)
-    check_test.go:24: There exists a two crawls that were executed less than 1 second apart.
-    check_test.go:25: Solution is incorrect.
 FAIL
 ```
 
