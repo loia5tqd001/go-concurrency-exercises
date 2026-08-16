@@ -205,11 +205,68 @@ production codebase's concurrency package for patterns not yet taught
 (as 36/37 were sourced) is another reliable way to find a genuine gap
 rather than inventing a topic for its own sake.
 
+## Difficulty rubric
+
+Difficulty badges drift out of calibration fast if each exercise gets
+eyeballed in isolation against whatever number happens to be nearest —
+that's exactly how exercise 39 ended up rated `medium` (correct for a
+33/33b derivative) and stayed `medium` after being redesigned standalone,
+where the actual solver work is `easy`-tier. Score every exercise
+against these 5 dimensions instead, each 0-3 (0 = none/trivial, 1 =
+low, 2 = moderate, 3 = high):
+
+- **A. Mechanism count** — how many distinct sync primitives/idioms
+  (mutex, atomic/CAS, channel-select, `sync.WaitGroup`, `sync.Once`,
+  timer, context) must the solver correctly combine in their *own*
+  fix? Count only what the solver must apply — not machinery already
+  given/inherited from an earlier exercise's lesson (see the barebone
+  section above on telling the two apart).
+- **B. Trigger/race multiplicity** — how many independent
+  goroutines/timers/events can race to cause the *same* effect
+  (double-fire, double-close, lost update) that the fix must
+  arbitrate between? 0 = no such race. 1 = a plain data race needing a
+  lock. 2 = two competing triggers needing a "first one wins" answer.
+  3 = three or more triggers all needing exactly-once semantics.
+- **C. Solver-authored surface area** — how much of the exercise's
+  *own* control flow must the solver write from scratch? 0-1 = patch a
+  single function body / add one guard. 2 = write a full method's
+  control flow (a loop + goroutine + synchronization placement). 3 =
+  design a new composite type with its own lifecycle, used across
+  multiple methods.
+- **D. Trap subtlety** — a single well-known idiom applied directly
+  (0-1), one documented near-miss trap that looks correct but isn't
+  (2), or multiple compounding traps/edge cases (3)?
+- **E. Shutdown/lifecycle burden** — 0 = no shutdown concern at all. 1
+  = a simple one-time `Close` with no concurrency concern. 2 = `Close`
+  must coordinate with in-flight work but only one caller/trigger. 3 =
+  `Close` must be safe under concurrent/repeated calls and possibly a
+  `ctx` deadline, racing against other in-flight triggers.
+
+**Anchor exercises** — fixed reference points, not up for re-debate.
+Place every new exercise relative to these by re-reading them if
+you're unsure, rather than guessing from memory:
+
+| Tier | Anchor | Typical scores (A/B/C/D/E) |
+| --- | --- | --- |
+| warm-up | [00-limit-crawler](../../00-limit-crawler) | 1/0/0-1/0/0 |
+| easy | [04-graceful-sigint](../../04-graceful-sigint) | 1/0-1/0-1/0-1/0-1 |
+| medium | [10-semaphore](../../10-semaphore) | 1-2/0-1/2/0-1/0-1 |
+| hard | [13-channel-of-channels](../../13-channel-of-channels) | 2/1-2/2-3/2/0-2 |
+| extreme | [36-batch-collector](../../36-batch-collector) | 3/3/3/3/3 |
+
+**The tier is primarily set by whichever single dimension scores
+highest** — a single maxed-out dimension (e.g. a 3-way race, or a
+`Close` that must be concurrent-safe under a `ctx` deadline) can make
+the whole exercise that hard on its own. Don't average the five scores
+together; use them as supporting evidence for a holistic placement
+against the anchors, and say so explicitly if an exercise is genuinely
+borderline between two tiers rather than forcing a confident pick.
+
 ## Root README table
 
 Keep row formatting identical to neighbors: `| N | [Title](./NN-folder) |
 ![difficulty](badge-url) | \`tag\` \`tag\` |`. Difficulty badges in use:
-`warm-up` (grey), `easy` (green), `medium` (blue), `hard` (orange) —
-match by comparing the new exercise's actual challenge to its nearest
-neighbors, not by guessing. Lettered sequels (`14b`, `16b`, `33b`) sit
-directly after their parent row.
+`warm-up` (grey), `easy` (green), `medium` (blue), `hard` (orange),
+`extreme` (red) — pick using the rubric above, not by guessing.
+Lettered sequels (`14b`, `16b`, `33b`) sit directly after their parent
+row.

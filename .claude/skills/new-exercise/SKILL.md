@@ -106,9 +106,11 @@ just the ones that are convenient this time:
    private code, and never `git add` or commit that file.
 
 7. **Sync the root `README.md` table** — add/update the row (number,
-   title linking to the folder, difficulty badge, topic tags), matching
-   the existing badge/tag style exactly (grep the table for the closest
-   difficulty neighbor before picking one).
+   title linking to the folder, difficulty badge, topic tags). Pick the
+   difficulty badge using [REFERENCE.md](REFERENCE.md)'s **Difficulty
+   rubric** — score against its 5 dimensions and place the exercise
+   relative to the fixed anchor examples, don't eyeball it or copy the
+   nearest-numbered neighbor's badge without scoring.
 
 8. **Cross-check the trio.** `main.go`'s header comment, `README.md`'s
    "right now" section, and `solutions/NN-*.md`'s "The problem" section
