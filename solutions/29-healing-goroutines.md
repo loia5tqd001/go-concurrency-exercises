@@ -44,7 +44,7 @@ Verified: running the current `check_test.go` against this naive `main.go` (both
 === RUN   TestStewardStopsOnDone
 --- PASS: TestStewardStopsOnDone (0.00s)
 FAIL
-FAIL	github.com/loong/go-concurrency-exercises/29-healing-goroutines	0.426s
+FAIL	github.com/loia5tqd001/go-concurrency-exercises/29-healing-goroutines	0.426s
 FAIL
 ```
 

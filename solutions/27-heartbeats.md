@@ -89,7 +89,7 @@ Verified: running `go test -race -timeout 30s -v ./...` (`GOROOT` pointed at the
     check_test.go:129: caller 19: work timed out after 900ms
 --- FAIL: TestConcurrentSafety (0.90s)
 FAIL
-FAIL	github.com/loong/go-concurrency-exercises/27-heartbeats	1.035s
+FAIL	github.com/loia5tqd001/go-concurrency-exercises/27-heartbeats	1.035s
 ```
 
 `TestConcurrentSafety` uses `workUnits = 3`, so its flat deadline is `300ms * 3 = 900ms` — again shorter than the real `3 * 400ms = 1200ms` job, so even the plain concurrent-safety smoke test (no stall configured at all) fails on pure spurious-timeout grounds. All three failures point at the same root cause, with clean diagnostic messages — no hangs, no `synctest` deadlock panics, no `-race` reports.

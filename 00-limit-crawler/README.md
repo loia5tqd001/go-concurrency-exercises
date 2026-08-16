@@ -19,7 +19,7 @@ Use `go test` to verify if your solution is correct.
 Correct solution:
 ```
 PASS
-ok      github.com/loong/go-concurrency-exercises/00-limit-crawler  13.009s
+ok      github.com/loia5tqd001/go-concurrency-exercises/00-limit-crawler  13.009s
 ```
 
 Incorrect solution:
@@ -29,5 +29,5 @@ Incorrect solution:
 	        main_test.go:19: Solution is incorrect.
 		FAIL
 		exit status 1
-		FAIL    github.com/loong/go-concurrency-exercises/00-limit-crawler  7.808s
+		FAIL    github.com/loia5tqd001/go-concurrency-exercises/00-limit-crawler  7.808s
 ```
