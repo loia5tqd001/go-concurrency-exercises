@@ -27,22 +27,28 @@ func Start(jobs <-chan int, process func(item int)) <-chan struct{} {
 `Start` must:
 
 - Return a `done` channel that closes **only** once `jobs` has been closed **and** every worker goroutine has fully returned from its `range jobs` loop — i.e. every worker has finished calling `process` on its last-received item.
+- Still return immediately — whatever waits for the workers has to happen concurrently with that return, not block it.
 - Keep the signature unchanged: `func Start(jobs <-chan int, process func(item int)) <-chan struct{}`.
-- Use a `sync.WaitGroup`, incremented once per worker, marked `Done` when each worker returns from ranging over `jobs`, plus a small goroutine that calls `wg.Wait()` and then closes `done` — the natural tool per the exercise's own guidance.
 
 ## Why the naive version is wrong
 
 `done` is created and immediately closed, with no relationship at all to the worker goroutines started just above it. A caller that waits on `done` gets no guarantee whatsoever that any job — let alone every job — has finished being processed; it only knows that `Start` has returned. If the caller then tears down something `process` writes into (a file, a DB connection, a socket), it can do so while workers are still silently mid-flight on jobs they already pulled off the channel, corrupting or losing that in-flight work.
 
-Verified: running the current `check_test.go` against the naive `main.go` in a throwaway scratch copy fails `TestStartProcessesEveryJob`:
+Verified: running the current `check_test.go` against the naive `main.go` in a throwaway scratch copy:
 
 ```
+=== RUN   TestStartProcessesEveryJob
+    check_test.go:82: done closed with 0/20 jobs actually processed; done must only close once every submitted job has been FULLY processed, not merely received off the jobs channel
 --- FAIL: TestStartProcessesEveryJob (0.00s)
-    check_test.go:53: done closed with 0/20 jobs actually processed; done must only close once every submitted job has been FULLY processed, not merely received off the jobs channel
+=== RUN   TestStartDoesNotDoubleProcessOrDropJobs
+--- PASS: TestStartDoesNotDoubleProcessOrDropJobs (0.01s)
+=== RUN   TestDoneWaitsForInFlightProcessCall
+    check_test.go:208: done closed while a worker was still inside process() - done must only close once every submitted job has FULLY finished, not merely been received off jobs
+--- FAIL: TestDoneWaitsForInFlightProcessCall (0.00s)
 FAIL
 ```
 
-`done` closes with **zero** of the 20 jobs actually processed — confirming it fires essentially instantly, well before any worker has done real work. `TestStartDoesNotDoubleProcessOrDropJobs` passes against the naive version too (it deliberately doesn't trust `done` for synchronization, polling the collected results instead), since the naive workers do eventually process every job correctly in the background — it's purely the *signal* that's wrong, not the underlying processing.
+`done` closes with **zero** of the 20 jobs actually processed, and separately closes while a worker is still deterministically blocked mid-`process()` call — both confirm it fires essentially instantly, well before any worker has done (or finished) real work. `TestStartDoesNotDoubleProcessOrDropJobs` passes against the naive version too (it deliberately doesn't trust `done` for synchronization, polling the collected results instead), since the naive workers do eventually process every job correctly in the background — it's purely the *signal* that's wrong, not the underlying processing.
 
 ## Approach 1: `sync.WaitGroup` + a small closer goroutine
 
@@ -91,7 +97,7 @@ Design notes:
 - **A separate goroutine does `wg.Wait()` then `close(done)`**, rather than the caller of `Start` doing it inline — `Start` must return immediately without blocking (it's meant to hand back a channel the caller waits on whenever it likes), so the wait has to happen concurrently with `Start`'s return.
 - **`done` is closed, not sent on** — closing lets any number of goroutines observe the event via `<-done` without racing over who "gets" the single value a channel send would produce, and receiving from an already-closed channel never blocks, so late-arriving readers still see it fire correctly.
 
-**Verified**: copied this exercise into a throwaway scratch directory, confirmed the naive `main.go` fails `TestStartProcessesEveryJob` (see above), then dropped in this solution. `gofmt -l` is clean, `go vet ./...` is clean, and `go test -race -count=5 ./...` passes repeatably — including `TestStartDoesNotDoubleProcessOrDropJobs`, which stress-tests 50 jobs for drops/duplicates independently of the `done`-timing fix.
+**Verified**: copied this exercise into a throwaway scratch directory, confirmed the naive `main.go` fails `TestStartProcessesEveryJob` and `TestDoneWaitsForInFlightProcessCall` (see above), then dropped in this solution. `gofmt -l` is clean, `go vet ./...` is clean, and `go test -race -count=5 ./...` passes repeatably — including `TestStartDoesNotDoubleProcessOrDropJobs`, which stress-tests 50 jobs for drops/duplicates independently of the `done`-timing fix, and `TestDoneWaitsForInFlightProcessCall`, which deterministically blocks a worker mid-`process()` call to confirm `done` doesn't fire early.
 
 ## Approach 2: the exercise-16 `Group` pattern instead of a bare `WaitGroup`
 
@@ -169,7 +175,7 @@ Design notes and tradeoffs versus Approach 1:
 - **The worker closures have to return `error` to fit `Group.Go`'s signature**, even though nothing here can fail — hence `return nil` at the end of each worker's loop, and `_ = g.Wait()` discarding the always-`nil` result. That's the real cost of reusing a general-purpose `Group`: it's built for tasks that can fail, and adapting a can't-fail worker to it means threading a trivial `nil` through.
 - **Worth it mainly as a cross-reference, not as an improvement**: if you're already building (or have already built) an `errgroup`-style `Group` elsewhere in a codebase, reusing it here avoids a second, slightly different hand-rolled `WaitGroup` pattern living side by side with it. If this were the only place needing "wait for N goroutines to finish," Approach 1's bare `sync.WaitGroup` is simpler and doesn't require inventing a `nil` return value.
 
-**Verified**: same scratch-directory protocol, in a separate throwaway copy from Approach 1. `gofmt -l` is clean, `go vet ./...` is clean, and `go test -race -count=5 ./...` passes repeatably, including `TestStartProcessesEveryJob` and `TestStartDoesNotDoubleProcessOrDropJobs`.
+**Verified**: same scratch-directory protocol, in a separate throwaway copy from Approach 1. `gofmt -l` is clean, `go vet ./...` is clean, and `go test -race -count=5 ./...` passes repeatably, including `TestStartProcessesEveryJob`, `TestStartDoesNotDoubleProcessOrDropJobs`, and `TestDoneWaitsForInFlightProcessCall`.
 
 ## Key takeaways
 

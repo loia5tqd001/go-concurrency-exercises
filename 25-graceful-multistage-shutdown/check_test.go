@@ -13,6 +13,35 @@ import (
 	"time"
 )
 
+// startWithTimeout calls Start in the background and waits for it to
+// return, with a bounded timeout. Start is documented to return
+// immediately - whatever it does to wait for its workers has to
+// happen concurrently with that return, not block it - so every test
+// below goes through this helper instead of calling Start directly.
+// A plausible near-miss implementation calls wg.Wait() inline inside
+// Start (instead of handing the wait off to its own goroutine before
+// returning); against that bug, a direct `done := Start(...)` call
+// never returns at all, and the jobs producer below it never runs -
+// total deadlock, hanging every test toward Go's default 10-minute
+// timeout instead of failing fast.
+func startWithTimeout(t *testing.T, jobs <-chan int, process func(item int)) <-chan struct{} {
+	t.Helper()
+
+	result := make(chan (<-chan struct{}), 1) // buffered: goroutine can't leak if we time out
+	go func() {
+		result <- Start(jobs, process)
+	}()
+
+	select {
+	case done := <-result:
+		return done
+	case <-time.After(2 * time.Second):
+		t.Fatalf("Start did not return within 2s - it must hand back the done " +
+			"channel immediately and do its waiting in the background, not block")
+		return nil
+	}
+}
+
 // TestStartProcessesEveryJob submits a batch of jobs, closes jobs, and
 // waits for done to fire - with a bounded real-time timeout as a
 // safety net, since a correct implementation always finishes and the
@@ -39,7 +68,7 @@ func TestStartProcessesEveryJob(t *testing.T) {
 	}()
 
 	var processedCount int64
-	done := Start(jobs, func(item int) {
+	done := startWithTimeout(t, jobs, func(item int) {
 		time.Sleep(5 * time.Millisecond)
 		atomic.AddInt64(&processedCount, 1)
 	})
@@ -86,7 +115,7 @@ func TestStartDoesNotDoubleProcessOrDropJobs(t *testing.T) {
 	var mu sync.Mutex
 	var seen []int
 
-	done := Start(jobs, func(item int) {
+	done := startWithTimeout(t, jobs, func(item int) {
 		mu.Lock()
 		seen = append(seen, item)
 		mu.Unlock()
@@ -132,5 +161,63 @@ func TestStartDoesNotDoubleProcessOrDropJobs(t *testing.T) {
 		default:
 			t.Errorf("job %d was processed %d times", id, counts[id])
 		}
+	}
+}
+
+// TestDoneWaitsForInFlightProcessCall is a deterministic reproduction
+// of the exact bug this exercise is about, with no dependence on
+// sleep durations or scheduler luck: it submits a single job whose
+// process call blocks on a channel the test controls, and checks that
+// done does NOT fire while that call is still blocked - only once the
+// test releases it.
+//
+// This closes a gap the timing-based checks above leave open: an
+// implementation that fires done after guessing a "long enough" fixed
+// delay (instead of genuinely waiting on the workers), or one that
+// hands work off to process asynchronously (e.g. `go process(item)`
+// inside the range loop, so the loop itself drains and returns before
+// process actually finishes), can slip past a check that only ever
+// samples timing - because in-flight work here is blocked
+// indefinitely until this test says otherwise, no fixed delay and no
+// asynchronous hand-off can win the race.
+func TestDoneWaitsForInFlightProcessCall(t *testing.T) {
+	jobs := make(chan int)
+	started := make(chan struct{})
+	proceed := make(chan struct{})
+
+	done := startWithTimeout(t, jobs, func(item int) {
+		close(started)
+		<-proceed
+	})
+
+	jobs <- 0
+
+	select {
+	case <-started:
+	case <-time.After(2 * time.Second):
+		t.Fatal("timed out waiting for process to start running on the submitted job")
+	}
+
+	close(jobs)
+
+	// process(0) is still blocked inside the call above - done must
+	// not have fired yet, no matter how long we wait, since nothing
+	// but this test can unblock it.
+	select {
+	case <-done:
+		t.Fatal("done closed while a worker was still inside process() - " +
+			"done must only close once every submitted job has FULLY finished, " +
+			"not merely been received off jobs")
+	case <-time.After(200 * time.Millisecond):
+		// expected: done has not fired
+	}
+
+	close(proceed) // let the blocked worker finish its process() call
+
+	select {
+	case <-done:
+		// correct: done only fires after the in-flight call completes
+	case <-time.After(2 * time.Second):
+		t.Fatal("timed out waiting for done to close after the in-flight job finished")
 	}
 }

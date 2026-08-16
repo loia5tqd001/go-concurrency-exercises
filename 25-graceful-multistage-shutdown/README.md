@@ -16,6 +16,26 @@ teardown too early, while a worker is still mid-call to `process` on
 some item it already pulled off `jobs`, silently corrupts or drops
 whatever that in-flight call was about to do.
 
+```
+jobs producer ──▶ jobs (chan int) ──▶ closed after the last send
+                        │
+        ┌───────────────┼───────────────┬───────────────┐
+        ▼                ▼               ▼               ▼
+    worker 1         worker 2        worker 3        worker 4
+    range jobs {     range jobs {    range jobs {    range jobs {
+      process(i)       process(i)     process(i)      process(i)
+    }                }               }               }
+
+TODAY   Start returns done := make(chan struct{}); close(done) - shut
+        the instant Start is called, unrelated to the workers above it
+        caller: <-done fires INSTANTLY, workers still mid-flight
+
+GOAL    done closes only once EVERY worker has returned from range
+        jobs - i.e. its last process() call has actually completed
+        caller: <-done fires ⟹ safe to tear down whatever process()
+        was writing into
+```
+
 `Start` is supposed to return a `done` channel that only closes once
 `jobs` has been closed AND every job ever sent to it has been FULLY
 processed. Right now it does nothing of the sort: the returned `done`
@@ -27,10 +47,9 @@ do so while jobs are still silently being worked on in the background.
 Your task is to fix `Start` so the returned `done` channel closes only
 once every worker goroutine has fully returned from its `range jobs`
 loop - i.e. every worker has finished calling `process` on its
-last-received item. A `sync.WaitGroup` incremented once per worker,
-plus a small goroutine that calls `wg.Wait()` and then closes `done`,
-is the natural tool for this. The function signature must stay the
-same:
+last-received item. `Start` itself must still return immediately -
+whatever waits for the workers has to happen concurrently with that
+return, not block it. The function signature must stay the same:
 
 ```go
 func Start(jobs <-chan int, process func(item int)) <-chan struct{}

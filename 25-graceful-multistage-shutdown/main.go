@@ -33,11 +33,10 @@
 // Your task is to fix Start so that the returned done channel closes
 // ONLY once jobs has been closed AND every worker goroutine has fully
 // returned from its `range jobs` loop (i.e. every worker has finished
-// calling process on its last-received item). A sync.WaitGroup,
-// incremented once per worker before it starts and marked Done when
-// it returns from ranging over jobs, plus a small goroutine that
-// calls wg.Wait() and then closes done, is the natural tool for this.
-// The function signature must stay the same:
+// calling process on its last-received item). Start itself must still
+// return immediately - whatever waits for the workers has to happen
+// concurrently with that return, not block it. The function signature
+// must stay the same:
 //
 //     func Start(jobs <-chan int, process func(item int)) <-chan struct{}
 //
@@ -60,11 +59,14 @@ const numWorkers = 4
 // ever sent to `jobs` has been FULLY processed - i.e. it's safe for a
 // caller to wait on `done` and then treat the whole pipeline as
 // gracefully, completely finished. Right now it does nothing of the
-// sort: the returned done channel is closed immediately, before any
-// worker has necessarily even started, let alone processed a single
-// job - so a caller who waits on it and then, say, tears down
-// whatever `process` was writing results into, can easily do so while
-// jobs are still silently being worked on in the background, silently
+// sort:
+//
+//	Start() ──▶ done := make(chan struct{}); close(done) ──▶ returns
+//	              (shut before any worker has even started)
+//
+// so a caller who waits on it and then, say, tears down whatever
+// `process` was writing results into, can easily do so while jobs are
+// still silently being worked on in the background, silently
 // dropping/losing whatever those in-flight calls to process were
 // about to do.
 func Start(jobs <-chan int, process func(item int)) <-chan struct{} {
