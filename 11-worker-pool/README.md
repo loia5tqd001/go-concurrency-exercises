@@ -1,4 +1,4 @@
-# Worker Pool: Batch Job Processor
+# Worker Pool: Batch Job Processor with Partial Failures
 
 Given is a batch job processor. It is handed a slice of `Job`s, each of
 which is run by calling `RunJob`, which simulates some unreliable unit
@@ -7,7 +7,22 @@ succeeding or failing with `ErrJobFailed`, depending on the `Job`'s
 `ShouldFail` field. The current implementation, `ProcessJobs`, runs
 every job sequentially, one at a time, on the calling goroutine - so
 the total time grows linearly with the number of jobs, even though
-each call to `RunJob` is completely independent of the others.
+each call to `RunJob` is completely independent of the others:
+
+```
+today (sequential):
+
+  job0 ──▶ RunJob ──▶ job1 ──▶ RunJob ──▶ job2 ──▶ RunJob ──▶ ...
+                        (one goroutine, one job at a time)
+
+goal (fixed-size worker pool):
+
+  job0 ┐
+  job1 ├──▶ jobs chan ──▶ worker 1 ─┐
+  job2 │                  worker 2 ─┼──▶ results chan ──▶ []Result
+  ...  ┘                  worker N ─┘
+                    (N is small and FIXED, however many jobs there are)
+```
 
 Simply spawning one goroutine per job would work, but it's wasteful
 when jobs are numerous or when the number of things running at once

@@ -26,6 +26,29 @@ func testJobs(n int) []Job {
 	return jobs
 }
 
+// processJobsWithTimeout calls ProcessJobs(jobs) on its own goroutine and
+// fails fast if it doesn't return within timeout, instead of hanging
+// until go test's default 10-minute deadline. A worker pool that forgets
+// to close a channel it owns (the jobs channel, or the results channel)
+// deadlocks silently - this turns that into a fast, readable failure.
+func processJobsWithTimeout(t *testing.T, jobs []Job, timeout time.Duration) []Result {
+	t.Helper()
+
+	done := make(chan []Result, 1)
+	go func() {
+		done <- ProcessJobs(jobs)
+	}()
+
+	select {
+	case got := <-done:
+		return got
+	case <-time.After(timeout):
+		t.Fatalf("ProcessJobs did not return within %s - looks like a worker pool "+
+			"deadlock (a channel it owns was never closed)", timeout)
+		return nil
+	}
+}
+
 // checkResults asserts that got contains exactly one Result per job in
 // jobs, with the right success/failure outcome for each.
 func checkResults(t *testing.T, jobs []Job, got []Result) {
@@ -66,36 +89,59 @@ func checkResults(t *testing.T, jobs []Job, got []Result) {
 func TestProcessJobsCorrectness(t *testing.T) {
 	jobs := testJobs(20)
 
-	got := ProcessJobs(jobs)
+	got := processJobsWithTimeout(t, jobs, 5*time.Second)
 
 	checkResults(t, jobs, got)
 }
 
-// TestProcessJobsConcurrency asserts that ProcessJobs actually
-// processes jobs using a pool of worker goroutines instead of running
-// them one at a time. 20 jobs at 80ms each take 1.6s sequentially; a
-// pool of a handful of long-lived workers finishes in roughly
-// ceil(20/numWorkers) job latencies, well under that. synctest.Test
-// runs the body on a fake clock that jumps forward as soon as every
-// goroutine in the bubble is durably blocked, so this assertion is
-// exact and doesn't flake on a busy machine.
-func TestProcessJobsConcurrency(t *testing.T) {
+// TestProcessJobsIsBounded is the key test: it asserts that ProcessJobs
+// uses a small, FIXED-size pool of workers - not the naive sequential
+// version (which never has more than 1 job running at once), and not a
+// naive one-goroutine-per-job fan-out either (which would technically be
+// "concurrent" but spawns as many goroutines as there are jobs, exactly
+// the thing a worker pool exists to avoid).
+//
+// It runs a large batch of jobs and, via RunJob's own instrumentation,
+// tracks the largest number of jobs that were ever actually executing at
+// the same instant (JobConcurrencyHighWaterMark). A correct worker pool's
+// high-water mark sits at exactly its own (small) worker count, well
+// below the job count; the sequential version's high-water mark never
+// exceeds 1; a per-job fan-out's high-water mark tracks the full job
+// count.
+//
+// synctest.Test runs this on a fake clock that only advances once every
+// goroutine in the bubble is durably blocked (see RunJob's time.Sleep),
+// so every worker that was actually dispatched a job is guaranteed to be
+// caught mid-flight before time advances - this is a deterministic
+// measurement, not a timing heuristic that could flake, and it also
+// means a deadlocked pool (e.g. one that never closes a channel it owns)
+// fails fast via synctest's own deadlock detection instead of hanging.
+func TestProcessJobsIsBounded(t *testing.T) {
 	synctest.Test(t, func(t *testing.T) {
-		jobs := testJobs(20)
+		ResetJobConcurrencyTracking()
 
-		start := time.Now()
+		const numJobs = 60
+		// Generous upper bound on what counts as a "small" pool for this
+		// exercise - comfortably above any reasonable numWorkers choice,
+		// comfortably below numJobs, so it only trips on a fan-out that
+		// spawns (close to) one goroutine per job.
+		const maxReasonablePoolSize = 20
+
+		jobs := testJobs(numJobs)
 		got := ProcessJobs(jobs)
-		elapsed := time.Since(start)
 
 		checkResults(t, jobs, got)
 
-		const sequentialTime = 20 * JobLatency
-		const budget = 500 * time.Millisecond
+		hwm := JobConcurrencyHighWaterMark()
 
-		if elapsed >= budget {
-			t.Errorf("ProcessJobs took %s (sequential would take %s); "+
-				"want well under %s - looks like jobs are being processed one at a time "+
-				"on a small fixed-size pool instead of concurrently", elapsed, sequentialTime, budget)
+		if hwm <= 1 {
+			t.Errorf("high-water mark of concurrent RunJob calls = %d; jobs are "+
+				"being processed one at a time instead of by a pool of workers", hwm)
+		}
+		if hwm > maxReasonablePoolSize {
+			t.Errorf("high-water mark of concurrent RunJob calls = %d, out of %d jobs; "+
+				"want a small, FIXED-size pool (comfortably under %d workers), not "+
+				"one goroutine per job", hwm, numJobs, maxReasonablePoolSize)
 		}
 	})
 }
@@ -107,7 +153,7 @@ func TestProcessJobsRace(t *testing.T) {
 	for i := 0; i < 5; i++ {
 		jobs := testJobs(50)
 
-		got := ProcessJobs(jobs)
+		got := processJobsWithTimeout(t, jobs, 8*time.Second)
 
 		checkResults(t, jobs, got)
 	}

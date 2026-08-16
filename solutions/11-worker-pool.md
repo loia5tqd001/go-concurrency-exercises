@@ -1,4 +1,4 @@
-# Worker Pool: Batch Job Processor — Suggested Solutions
+# Worker Pool: Batch Job Processor with Partial Failures — Suggested Solutions
 
 > **Spoiler warning.** This file contains full worked solutions for `11-worker-pool/`. Try solving it yourself first — come back here if you're stuck or want to compare approaches.
 
@@ -42,29 +42,33 @@ up in the returned slice exactly once — the naive version's own doc
 comment says as much, and the tests confirm it:
 
 ```
---- FAIL: TestProcessJobsConcurrency (0.00s)
-    check_test.go:96: ProcessJobs took 1.6s (sequential would take 1.6s);
-        want well under 500ms - looks like jobs are being processed one at
-        a time on a small fixed-size pool instead of concurrently
+--- FAIL: TestProcessJobsIsBounded (0.00s)
+    check_test.go:138: high-water mark of concurrent RunJob calls = 1; jobs are
+        being processed one at a time instead of by a pool of workers
 FAIL
 ```
 
 `TestProcessJobsCorrectness` and `TestProcessJobsRace` both pass
 unmodified against the naive version above — there is no correctness
-bug or race to fix. The actual
-defect is pure wasted concurrency: because every `RunJob` call happens
-on the same goroutine, one after another, 20 independent jobs at 80ms
-each take a full 1.6s in strict lockstep, even though none of them
-depends on any of the others finishing first. `TestProcessJobsConcurrency`
-is the only test that catches this, and it does so on timing alone (via
-`synctest`'s fake clock, so it's exact rather than flaky): it demands
-the batch finish in well under the 1.6s a sequential run would take.
-The fix, then, is purely about *how much work happens at once*, not
-about *whether the result is correct* — which is exactly why a naive
-per-goroutine fan-out (spawning all 20 goroutines directly) would also
-"fix" the test, but a bounded worker pool is what the exercise actually
-asks for, since real workloads often need a cap on how many jobs run
-concurrently regardless of how many jobs there are.
+bug or race to fix. The actual defect is pure wasted concurrency:
+because every `RunJob` call happens on the same goroutine, one after
+another, no two jobs are ever in flight at the same instant, even
+though none of them depends on any of the others finishing first.
+`TestProcessJobsIsBounded` is the test that catches this: it feeds
+`RunJob` its own instrumentation (`mockjobs.go`'s
+`JobConcurrencyHighWaterMark`) that tracks the largest number of jobs
+genuinely executing at once, and demands that number be *more than 1*
+(there's actual concurrency) *and* comfortably below the job count
+(that concurrency is capped by a small, fixed-size pool, not one
+goroutine per job). The naive version above trips the first half of
+that check — its high-water mark never leaves 1. The fix, then, is
+purely about *how much work happens at once*, not about *whether the
+result is correct* — which is exactly why a naive per-goroutine
+fan-out (spawning one goroutine per job, no pool at all) would trip
+the *second* half of the same check instead: its high-water mark would
+track the full job count, which a bounded worker pool is specifically
+built to avoid, since real workloads often need a cap on how many jobs
+run concurrently regardless of how many jobs there are.
 
 ## Approach 1: Fixed-size worker pool, fan-in through a results channel
 
