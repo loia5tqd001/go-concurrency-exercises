@@ -108,6 +108,103 @@ text in the output are load-bearing (a stale `check_test.go:68` after
 the test file gets edited is an easy tell that the doc wasn't
 regenerated).
 
+## Real-world framing and goroutine hygiene
+
+The scenario has to be something that actually happens in production
+Go — a real API shape (batch endpoints that charge per round-trip, a
+graceful-shutdown race on a job queue, a cache-stampede), not a puzzle
+invented to justify a primitive. If you can't name a real system that
+has this exact shape (a stdlib package, a well-known library, a
+pattern from a real production codebase), the framing is contrived —
+rework it before writing anything else. 36 and 37 are both explicitly
+modeled on real internal package patterns (a Kafka-producer-style
+batching client, a `net/http.Server.Shutdown`-shaped `Close`); 35 and
+17 point readers at the real `golang.org/x/sync` packages they mirror.
+
+The reference solution you verify in step 5 must be clean, not just
+passing: every goroutine started has a way to exit (closed channel,
+`ctx` cancellation, bounded work — no goroutine that outlives the test
+with nothing left to do), every channel is closed exactly once by its
+owning goroutine, and every `time.Timer`/`time.Ticker` gets `Stop()`'d
+once it's no longer needed. `go test -race` catches data races, not
+leaks — if the exercise's lifecycle is nontrivial (goroutines whose
+exit depends on a signal, not just running to completion), consider a
+goroutine-count assertion in `check_test.go` (`runtime.NumGoroutine()`
+before/after, with a settle delay) or `testing/synctest` (see 05, 09,
+17's tests) so a leak fails the suite instead of just leaking quietly
+in production later.
+
+## Verify the test actually catches the bug
+
+A test suite that passes against both the naive scaffold's *intended*
+failure and the reference fix, but was never checked to actually FAIL
+against the naive scaffold, might be testing the wrong thing entirely.
+Step 5 requires running the suite against both ends for exactly this
+reason — a test passing against a broken implementation is a bug in
+the test, not evidence the implementation is fine.
+
+Timing-based races are the sharp edge: a test that merely spins up N
+goroutines and hopes they race can pass clean against a genuinely
+racy implementation on a fast/many-core machine, especially without
+`-race`. Two techniques from this repo's history:
+
+- **Prefer a deterministic reproduction over a timing-dependent one**
+  where the bug allows it. 37's `TestSubmitAfterCloseIsRejectedNotPanicked`
+  submits jobs, waits for `Close` to fully return, *then* submits again
+  — there is no scheduling luck left, the naive version panics on every
+  single run. Keep a separate `-race`-reliant test for the messier
+  genuinely-concurrent-overlap case, but don't rely on it alone.
+- **Turn up contention until it's reliable**, if no deterministic
+  reproduction exists (e.g. a check-then-act race under real
+  concurrency). Exercise 38 needed 4000 goroutines / 200 stock / 5
+  rounds before the naive version failed 10/10 even *without* `-race`
+  — 500 goroutines wasn't enough. When a race test is flaky against a
+  known-broken implementation, the fix is usually more contention, not
+  a `-race`-only test.
+
+## Alternative approaches in solutions docs
+
+`solutions/NN-*.md` should present more than one valid approach only
+where more than one genuinely, meaningfully exists — a second approach
+invented just to pad the doc is worse than no second approach. Good
+precedent in this repo:
+
+- 35's dedup key-cache: a `done`-channel broadcast per key vs.
+  `sync.OnceValue` keyed by a map — genuinely different mechanisms,
+  same guarantee.
+- 38's decrement: `atomic.CompareAndSwap` retry loop (the taught
+  approach) vs. `atomic.AddInt64` with a compensating rollback on
+  failure — the doc explains *why* the second one happens to work for
+  this one fixed-decrement case but doesn't generalize, which is the
+  actual lesson, not just "here's another way."
+- 37's `RWMutex`-held-across-the-send design vs. a plain `Mutex`
+  released before the send, correct only because a `WaitGroup`
+  transitively gates the channel close — worth including specifically
+  *because* the second one looks subtly wrong at a glance and isn't.
+
+If a second approach exists but is strictly worse with nothing to
+learn from the comparison (more code, no different tradeoff), leave it
+out — mission #6 is about explaining a genuine tradeoff, not about
+approach-count.
+
+## Checking curriculum coverage
+
+Before locking in a new exercise's topic, check the root `README.md`'s
+[Browse by topic](../../../README.md#browse-by-topic) table for what's
+already covered and by how many exercises — a topic with one or two
+entries is a thinner area than one with six. Precedent for gap-driven
+additions: exercise 38 was added after `grep -rl "CompareAndSwap\|atomic\."`
+across the repo showed every prior `sync/atomic` use was just
+`Add`/`Load` on a counter, with no exercise practicing the CAS
+retry-loop idiom; 33/34 were ported from Rob Pike's 2012 "Go
+Concurrency Patterns" talk after comparing this repo against that
+talk's demo programs turned up missing patterns (self-scheduling load
+balancer, concurrent prime sieve — chat-roulette and concurrent power
+series from the same talk are still open gaps). Auditing a real
+production codebase's concurrency package for patterns not yet taught
+(as 36/37 were sourced) is another reliable way to find a genuine gap
+rather than inventing a topic for its own sake.
+
 ## Root README table
 
 Keep row formatting identical to neighbors: `| N | [Title](./NN-folder) |
