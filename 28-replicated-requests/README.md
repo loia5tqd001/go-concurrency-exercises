@@ -1,26 +1,43 @@
 # Replicated Requests: Racing Redundant Calls for Lower Tail Latency
 
-Given is a `FetchFastest` that is supposed to send the same request to
-several redundant `Replica` handlers (see `mockreplica.go`)
-concurrently, and return whichever one answers first - so that no
-single replica's unpredictable tail latency slows the caller down. It
-already does that much correctly: it fans out to every replica and
-returns the first winner's value, so a test that only checks "does it
-return the right value" passes against it as-is.
+`FetchFastest` sends the same request to several redundant `Replica`
+handlers (see `mockreplica.go`) concurrently and returns whichever one
+answers first, so that no single replica's unpredictable tail latency
+slows the caller down - the "hedged request" pattern behind Google's
+tail-at-scale paper and every multi-region client that races replicas
+instead of trusting the nearest one to be fast.
 
-The problem is what happens to the replicas that lose the race. Right
-now every replica goroutine is started with a `nil` done channel, so
-none of them has any way to learn that `FetchFastest` already has its
-answer and has moved on. Every losing replica just keeps running -
-sleeping out its full artificial latency (or whatever work it's doing)
-- long after the caller stopped caring, wasting work and leaking a
-goroutine per call until it eventually finishes on its own.
+Today it gets the headline behavior right but leaks every loser:
 
-Your task is to fix `FetchFastest` so that as soon as a winner is
-picked (or the caller-supplied `done` is closed), every other
-in-flight replica is told to stop via its own `done` channel - and
-make sure a replica that's already lost the race actually reacts to
-that, rather than continuing to run to completion regardless.
+```
+                     ┌─▶ replica-A r(nil) ── sleeps full latency ── (nobody's listening)
+FetchFastest(done) ──┼─▶ replica-B r(nil) ── answers first ──▶ caller gets the value
+                     └─▶ replica-C r(nil) ── sleeps full latency ── (nobody's listening)
+```
+
+Every replica goroutine is started with a `nil` done channel, so none
+of them has any way to learn that `FetchFastest` already has its
+answer and moved on - a `nil` channel never fires. Each loser just
+keeps sleeping out its full artificial latency long after the caller
+stopped caring, leaking a goroutine per call until it self-heals.
+
+Goal - every loser stops the instant there's a winner, or the instant
+the caller's own `done` fires first:
+
+```
+                     ┌─▶ replica-A r(stop) ── sees stop closed ──▶ exits early
+FetchFastest(done) ──┼─▶ replica-B r(stop) ── answers first ──▶ caller gets the value
+                     └─▶ replica-C r(stop) ── sees stop closed ──▶ exits early
+                              (winning OR done firing closes stop for every replica)
+```
+
+## Your task
+
+Fix `FetchFastest` so that as soon as a winner is picked (or the
+caller-supplied `done` is closed), every other in-flight replica is
+told to stop via its own `done` channel - and make sure a replica
+that's already lost the race actually reacts to that, rather than
+continuing to run to completion regardless.
 
 The signatures must stay the same:
 
@@ -37,12 +54,11 @@ func FetchFastest(done <-chan struct{}, replicas ...Replica) (string, error)
 - If the caller-supplied `done` is closed before any replica responds
   (including if it's already closed when `FetchFastest` is called),
   `FetchFastest` returns promptly with an error and no winner.
-- There are two separate triggers that both mean "stop now" for every
-  in-flight replica: a replica winning the race, and the
-  caller-supplied `done` being closed before anyone won. Either way,
-  every replica still running (via the `done` it receives as its own
-  argument) must be told to stop instead of being left running for
-  however long its artificial latency happens to be.
+- Two separate triggers both mean "stop now" for every in-flight
+  replica: a replica winning the race, and the caller-supplied `done`
+  firing before anyone won. Either way, every replica still running
+  (via the `done` it receives as its own argument) must be told to
+  stop instead of being left running for its full artificial latency.
 
 ## Test your solution
 

@@ -49,15 +49,15 @@ Verified: running the current `check_test.go` against this naive `main.go` fails
 
 ```
 === RUN   TestFetchFastestReturnsFastestValue
-    check_test.go:58: replica "slow1" never observed its done channel being closed - it is going to keep running all the way to its full artificial latency instead of stopping as soon as it lost the race
-    check_test.go:58: replica "slow2" never observed its done channel being closed - it is going to keep running all the way to its full artificial latency instead of stopping as soon as it lost the race
-    check_test.go:58: replica "slow3" never observed its done channel being closed - it is going to keep running all the way to its full artificial latency instead of stopping as soon as it lost the race
+    check_test.go:93: replica "slow1" never observed its done channel being closed - it is going to keep running all the way to its full artificial latency instead of stopping as soon as it lost the race
+    check_test.go:93: replica "slow2" never observed its done channel being closed - it is going to keep running all the way to its full artificial latency instead of stopping as soon as it lost the race
+    check_test.go:93: replica "slow3" never observed its done channel being closed - it is going to keep running all the way to its full artificial latency instead of stopping as soon as it lost the race
 --- FAIL: TestFetchFastestReturnsFastestValue (0.00s)
 === RUN   TestFetchFastestReturnsWinnerError
 --- PASS: TestFetchFastestReturnsWinnerError (0.00s)
 === RUN   TestFetchFastestClosedDoneCancelsEarly
-    check_test.go:142: replica "a" never observed its done channel being closed after the caller's done fired with no winner - it is going to keep running all the way to its full artificial latency instead of stopping as soon as the caller cancelled
-    check_test.go:142: replica "b" never observed its done channel being closed after the caller's done fired with no winner - it is going to keep running all the way to its full artificial latency instead of stopping as soon as the caller cancelled
+    check_test.go:177: replica "a" never observed its done channel being closed after the caller's done fired with no winner - it is going to keep running all the way to its full artificial latency instead of stopping as soon as the caller cancelled
+    check_test.go:177: replica "b" never observed its done channel being closed after the caller's done fired with no winner - it is going to keep running all the way to its full artificial latency instead of stopping as soon as the caller cancelled
 --- FAIL: TestFetchFastestClosedDoneCancelsEarly (0.00s)
 === RUN   TestFetchFastestNoReplicas
 --- PASS: TestFetchFastestNoReplicas (0.00s)
@@ -65,6 +65,8 @@ Verified: running the current `check_test.go` against this naive `main.go` fails
 --- PASS: TestFetchFastestConcurrentSafety (0.00s)
 FAIL
 ```
+
+(`TestFetchFastestNoReplicas` and `TestFetchFastestConcurrentSafety` now call `FetchFastest` through a `fetchFastestWithTimeout` helper in `check_test.go` that bounds the call itself - added so a subtly-wrong fix that wedges `FetchFastest` fails in a few seconds instead of hanging toward Go's default 10-minute test timeout; it changes nothing about what a correct `FetchFastest` needs to do.)
 
 `TestFetchFastestReturnsWinnerError`, `TestFetchFastestNoReplicas`, and `TestFetchFastestConcurrentSafety` all pass against the naive version — none of them inspect what happens to the *losing* replicas, only that `FetchFastest` itself answers correctly (value, winner's error, or the no-replicas error) and doesn't race. `TestFetchFastestReturnsFastestValue` and `TestFetchFastestClosedDoneCancelsEarly` are the ones that specifically check the losers' fate (`ObservedCancellation()` / `RanToCompletion()`) - one for the "a replica won" cancellation trigger, the other for the "caller's own `done` fired with no winner" trigger - and both catch the naive version. That's the point of the exercise: the naive version's answer is right, its cleanup is not.
 

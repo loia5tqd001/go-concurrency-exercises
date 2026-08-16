@@ -14,6 +14,41 @@ import (
 	"time"
 )
 
+// callTimeout bounds every direct call to FetchFastest made outside a
+// synctest bubble (synctest's own fake-clock deadlock detector already
+// guards the tests above that run inside one). A subtly-wrong fix -
+// e.g. one that closes stop and then waits for every replica goroutine
+// to finish sending on an unbuffered results channel before returning
+// - can leave FetchFastest itself wedged forever; without this guard
+// that turns into Go's default 10-minute test timeout instead of a
+// fast, readable failure.
+const callTimeout = 2 * time.Second
+
+// fetchFastestWithTimeout calls FetchFastest in its own goroutine and
+// bounds how long the test waits for it to return, so a wedged
+// FetchFastest fails the test fast instead of hanging it.
+func fetchFastestWithTimeout(t *testing.T, done <-chan struct{}, replicas ...Replica) (string, error) {
+	t.Helper()
+
+	type outcome struct {
+		value string
+		err   error
+	}
+	out := make(chan outcome, 1)
+	go func() {
+		value, err := FetchFastest(done, replicas...)
+		out <- outcome{value, err}
+	}()
+
+	select {
+	case o := <-out:
+		return o.value, o.err
+	case <-time.After(callTimeout):
+		t.Fatalf("FetchFastest did not return within %s - looks wedged", callTimeout)
+		return "", nil
+	}
+}
+
 // TestFetchFastestReturnsFastestValue checks that FetchFastest returns
 // the value (and lack of error) from the fastest replica, and that it
 // does so in roughly the fastest replica's own latency - not after
@@ -157,17 +192,25 @@ func TestFetchFastestClosedDoneCancelsEarly(t *testing.T) {
 }
 
 // TestFetchFastestNoReplicas checks the degenerate case of calling
-// FetchFastest with no replicas at all.
+// FetchFastest with no replicas at all. Guarded by
+// fetchFastestWithTimeout: a fix that moves or drops the
+// len(replicas) == 0 early return falls through to a select with zero
+// senders and a done that's never closed - a direct call would hang
+// forever instead of failing fast.
 func TestFetchFastestNoReplicas(t *testing.T) {
 	done := make(chan struct{})
-	if _, err := FetchFastest(done); err == nil {
+	if _, err := fetchFastestWithTimeout(t, done); err == nil {
 		t.Fatal("expected an error when no replicas are given, got nil")
 	}
 }
 
 // TestFetchFastestConcurrentSafety hammers FetchFastest with many
 // concurrent calls, each racing several mock replicas, to catch data
-// races (run with `go test -race`).
+// races (run with `go test -race`). The wait below is itself bounded:
+// a subtly-wrong fix can leave one FetchFastest call wedged forever
+// (see callTimeout's doc comment) without necessarily failing any of
+// the synctest-guarded tests above, so wg.Wait() alone would hang this
+// test toward Go's default 10-minute timeout instead of failing fast.
 func TestFetchFastestConcurrentSafety(t *testing.T) {
 	const calls = 20
 
@@ -183,9 +226,19 @@ func TestFetchFastestConcurrentSafety(t *testing.T) {
 			r3 := NewMockReplica("z", 8*time.Millisecond)
 
 			done := make(chan struct{})
-			_, _ = FetchFastest(done, r1.Replica, r2.Replica, r3.Replica)
+			_, _ = fetchFastestWithTimeout(t, done, r1.Replica, r2.Replica, r3.Replica)
 		}()
 	}
 
-	wg.Wait()
+	finished := make(chan struct{})
+	go func() {
+		wg.Wait()
+		close(finished)
+	}()
+
+	select {
+	case <-finished:
+	case <-time.After(2 * callTimeout):
+		t.Fatal("concurrent FetchFastest calls never completed - looks wedged")
+	}
 }
