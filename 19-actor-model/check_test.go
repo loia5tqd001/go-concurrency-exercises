@@ -19,34 +19,117 @@ import (
 	"time"
 )
 
+// callTimeout bounds every direct Deposit/Withdraw/Balance/Close call
+// in this file. All four are supposed to be thin methods that hand a
+// request to the actor goroutine and block on a reply - but a
+// solution that forgets to drain its own reply channel (or wedges the
+// actor some other way) hangs that call forever, and every call after
+// it, since the single actor goroutine is now stuck. A bounded wait
+// turns that into a clear, fast test failure instead of a 10-minute
+// `go test` timeout with a bare stack dump.
+const callTimeout = 2 * time.Second
+
+// depositWithTimeout calls account.Deposit(amount) and fails the test
+// fast if it doesn't return in time.
+func depositWithTimeout(t *testing.T, account *Account, amount int) {
+	t.Helper()
+
+	done := make(chan struct{}, 1)
+	go func() {
+		account.Deposit(amount)
+		done <- struct{}{}
+	}()
+
+	select {
+	case <-done:
+	case <-time.After(callTimeout):
+		t.Fatalf("Deposit(%d) did not return within %s - a wedged actor goroutine blocks every future call too", amount, callTimeout)
+	}
+}
+
+// withdrawWithTimeout calls account.Withdraw(amount) and fails the
+// test fast if it doesn't return in time.
+func withdrawWithTimeout(t *testing.T, account *Account, amount int) error {
+	t.Helper()
+
+	done := make(chan error, 1)
+	go func() { done <- account.Withdraw(amount) }()
+
+	select {
+	case err := <-done:
+		return err
+	case <-time.After(callTimeout):
+		t.Fatalf("Withdraw(%d) did not return within %s - a wedged actor goroutine blocks every future call too", amount, callTimeout)
+		return nil
+	}
+}
+
+// balanceWithTimeout calls account.Balance() and fails the test fast
+// if it doesn't return in time.
+func balanceWithTimeout(t *testing.T, account *Account) int {
+	t.Helper()
+
+	done := make(chan int, 1)
+	go func() { done <- account.Balance() }()
+
+	select {
+	case b := <-done:
+		return b
+	case <-time.After(callTimeout):
+		t.Fatalf("Balance() did not return within %s - a wedged actor goroutine blocks every future call too", callTimeout)
+		return 0
+	}
+}
+
+// closeWithTimeout calls account.Close() and fails the test fast if it
+// doesn't return in time.
+func closeWithTimeout(t *testing.T, account *Account) {
+	t.Helper()
+
+	done := make(chan struct{}, 1)
+	go func() {
+		account.Close()
+		done <- struct{}{}
+	}()
+
+	select {
+	case <-done:
+	case <-time.After(callTimeout):
+		t.Fatalf("Close() did not return within %s - it must terminate the actor goroutine, not wait on it forever", callTimeout)
+	}
+}
+
 // TestAccountBasicOperations exercises Deposit, Withdraw, and Balance
 // from a single goroutine, so it passes against both the naive and
 // the fixed implementation - except for the insufficient-funds check,
-// which only the fixed implementation performs.
+// which only the fixed implementation performs. Every call goes
+// through the *WithTimeout helpers above so a solution whose actor
+// goroutine is wedged (e.g. a Deposit that forgets to drain its own
+// reply) fails this test fast instead of hanging it.
 func TestAccountBasicOperations(t *testing.T) {
 	account := NewAccount(100)
 
-	if got := account.Balance(); got != 100 {
+	if got := balanceWithTimeout(t, account); got != 100 {
 		t.Fatalf("initial balance = %d, want 100", got)
 	}
 
-	account.Deposit(50)
-	if got := account.Balance(); got != 150 {
+	depositWithTimeout(t, account, 50)
+	if got := balanceWithTimeout(t, account); got != 150 {
 		t.Fatalf("balance after deposit = %d, want 150", got)
 	}
 
-	if err := account.Withdraw(30); err != nil {
+	if err := withdrawWithTimeout(t, account, 30); err != nil {
 		t.Fatalf("Withdraw(30) returned unexpected error: %v", err)
 	}
-	if got := account.Balance(); got != 120 {
+	if got := balanceWithTimeout(t, account); got != 120 {
 		t.Fatalf("balance after withdraw = %d, want 120", got)
 	}
 
-	err := account.Withdraw(1000)
+	err := withdrawWithTimeout(t, account, 1000)
 	if !errors.Is(err, ErrInsufficientFunds) {
 		t.Errorf("Withdraw(1000) from balance 120 = %v, want ErrInsufficientFunds", err)
 	}
-	if got := account.Balance(); got != 120 {
+	if got := balanceWithTimeout(t, account); got != 120 {
 		t.Errorf("balance after rejected withdraw = %d, want unchanged 120", got)
 	}
 }
@@ -58,9 +141,19 @@ func TestAccountBasicOperations(t *testing.T) {
 // be wrong on top of that. The actor implementation serializes all
 // access through a single goroutine, so this passes cleanly under
 // -race with the exact expected balance.
+//
+// goroutines is 1000, not a smaller round number, because the final
+// balance assertion needs to catch the naive lost-update race even
+// without -race: at 100 goroutines the naive Account happened to land
+// on the exact right sum often enough to pass this check ~16% of the
+// time on plain `go test` (no -race) in local testing - a coin flip
+// that would let a solver's run get lucky. 1000 failed this assertion
+// 20/20 in the same testing, matching how exercise 38 needed more
+// contention (4000 goroutines, not 500) before its check-then-act race
+// failed reliably without -race.
 func TestAccountConcurrentSafety(t *testing.T) {
 	const initial = 10000
-	const goroutines = 100
+	const goroutines = 1000
 
 	account := NewAccount(initial)
 
@@ -72,9 +165,20 @@ func TestAccountConcurrentSafety(t *testing.T) {
 			account.Deposit(1)
 		}()
 	}
-	wg.Wait()
 
-	if got, want := account.Balance(), initial+goroutines; got != want {
+	done := make(chan struct{})
+	go func() {
+		wg.Wait()
+		close(done)
+	}()
+
+	select {
+	case <-done:
+	case <-time.After(callTimeout):
+		t.Fatalf("%d concurrent deposits did not finish within %s - a wedged actor goroutine blocks every caller", goroutines, callTimeout)
+	}
+
+	if got, want := balanceWithTimeout(t, account), initial+goroutines; got != want {
 		t.Errorf("final balance = %d, want %d (exactly initial + %d concurrent deposits of 1)", got, want, goroutines)
 	}
 }
@@ -108,9 +212,20 @@ func TestAccountWithdrawRejectsInsufficientFunds(t *testing.T) {
 			}
 		}()
 	}
-	wg.Wait()
 
-	finalBalance := account.Balance()
+	done := make(chan struct{})
+	go func() {
+		wg.Wait()
+		close(done)
+	}()
+
+	select {
+	case <-done:
+	case <-time.After(callTimeout):
+		t.Fatalf("%d concurrent withdrawals did not finish within %s - a wedged actor goroutine blocks every caller", attempts, callTimeout)
+	}
+
+	finalBalance := balanceWithTimeout(t, account)
 
 	if finalBalance < 0 {
 		t.Fatalf("final balance went negative: %d", finalBalance)
@@ -245,7 +360,7 @@ func TestNewAccountStartsActorGoroutineAndCloseStopsIt(t *testing.T) {
 			"struct guarded by a lock", before, afterNew)
 	}
 
-	account.Close()
+	closeWithTimeout(t, account)
 
 	afterClose := numGoroutinesToSettle(before, 500*time.Millisecond)
 	if afterClose > before {

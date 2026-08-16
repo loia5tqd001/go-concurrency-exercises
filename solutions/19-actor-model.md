@@ -24,19 +24,24 @@ func (a *Account) Withdraw(amount int) error {
 `balance` is read and written directly with zero synchronization, and `Withdraw` doesn't even check funds. Verified directly against this test suite, running `go test -race ./...` on the naive version fails in multiple, compounding ways:
 
 ```
+--- FAIL: TestAccountBasicOperations (0.00s)
+    check_test.go:130: Withdraw(1000) from balance 120 = <nil>, want ErrInsufficientFunds
+    check_test.go:133: balance after rejected withdraw = -880, want unchanged 120
 --- FAIL: TestAccountConcurrentSafety (0.00s)
-    check_test.go:71: final balance = 10079, want 10100 (exactly initial + 100 concurrent deposits of 1)
+    check_test.go:182: final balance = 10836, want 11000 (exactly initial + 1000 concurrent deposits of 1)
     testing.go:1617: race detected during execution of test
 WARNING: DATA RACE
-Read at 0x00c000696078 by goroutine 113:
-  (*Account).Withdraw()  main.go:66
-Previous write at 0x00c000696078 by goroutine 111:
-  (*Account).Withdraw()  main.go:66
+Read at 0x00c000010358 by goroutine 17:
+  (*Account).Deposit()  main.go:67
+Previous write at 0x00c000010358 by goroutine 16:
+  (*Account).Deposit()  main.go:67
 --- FAIL: TestAccountWithdrawRejectsInsufficientFunds (0.00s)
-    check_test.go:109: final balance went negative: -50
+    check_test.go:231: final balance went negative: -50
+--- FAIL: TestNewAccountStartsActorGoroutineAndCloseStopsIt (0.00s)
+    check_test.go:358: goroutine count was 2 before NewAccount and 2 right after (want it to increase)
 ```
 
-Concurrent deposits lose updates (final balance 10079 instead of 10100, from 100 concurrent `+1`s on an initial 10000), the race detector flags the unsynchronized read/write on `balance`, and unchecked concurrent withdrawals push the balance negative (-50) since there's no atomicity around "check funds, then debit."
+`Withdraw(1000)` from a balance of 120 is wrongly allowed, driving the balance to -880. Concurrent deposits lose updates (final balance 10836 instead of 11000, from 1000 concurrent `+1`s on an initial 10000), the race detector flags the unsynchronized read/write on `balance`, unchecked concurrent withdrawals push the balance negative (-50) since there's no atomicity around "check funds, then debit," and `NewAccount` never starts a goroutine at all since there's no actor to serialize through.
 
 ## Approach 1: actor goroutine (message-passing, no locks)
 
@@ -163,12 +168,12 @@ func main() {
 }
 ```
 
-**Verified**: `go test -race -count=5 ./...` passes 5/5 with no races and the exact expected balances, including the insufficient-funds test (no more than `initial/amount` withdrawals ever succeed, balance never goes negative) and both `Close`-related tests (the actor goroutine visibly starts in `NewAccount` and is gone again after `Close`).
+**Verified**: `go test -race -count=20 ./...` passes 20/20 with no races and the exact expected balances, including the insufficient-funds test (no more than `initial/amount` withdrawals ever succeed, balance never goes negative) and both `Close`-related tests (the actor goroutine visibly starts in `NewAccount` and is gone again after `Close`).
 
 Two correctness details worth calling out because they're easy to get wrong when hand-rolling this pattern:
 
 - The `check_test.go` for `Withdraw` requires the funds check and the debit to be atomic together. That falls out for free here: both happen inside the same `case opWithdraw:` in the single actor goroutine, so no other request can interleave between the check and the debit — there's no separate lock to "hold across" the sequence, because there's only ever one goroutine touching `balance` in the first place.
-- `Deposit` sends its request and then unconditionally waits on `<-reply`, even though it discards the result. This isn't optional bookkeeping — `req.reply <- response{...}` inside `run` is a *send* on an unbuffered channel, so if `Deposit` didn't receive it, the actor goroutine would block forever trying to reply to the first deposit and the entire account would wedge. Verified directly: deleting the `<-reply` line and re-running `TestAccountBasicOperations` hangs the actor goroutine mid-send and the test suite times out, confirming the drain is load-bearing, not decorative.
+- `Deposit` sends its request and then unconditionally waits on `<-reply`, even though it discards the result. This isn't optional bookkeeping — `req.reply <- response{...}` inside `run` is a *send* on an unbuffered channel, so if `Deposit` didn't receive it, the actor goroutine would block forever trying to reply to the first deposit and the entire account would wedge. Verified directly: deleting the `<-reply` line and re-running `TestAccountBasicOperations` reports `Balance() did not return within 2s - a wedged actor goroutine blocks every future call too` in about two seconds, confirming the drain is load-bearing, not decorative — `check_test.go`'s timeout guards turn what would otherwise be a wedged, minutes-long hang into that fast, readable failure.
 
 ## Approach 1b: actor goroutine with typed messages instead of a tagged struct
 
@@ -281,7 +286,7 @@ func main() {
 }
 ```
 
-**Verified**: `go test -race -count=3 ./...` passes cleanly, including both `Close`-related tests.
+**Verified**: `go test -race -count=20 ./...` passes 20/20, including both `Close`-related tests.
 
 Versus Approach 1:
 
@@ -382,5 +387,5 @@ When to reach for which: use the actor style when you want to practice or lean i
 
 - Correctness in the actor approach comes entirely from the invariant that exactly one goroutine (`run`) ever touches `balance`; there's no lock because there's no shared access to protect in the first place.
 - `Withdraw`'s check-then-debit atomicity falls out for free from that same invariant — both steps happen in one `case` inside the single-threaded actor loop, with no other request able to interleave.
-- Every request/reply round trip in the actor must actually complete: `Deposit` looks like it wastes a receive on a value it discards, but skipping `<-reply` deadlocks the actor on the very next unbuffered send — verified empirically by removing it and watching the test suite hang.
+- Every request/reply round trip in the actor must actually complete: `Deposit` looks like it wastes a receive on a value it discards, but skipping `<-reply` deadlocks the actor on the very next unbuffered send — verified empirically by removing it and watching `TestAccountBasicOperations` fail fast on `check_test.go`'s timeout guard instead of running to Go's default 10-minute test timeout.
 - The mutex-based version is a real, commonly-reached-for, equally correct solution to the underlying concurrency problem — it just isn't what this exercise is asking you to practice. Know both: the actor pattern for when you want explicit message-passing semantics or a coordinating background goroutine, and a mutex for the common case where you just need to guard some in-process state.

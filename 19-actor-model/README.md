@@ -1,11 +1,21 @@
 # Actor Model: A Bank Account With No Locks
 
-Given is an `Account` that is supposed to be safe for concurrent
-`Deposit`/`Withdraw`/`Balance` calls from many goroutines at once.
-Right now it is not: `balance` is read and written directly, with no
-synchronization of any kind, so concurrent calls race on it (lost
-updates, torn reads) - and `Withdraw` doesn't even check for
-sufficient funds before letting the balance go negative.
+`Account` is supposed to be safe for concurrent `Deposit`/`Withdraw`/
+`Balance` calls from many goroutines at once. Right now it is not:
+`balance` is read and written directly, with no synchronization of any
+kind, and `Withdraw` doesn't even check funds before letting the
+balance go negative.
+
+```
+today:  goroutine A ─┐
+        goroutine B ─┼─▶ read-modify-write a.balance directly ─▶ races
+        goroutine C ─┘
+
+goal:   goroutine A ─┐        request           actor goroutine
+        goroutine B ─┼─▶ {op, amount, reply} ─▶ owns balance, one
+        goroutine C ─┘                          request at a time
+                     ◀───────────── reply ──────────────┘
+```
 
 Your task is to reimplement `Account` the "share memory by
 communicating" way, using the actor pattern instead of a mutex:
