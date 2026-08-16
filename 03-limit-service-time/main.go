@@ -1,11 +1,9 @@
 //////////////////////////////////////////////////////////////////////
 //
-// Your video processing service has a freemium model. Everyone has 10
-// sec of free processing time on your service. After that, the
-// service will kill your process, unless you are a paid premium user.
-//
-// Beginner Level: 10s max per request
-// Advanced Level: 10s max per user (accumulated)
+// Your video processing service has a freemium model. Every free user
+// has 10 sec of processing time total, accumulated across all of their
+// requests - not 10s per request. After that, the service kills the
+// request, unless the user is a paid premium user.
 //
 
 package main

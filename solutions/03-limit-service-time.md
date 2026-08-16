@@ -126,70 +126,29 @@ Design notes:
 
 **Verified**: copied this exercise into a throwaway scratch directory, confirmed the naive stub fails the current `check_test.go`, then dropped in this solution and ran `go vet ./...` (clean) and `go test -race -count=3 ./...` — all tests pass repeatably, including the synctest-based tests and the two real-clock concurrency tests.
 
-## Approach 2: `time.Timer` + `select`, no `context` package
+## Variant: `time.Timer` instead of `context`
 
-Functionally identical arbitration, just built from a raw timer instead of a context — useful if you'd rather not pull in `context` for something this local.
+Same design, one line different: `timer := time.NewTimer(remaining)` +
+`defer timer.Stop()` + `<-timer.C` in place of `context.WithTimeout` +
+`defer cancel()` + `<-ctx.Done()`. Since `process` is a plain `func()`
+with nothing downstream that accepts a `context.Context`, neither
+option is more "correct" than the other here — pick whichever you'd
+rather have in the diff.
 
-```go
-package main
-
-import (
-	"sync"
-	"time"
-)
-
-type User struct {
-	ID        int
-	IsPremium bool
-	TimeUsed  time.Duration
-
-	mu sync.Mutex
-}
-
-const freeQuota = 10 * time.Second
-
-func HandleRequest(process func(), u *User) bool {
-	if u.IsPremium {
-		process()
-		return true
-	}
-
-	u.mu.Lock()
-	defer u.mu.Unlock()
-
-	remaining := freeQuota - u.TimeUsed
-	if remaining <= 0 {
-		return false
-	}
-
-	done := make(chan struct{})
-	start := time.Now()
-	go func() {
-		process()
-		close(done)
-	}()
-
-	timer := time.NewTimer(remaining)
-	defer timer.Stop()
-
-	select {
-	case <-done:
-		u.TimeUsed += time.Since(start)
-		return true
-	case <-timer.C:
-		u.TimeUsed += remaining
-		return false
-	}
-}
-
-func main() {
-	RunMockServer()
-}
-```
-
-The only real difference from Approach 1 is the timeout mechanism: `time.NewTimer(remaining)` + `<-timer.C` instead of `context.WithTimeout` + `<-ctx.Done()`. `defer timer.Stop()` releases the timer promptly when `done` wins the race, same role `cancel()` plays for the context version. Everything about the per-user mutex, the accumulation logic, and the premium bypass is unchanged.
-
-**Verified**: same scratch-directory protocol, `go vet ./...` clean, `go test -race -count=2 ./...` passing.
+A **genuinely different** approach worth naming, even though the test
+suite deliberately rules it out: reserve `remaining` under the lock,
+*release the lock*, run the race unlocked, then re-lock to refund
+whatever was left over. That would let two concurrent requests for the
+same user run without serializing behind each other's `process()` call
+— better throughput. But it means a second request has to reserve
+against the *worst case* (the first might run the full `remaining`),
+so it gets rejected in situations where the first actually finishes
+early and plenty of quota was available.
+`TestHandleRequest_FreeUser_ConcurrentRequestNotRejectedOnEarlierEarlyFinish`
+exists specifically to reject that tradeoff: this exercise chooses
+"correct against real usage" over "concurrent throughput for the same
+user," which is why Approach 1 holds the lock for the whole call
+instead of just around the bookkeeping.
 
 ## Key takeaways
 
