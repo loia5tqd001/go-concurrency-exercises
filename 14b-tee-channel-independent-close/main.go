@@ -103,7 +103,7 @@ func main() {
 	done := make(chan struct{})
 	defer close(done)
 
-	in := StartSensor(10)
+	in := StartSensor(done, 10)
 	out1, out2 := Tee(done, in)
 
 	start := time.Now()

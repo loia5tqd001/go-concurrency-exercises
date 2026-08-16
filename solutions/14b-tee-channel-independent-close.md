@@ -59,12 +59,14 @@ Verified against the given `main.go` in a throwaway scratch copy: `TestTeeDuplic
 `TestTeeClosesEachOutputAsSoonAsItIsFullyDelivered` fails, and for a structural reason, not a closing-logic bug per se:
 
 ```
---- FAIL: TestTeeClosesEachOutputAsSoonAsItIsFullyDelivered/out1_is_the_fast_one (0.00s)
-    check_test.go:308: no value received within 20ms - is delivery to this output waiting on some other output being read first?
-panic: deadlock: main bubble goroutine has exited but blocked goroutines remain
+--- FAIL: TestTeeClosesEachOutputAsSoonAsItIsFullyDelivered (0.00s)
+    --- FAIL: TestTeeClosesEachOutputAsSoonAsItIsFullyDelivered/out1_is_the_fast_one (0.00s)
+        check_test.go:314: no value received within 20ms - is delivery to this output waiting on some other output being read first?
+    --- FAIL: TestTeeClosesEachOutputAsSoonAsItIsFullyDelivered/out2_is_the_fast_one (0.00s)
+        check_test.go:314: no value received within 20ms - is delivery to this output waiting on some other output being read first?
 ```
 
-The test's second `receiveWithTimeout` call on the fast output already times out: the delivery goroutine is still parked trying to hand value 0 to the untouched slow side and hasn't even looked at value 1 yet. "Holding each value until both outputs receive it, one value at a time, in a single goroutine" is exactly what 14 asked for — and it's precisely why this design can never let one output run more than a fraction of a value ahead of a completely unread other, no matter how the closing code is written on top of it. (The secondary deadlock panic is a separate, structural side effect of combining `synctest` with `StartSensor`'s cancellation-blind mock and an early `t.Fatalf` — it happens for any implementation that genuinely blocks here, not something specific to this code.)
+The test's second `receiveWithTimeout` call on the fast output already times out: the delivery goroutine is still parked trying to hand value 0 to the untouched slow side and hasn't even looked at value 1 yet. "Holding each value until both outputs receive it, one value at a time, in a single goroutine" is exactly what 14 asked for — and it's precisely why this design can never let one output run more than a fraction of a value ahead of a completely unread other, no matter how the closing code is written on top of it. `StartSensor` itself also honors `done` (closed by the test's own `defer`), so `receiveWithTimeout`'s `t.Fatalf` fails just this subtest cleanly instead of leaving the sensor's goroutine blocked forever inside the `synctest` bubble — the remaining tests, `TestTeeStopsOnDone` and `TestTeeStopsOnDoneRace`, still run and pass.
 
 So fixing this needs more than moving the `close` calls around — it needs abandoning the single-goroutine, hold-until-both-received-it model in favor of letting each output's delivery progress independently.
 
@@ -149,7 +151,7 @@ Design notes:
 - **The per-value select still checks `done`** inside each `wgs[i].Go` goroutine, so a value stuck waiting on a stalled consumer doesn't block that goroutine (and thus `wgs[i].Wait()`) forever past shutdown.
 - **One goroutine per value, per output, launched independently** is the piece the given starting code doesn't have: because every value's delivery to `out[i]` runs in its own goroutine rather than sharing one sequential per-value loop, one output's goroutines can all complete — whether or not the other output has been read at all — while the other output's goroutines sit blocked on their own sends. That's what lets `TestTeeClosesEachOutputAsSoonAsItIsFullyDelivered` pass.
 
-**Verified** in a scratch copy of `14b-tee-channel-independent-close/`: the given starting code passes the baseline and no-fixed-order tests but fails `TestTeeClosesEachOutputAsSoonAsItIsFullyDelivered` exactly as described above; this fix passes the full six-test suite consistently under `go test -race -count=10 ./...`, with `go vet ./...` clean.
+**Verified** in a scratch copy of `14b-tee-channel-independent-close/`: the given starting code passes the baseline and no-fixed-order tests but fails `TestTeeClosesEachOutputAsSoonAsItIsFullyDelivered` exactly as described above; this fix passes the full six-test suite consistently under `go test -race -count=20 ./...`, with `go vet ./...` clean.
 
 One caveat that applies regardless of which `Tee` implementation is used: `TestTeeStopsOnDoneRace` runs on the real clock (not wrapped in `synctest`), and its shutdown moment has an inherent, extremely rare timing race — `close(done)` firing and a per-value fan-out goroutine's `select { case <-done: ; case out[i] <- value: }` becoming ready to send can coincide, and Go's `select` breaks that tie arbitrarily. This is inherent to the exercise's real-clock shutdown test, not a defect in this fix.
 

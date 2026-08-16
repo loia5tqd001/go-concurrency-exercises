@@ -34,19 +34,20 @@ func expectedSequence(n int) []int {
 // resolve on a fake, deterministic clock instead of the real one, so
 // the test is fast and doesn't flake under load.
 //
-// Against the naive Tee (`return in, in`), out1 and out2 are literally
-// the same channel: the two consumer goroutines race to receive from
-// it, so each of the 10 values goes to only ONE of them, never both.
-// The slower consumer, in particular, tends to lose almost every race
-// against the fast one, so its slice ends up far from complete. Either
-// way, at least one of the two slices ends up missing values it
-// should have received, so the exact equality checks below fail.
+// This is a regression check inherited from 14, not a probe for this
+// exercise's own bug: the given starting `Tee` already duplicates
+// correctly (that part of 14 is solved), so this passes before you've
+// changed a line. It exists to catch a rewrite that loses values while
+// restructuring delivery to make closing independent - e.g. an
+// implementation that shares one channel between the two outputs, or
+// drops a value for whichever output is read second - which would
+// leave at least one of the two slices below missing values.
 func TestTeeDuplicatesToBothConsumers(t *testing.T) {
 	synctest.Test(t, func(t *testing.T) {
 		done := make(chan struct{})
 		defer close(done)
 
-		in := StartSensor(10)
+		in := StartSensor(done, 10)
 		out1, out2 := Tee(done, in)
 
 		var fast, slow []int
@@ -97,7 +98,7 @@ func TestTeeDuplicatesToBothConsumersReversedRoles(t *testing.T) {
 		done := make(chan struct{})
 		defer close(done)
 
-		in := StartSensor(10)
+		in := StartSensor(done, 10)
 		out1, out2 := Tee(done, in)
 
 		var fast, slow []int
@@ -191,7 +192,7 @@ func TestTeeDeliversToOneOutputWithoutWaitingOnTheOther(t *testing.T) {
 				defer close(done)
 
 				const n = 3
-				in := StartSensor(n)
+				in := StartSensor(done, n)
 				out1, out2 := Tee(done, in)
 
 				firstOut, otherOut := out1, out2
@@ -259,23 +260,28 @@ func TestTeeDeliversToOneOutputWithoutWaitingOnTheOther(t *testing.T) {
 // drains out1 first. Running it in both orders catches that
 // asymmetry regardless of which index the bug favors.
 //
-// Whichever output is "fast" is drained completely with ordinary
-// sequential receives (no second goroutine, nothing for -race to
-// complain about), each bounded by receiveWithTimeout: a Tee whose
-// per-value fan-out is order-dependent (see
-// TestTeeDeliversToOneOutputWithoutWaitingOnTheOther) would otherwise
-// hang here forever waiting on the untouched slow output, which under
-// synctest surfaces as a raw "deadlock" panic that kills the whole
-// test binary instead of a clean, isolated failure for this test.
-// Once the drain completes, every value the sensor will ever produce
-// has already reached the fast output - there is no future send that
-// could still target it - so it must be free to close immediately,
-// independent of the other output. A synctest.Wait() is used before
-// checking: closing the fast output happens on a background goroutine
-// reacting to the last delivery, which needs a chance to run; Wait()
-// is the right tool here because it's confirming something that has
-// already been triggered has finished, not asking the fake clock to
-// advance through unrelated future timers.
+// Both outputs are drained with ordinary sequential receives (no
+// second goroutine, nothing for -race to complain about), each bounded
+// by receiveWithTimeout: a Tee whose per-value fan-out is
+// order-dependent (see TestTeeDeliversToOneOutputWithoutWaitingOnTheOther)
+// would otherwise leave the fast output's drain loop waiting on the
+// untouched slow output, and receiveWithTimeout's t.Fatalf reports that
+// cleanly and fails just this subtest - it doesn't hang, and (because
+// StartSensor itself also honors `done`, closed by this test's own
+// defer, so it can always unwind rather than being left blocked
+// forever trying to feed a `Tee` that's stopped reading) it doesn't
+// crash the rest of the suite either. Once the fast output's drain
+// completes, every value the sensor will ever produce has already
+// reached it - there is no future send that could still target it -
+// so it must be free to close immediately, independent of the other
+// output. A synctest.Wait() is used before checking: closing an output
+// happens on a background goroutine reacting to the last delivery,
+// which needs a chance to run; Wait() is the right tool here because
+// it's confirming something that has already been triggered has
+// finished, not asking the fake clock to advance through unrelated
+// future timers. The slow output is then drained (and its own prompt
+// close confirmed) the same bounded way, now that the independent-close
+// property being tested no longer requires leaving it untouched.
 func TestTeeClosesEachOutputAsSoonAsItIsFullyDelivered(t *testing.T) {
 	cases := []struct {
 		name        string
@@ -292,7 +298,7 @@ func TestTeeClosesEachOutputAsSoonAsItIsFullyDelivered(t *testing.T) {
 				defer close(done)
 
 				const n = 5
-				in := StartSensor(n)
+				in := StartSensor(done, n)
 				out1, out2 := Tee(done, in)
 
 				fastOut, slowOut := out1, out2
@@ -322,11 +328,21 @@ func TestTeeClosesEachOutputAsSoonAsItIsFullyDelivered(t *testing.T) {
 				}
 
 				var slow []int
-				for v := range slowOut {
-					slow = append(slow, v)
+				for i := 0; i < n; i++ {
+					slow = append(slow, receiveWithTimeout(t, slowOut, budget))
 				}
 				if !reflect.DeepEqual(slow, want) {
 					t.Fatalf("slow=%v, want %v", slow, want)
+				}
+
+				synctest.Wait()
+				select {
+				case v, ok := <-slowOut:
+					if ok {
+						t.Fatalf("slow output produced an extra value (%d) it shouldn't have", v)
+					}
+				default:
+					t.Fatalf("slow output should already be closed: every value has been delivered to it")
 				}
 			})
 		})
@@ -375,11 +391,14 @@ func recvRealTimeWithTimeout(t *testing.T, ch <-chan int, budget time.Duration) 
 // close promptly afterwards instead of continuing to deliver values or
 // hanging forever.
 //
-// Against the naive Tee, out1 and out2 are the same channel as `in`,
-// which never learns that done was closed: it keeps sleeping 5ms and
-// sending its next reading regardless, so the very next read below
-// returns a real value instead of observing the channel closed - which
-// assertClosesPromptly reports as a failure.
+// This is a regression check inherited from 14, not a probe for this
+// exercise's own bug: the given starting `Tee` already abandons both
+// outputs and closes them the moment `done` fires (that part of 14 is
+// solved). It exists to catch a rewrite that, while restructuring
+// delivery to make closing independent, drops or narrows the `done`
+// handling - e.g. only checking `done` in one of the two now-separate
+// per-output delivery paths, so the other one keeps sending stale
+// values or never closes.
 //
 // Each of the initial drain reads is bounded by recvRealTimeWithTimeout
 // rather than a bare receive: an independent-delivery Tee that's
@@ -391,7 +410,7 @@ func teeStopsOnDoneOnce(t *testing.T) {
 	t.Helper()
 
 	done := make(chan struct{})
-	in := StartSensor(50) // far more values than this test will ever consume
+	in := StartSensor(done, 50) // far more values than this test will ever consume
 
 	out1, out2 := Tee(done, in)
 
