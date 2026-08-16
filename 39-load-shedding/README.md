@@ -1,59 +1,58 @@
-# Load-Shedding Balancer: Reject Fast Instead of Queuing Forever
+# Load Shedding: Reject Fast Instead of Blocking the Hot Path
 
-A production-shaped sequel to
-[33](../33-load-balancer)/[33b](../33b-load-balancer-nonblocking-dispatch)'s
-self-scheduling load balancer. `Submit` is the only entry point now.
-Everything after it is already correct and doesn't need touching: the
-`Worker`/`Pool` self-scheduling and the internal dispatch loop that
-never blocks on a busy `Worker` — 33b's fix, ported wholesale.
-
-What's new: `incoming` is a real bounded channel (capacity
-`maxBacklog`), not an unbounded slice — closing 33b's own loose end,
-sustained overload now hits a hard ceiling instead of growing memory
-forever. But a bounded queue raises a question 33b never had to
-answer: **what happens once it's full?**
-
-## The bug
-
-```go
-func (b *Balancer) Submit(req Request) error {
-	b.incoming <- req
-	return nil
-}
-```
+`Queue` is a small, fixed-size pool of workers that process `Job`s
+handed to it via `Submit` - think an application's telemetry client:
+every request calls `Submit` to record a metric, a background pool
+aggregates and ships them somewhere, and this keeps happening for as
+long as the process is up. The one hard rule: recording a metric must
+never slow down the request that triggered it.
 
 ```
-incoming (cap maxBacklog): [███████████] FULL
-dispatch loop's staging slot: occupied
-every Worker: busy
+today:  Submit(job) ──▶ jobs <- job ──▶ blocks until a worker frees up
+                                          (the REQUEST waits on the
+                                           METRIC - backwards)
 
-next Submit(req) ──▶ b.incoming <- req ──▶ blocks... waiting for ANYTHING to free up
-                                             (not a deadlock - system is draining -
-                                              but the caller has no idea how long)
+goal:   Submit(job) ──▶ room right now? ──yes──▶ queued, returns instantly
+                              │
+                              no
+                              ▼
+                         return ErrOverloaded instantly - caller drops
+                         the metric and moves on, unslowed
 ```
 
-Once `incoming`, the dispatch loop's one-item staging slot, and every
-`Worker` are all occupied, the next `Submit` call just sits there. Not
-a deadlock — the system is still draining — but exactly the failure
-mode a real load balancer can't afford: a caller expecting a fast
-yes/no hangs for as long as the balancer stays saturated, with no way
-to know whether to retry, fail over, or give up. Contrast [18](../18-bounded-pipeline-backpressure),
-where the producer is *meant* to feel the slowdown — here the caller
-needs to tell "briefly busy" from "wedged," and blocking can't do that.
+Right now `Submit` is a plain blocking send on a bounded channel. Once
+that channel and every worker are full, the next `Submit` call just
+sits there waiting for *something* to free up. Not a deadlock - the
+workers are still draining - but exactly the failure mode a hot-path
+caller can't afford: it has no idea how long "briefly busy" is going
+to last, and every millisecond it waits is a millisecond stolen from
+the actual request it's supposed to be serving.
 
 ## Your task
 
-Make `Submit` fail fast: the instant `incoming` has no room, return
-`ErrOverloaded` immediately — never block waiting for space.
+Make `Submit` fail fast: the instant `jobs` has no room, return
+`ErrOverloaded` immediately - never block waiting for space to free
+up.
 
 Exported surface stays the same:
 
 ```go
-func NewBalancer(numWorkers, maxBacklog int) *Balancer
-func (b *Balancer) Submit(req Request) error
+func NewQueue(workers, capacity int) *Queue
+func (q *Queue) Submit(job Job) error
 ```
 
-You should not need to change `Request`, `Worker`, `Pool`, or `run`.
+You should not need to change `Job` or `worker`.
+
+## Contrast with 18's backpressure
+
+[18](../18-bounded-pipeline-backpressure) is the mirror image of this
+exercise: there, the producer is *supposed* to feel the slowdown, so
+blocking is the right answer. Here, the caller has somewhere better to
+go the instant it can't get in - drop the metric, retry a cheaper
+path, degrade gracefully - so blocking is exactly wrong. Same shape of
+problem (a bounded channel backed by a fixed pool of workers), opposite
+answer to "what happens when it's full?" - which one is correct
+depends entirely on whether the caller is meant to wait.
 
 ## Hint, if you're stuck
 
@@ -67,10 +66,8 @@ default:
 ```
 
 `select` + `default` tries the send once; if nothing's ready this
-instant, `default` runs instead of waiting. Different flavor of
-non-blocking `select` than 33b's `nil`-channel trick — there, a case
-was disabled entirely so it could never fire; here every case is real,
-and `default` is what runs when none of them can proceed right now.
+instant, `default` runs instead of waiting - the standard idiom for
+"try, don't wait."
 
 ## Test your solution
 
