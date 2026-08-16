@@ -350,6 +350,25 @@ func assertClosesPromptly(t *testing.T, ch <-chan int, name string) {
 	}
 }
 
+// recvRealTimeWithTimeout reads one value from ch on the real clock,
+// failing the test with a clear diagnostic instead of hanging toward
+// Go's default 10-minute test timeout if nothing arrives within budget.
+// This is the real-clock counterpart to receiveWithTimeout above: it's
+// used outside synctest.Test, where there's no fake clock to burn -
+// budget is real wall-clock time, so it must comfortably exceed
+// SensorInterval, not just a few multiples of it.
+func recvRealTimeWithTimeout(t *testing.T, ch <-chan int, budget time.Duration) int {
+	t.Helper()
+
+	select {
+	case v := <-ch:
+		return v
+	case <-time.After(budget):
+		t.Fatalf("no value received within %v - is delivery to this output stalled waiting on the other output?", budget)
+		return 0
+	}
+}
+
 // teeStopsOnDoneOnce wires Tee up to a sensor that produces far more
 // values than the test will ever consume, reads a couple of full
 // rounds from both outputs, closes done, and asserts that both outputs
@@ -361,6 +380,13 @@ func assertClosesPromptly(t *testing.T, ch <-chan int, name string) {
 // sending its next reading regardless, so the very next read below
 // returns a real value instead of observing the channel closed - which
 // assertClosesPromptly reports as a failure.
+//
+// Each of the initial drain reads is bounded by recvRealTimeWithTimeout
+// rather than a bare receive: an independent-delivery Tee that's
+// subtly wrong (e.g. one output's fan-out goroutine stalls under some
+// interleaving) could otherwise hang this test - and every test that
+// shares this helper - toward the default 10-minute timeout instead of
+// failing fast with a diagnostic.
 func teeStopsOnDoneOnce(t *testing.T) {
 	t.Helper()
 
@@ -371,10 +397,11 @@ func teeStopsOnDoneOnce(t *testing.T) {
 
 	// Drain a couple of full rounds so both outputs have made progress
 	// before we ask everything to shut down.
-	<-out1
-	<-out2
-	<-out1
-	<-out2
+	const drainBudget = 200 * time.Millisecond
+	recvRealTimeWithTimeout(t, out1, drainBudget)
+	recvRealTimeWithTimeout(t, out2, drainBudget)
+	recvRealTimeWithTimeout(t, out1, drainBudget)
+	recvRealTimeWithTimeout(t, out2, drainBudget)
 
 	close(done)
 
