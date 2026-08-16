@@ -16,11 +16,12 @@
 //                                                      closed channel
 //                                                      → PANIC
 //
-// Close waits for jobs accepted so far, then closes jobs. Submit sends
-// on that channel unconditionally. If ANY goroutine calls Submit while
-// another runs Close, that send can race the close. This isn't a rare
-// corner case: it's the normal way Submit/Close get called wherever
-// more than one goroutine might reach for the same Pool near shutdown.
+// Submit sends on that channel unconditionally, and Close closes it
+// with no regard for what's still in flight. If ANY goroutine calls
+// Submit while another runs Close, that send can race the close. This
+// isn't a rare corner case: it's the normal way Submit/Close get
+// called wherever more than one goroutine might reach for the same
+// Pool near shutdown.
 //
 // Your task is to fix Pool so that:
 //
@@ -54,7 +55,6 @@ import (
 // to it via Submit.
 type Pool struct {
 	jobs chan func()
-	wg   sync.WaitGroup
 }
 
 // NewPool starts a pool of `workers` long-lived goroutines that pull
@@ -72,7 +72,6 @@ func NewPool(workers int) *Pool {
 func (p *Pool) worker() {
 	for job := range p.jobs {
 		job()
-		p.wg.Done()
 	}
 }
 
@@ -81,7 +80,6 @@ func (p *Pool) worker() {
 // never run. Submit may be called concurrently, from any number of
 // goroutines, even while Close is running.
 func (p *Pool) Submit(job func()) (accepted bool) {
-	p.wg.Add(1)
 	p.jobs <- job
 	return true
 }
@@ -89,7 +87,6 @@ func (p *Pool) Submit(job func()) (accepted bool) {
 // Close stops accepting new jobs and blocks until every job that was
 // ever accepted has fully finished running.
 func (p *Pool) Close() {
-	p.wg.Wait()
 	close(p.jobs)
 }
 

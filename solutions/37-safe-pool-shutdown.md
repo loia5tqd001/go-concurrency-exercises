@@ -8,13 +8,11 @@ Zero coordination between `Submit` and `Close`:
 
 ```go
 func (p *Pool) Submit(job func()) (accepted bool) {
-	p.wg.Add(1)
 	p.jobs <- job
 	return true
 }
 
 func (p *Pool) Close() {
-	p.wg.Wait()
 	close(p.jobs)
 }
 ```

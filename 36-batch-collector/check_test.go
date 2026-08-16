@@ -35,6 +35,27 @@ func recvResult(t *testing.T, ch <-chan Result) Result {
 	}
 }
 
+// addWithTimeout bounds the call to Add itself, not just the receive
+// from the channel it returns. A Collector that runs fn synchronously
+// inside Add (instead of handing the batch to a background goroutine
+// once it fires) can block the caller of Add indefinitely - this turns
+// that into a clear, fast test failure instead of a 10-minute `go test`
+// timeout with no useful message.
+func addWithTimeout(t *testing.T, c *Collector, request int) <-chan Result {
+	t.Helper()
+
+	out := make(chan (<-chan Result), 1)
+	go func() { out <- c.Add(request) }()
+
+	select {
+	case ch := <-out:
+		return ch
+	case <-time.After(recvTimeout):
+		t.Fatalf("Add(%d) did not return within %s - Add must never block on fn itself", request, recvTimeout)
+		return nil
+	}
+}
+
 func doubleFn(callCount *int32, mu *sync.Mutex) BatchFunc {
 	return func(requests []int) ([]int, error) {
 		mu.Lock()
@@ -352,8 +373,8 @@ func TestCollectorCloseRespectsContextDeadline(t *testing.T) {
 
 	c := NewCollector(Config{MaxBatchSize: 2, MaxWait: time.Hour}, fn)
 
-	ch0 := c.Add(1)
-	ch1 := c.Add(2) // pushes MaxBatchSize, fn starts running in the background
+	ch0 := addWithTimeout(t, c, 1)
+	ch1 := addWithTimeout(t, c, 2) // pushes MaxBatchSize, fn starts running in the background
 
 	select {
 	case <-batchStarted:

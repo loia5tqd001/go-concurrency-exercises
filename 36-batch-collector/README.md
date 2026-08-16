@@ -28,20 +28,16 @@ bounded latency, full batch or not. And when the process is shutting
 down, it needs to stop taking new orders, finish whatever's already
 queued, and say so - not silently drop requests or hang forever.
 
-Right now `Collector` only knows how to do the easy part, and does
-even that with **zero synchronization**:
+Right now `Collector` doesn't batch anything at all:
 
-- `Add` mutates two shared slices with no synchronization at all, from
-  however many goroutines call it - a data race on every field, the
-  same failure this exercise always starts from.
-- `MaxWait` is accepted in `Config` and never used. A batch that never
-  reaches `MaxBatchSize` just sits there forever - every caller in it
-  blocks with no way out, even though nothing is actually broken, the
-  batch is just short.
-- `Close` sets a bool and returns immediately. It doesn't stop `Add`
-  from still accepting requests into a batch nobody will ever flush,
-  doesn't fire whatever's already queued, and doesn't wait for a batch
-  that's mid-flight to actually finish before returning.
+- `Add` calls `fn` immediately, with a "batch" of exactly the one
+  request it was given - the entire "coalesce many callers into one
+  round-trip" idea this exercise is about doesn't exist yet.
+- `MaxBatchSize` and `MaxWait` are both accepted in `Config` and never
+  looked at.
+- `Close` returns `nil` immediately. It doesn't stop `Add` from still
+  accepting requests, doesn't fire anything, and doesn't wait for
+  anything.
 
 ## Your task
 

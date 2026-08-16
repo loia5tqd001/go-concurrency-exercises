@@ -11,13 +11,11 @@ Right now there's zero coordination between the two:
 
 ```go
 func (p *Pool) Submit(job func()) (accepted bool) {
-	p.wg.Add(1)
 	p.jobs <- job
 	return true
 }
 
 func (p *Pool) Close() {
-	p.wg.Wait()
 	close(p.jobs)
 }
 ```
@@ -29,8 +27,8 @@ goroutine B: Close()     ──▶ close(p.jobs)  ─────┘
                                                    send on a closed channel → PANIC
 ```
 
-`Close` waits for jobs accepted so far, then closes `jobs`. `Submit`
-sends on that channel unconditionally. If *any* goroutine calls
+`Close` closes `jobs` with no regard for what's still in flight.
+`Submit` sends on that channel unconditionally. If *any* goroutine calls
 `Submit` while another runs `Close`, that send can race the close —
 and sending on a closed channel panics. This isn't a rare corner case:
 it's the ordinary way `Submit`/`Close` get called wherever more than
@@ -57,6 +55,10 @@ func (p *Pool) Close()
 ```
 
 ## Why "wrap the send in `recover`" isn't enough
+
+Say you've added a `sync.WaitGroup` field to `Pool` yourself, to track
+when accepted jobs have actually finished. The single most tempting
+near-miss then looks like this:
 
 ```go
 func (p *Pool) Submit(job func()) (accepted bool) {

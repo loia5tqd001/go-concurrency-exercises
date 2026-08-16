@@ -22,18 +22,16 @@
 // wait forever either - every caller needs their answer within some
 // bounded latency, full batch or not.
 //
-// Right now Collector only knows how to do the first part, badly:
+// Right now Collector doesn't batch anything at all:
 //
-//   - Add appends to two shared slices with NO synchronization at
-//     all, from however many goroutines call it - a data race on
-//     every field.
-//   - MaxWait is accepted in Config and never used. A batch that never
-//     reaches MaxBatchSize just sits there forever - every caller in
-//     it blocks with no way out.
-//   - Close sets a bool and returns immediately. It doesn't stop Add
-//     from still accepting requests into a batch nobody will ever
-//     flush, doesn't fire whatever's already queued, and doesn't wait
-//     for a batch that's mid-flight to actually finish.
+//   - Add calls fn immediately, with a "batch" of exactly the one
+//     request it was given - the entire "coalesce many callers into
+//     one round-trip" idea this exercise is about doesn't exist yet.
+//   - MaxBatchSize and MaxWait are both accepted in Config and never
+//     looked at.
+//   - Close returns nil immediately. It doesn't stop Add from still
+//     accepting requests, doesn't fire anything, and doesn't wait for
+//     anything.
 //
 // Your task is to fix Collector so that:
 //
@@ -117,10 +115,6 @@ type Config struct {
 type Collector struct {
 	cfg Config
 	fn  BatchFunc
-
-	requests  []int
-	resultChs []chan Result
-	closed    bool
 }
 
 // NewCollector returns a Collector that batches calls to Add per cfg,
@@ -136,36 +130,18 @@ func NewCollector(cfg Config, fn BatchFunc) *Collector {
 func (c *Collector) Add(request int) <-chan Result {
 	ch := make(chan Result, 1)
 
-	c.requests = append(c.requests, request)
-	c.resultChs = append(c.resultChs, ch)
-
-	if len(c.requests) >= c.cfg.MaxBatchSize {
-		c.execute()
+	responses, err := c.fn([]int{request})
+	if err != nil {
+		ch <- Result{Err: err}
+	} else {
+		ch <- Result{Value: responses[0]}
 	}
 
 	return ch
 }
 
-// execute runs fn against every request queued so far and delivers
-// each response back through its matching caller's channel.
-func (c *Collector) execute() {
-	responses, err := c.fn(c.requests)
-
-	for i, resultCh := range c.resultChs {
-		if err != nil {
-			resultCh <- Result{Err: err}
-			continue
-		}
-		resultCh <- Result{Value: responses[i]}
-	}
-
-	c.requests = nil
-	c.resultChs = nil
-}
-
 // Close stops the Collector from accepting new requests.
 func (c *Collector) Close(ctx context.Context) error {
-	c.closed = true
 	return nil
 }
 

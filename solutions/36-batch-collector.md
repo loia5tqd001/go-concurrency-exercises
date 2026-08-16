@@ -4,58 +4,54 @@
 
 ## The problem
 
-`Add` mutates shared state with **no synchronization**, `MaxWait` is
-declared in `Config` but never read, and `Close` is a bare flag flip:
+`Add` doesn't batch anything — it calls `fn` immediately with a batch
+of exactly the one request it was given — and `Close` is a no-op:
 
 ```go
 func (c *Collector) Add(request int) <-chan Result {
 	ch := make(chan Result, 1)
-	c.requests = append(c.requests, request)
-	c.resultChs = append(c.resultChs, ch)
-	if len(c.requests) >= c.cfg.MaxBatchSize {
-		c.execute()
+	responses, err := c.fn([]int{request})
+	if err != nil {
+		ch <- Result{Err: err}
+	} else {
+		ch <- Result{Value: responses[0]}
 	}
 	return ch
 }
 
 func (c *Collector) Close(ctx context.Context) error {
-	c.closed = true
 	return nil
 }
 ```
 
 **Verified**, three separate ways:
 
-Concurrent `Add` calls race on the shared slices — lost appends mean
-the count never reaches `MaxBatchSize`, so `fn` never runs and every
-caller in that batch hangs until the test's own timeout:
+`fn` runs once per request instead of once per batch — the entire
+point of coalescing never happens:
 
 ```
 === RUN   TestCollectorFiresOnMaxBatchSize
-    check_test.go:68: timed out after 2s waiting for a Result - the batch likely never fired
-    check_test.go:78: caller 1: got 0, want 2
-    check_test.go:85: fn ran 0 time(s), want exactly 1
-    testing.go:1617: race detected during execution of test
---- FAIL: TestCollectorFiresOnMaxBatchSize (2.00s)
+    check_test.go:106: fn ran 5 time(s), want exactly 1
+--- FAIL: TestCollectorFiresOnMaxBatchSize (0.00s)
 ```
 
-`MaxWait` being ignored means a batch short of `MaxBatchSize` waits
-forever, not just until its deadline:
+`MaxWait` being ignored isn't visible as a hang here — there's no
+batching to wait for something to join — it shows up as the same
+one-`fn`-call-per-request symptom instead of one-call-per-batch:
 
 ```
 === RUN   TestCollectorFiresOnMaxWaitWithPartialBatch
-    check_test.go:82: timed out after 2s waiting for a Result
---- FAIL: TestCollectorFiresOnMaxWaitWithPartialBatch (2.00s)
+    check_test.go:135: fn ran 2 time(s), want exactly 1
+--- FAIL: TestCollectorFiresOnMaxWaitWithPartialBatch (0.00s)
 ```
 
-`Close` not checking its own flag in `Add`, nor flushing anything,
-means a request added right after `Close` returns just sits in a batch
-nobody will ever fire:
+`Close` never flips anything `Add` checks, so a request made after
+`Close` has already returned still goes through as if nothing happened:
 
 ```
 === RUN   TestCollectorCloseRejectsSubsequentAdds
-    check_test.go:221: timed out after 2s waiting for a Result
---- FAIL: TestCollectorCloseRejectsSubsequentAdds (2.00s)
+    check_test.go:272: Add after Close: got err <nil>, want collector: closed
+--- FAIL: TestCollectorCloseRejectsSubsequentAdds (0.00s)
 ```
 
 ## The fix
