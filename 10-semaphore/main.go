@@ -1,45 +1,40 @@
 //////////////////////////////////////////////////////////////////////
 //
-// Given is a function FetchAll that is supposed to fetch every request
-// in reqs from api (see mockapi.go), running enough of them
-// concurrently to be fast, but never so many at once that the API
-// starts rejecting calls with ErrTooManyConcurrentRequests. The API
-// only tolerates a small number of in-flight calls at a time - go
-// over that budget and it starts failing requests instead of queuing
-// them.
+// FetchAll is supposed to fetch every request in reqs from api (see
+// mockapi.go), running enough of them concurrently to be fast, but
+// never so many at once that the API starts rejecting calls with
+// ErrTooManyConcurrentRequests - go over its budget and it fails
+// requests instead of queuing them.
+//
+//   today (broken):                    goal:
+//   12 requests, fired all at once     12 requests, gated to N in flight
+//      │   │   │   │   │  ...             │   │   │   │   │  ...
+//      ▼   ▼   ▼   ▼   ▼                  ▼   ▼   ▼   ▼   ▼
+//   api.Call ×12 at once - blows        [ N slots ] - the rest queue
+//   past the API's budget, most         here
+//   come back ErrTooManyConcurrent            │
+//   Requests                                  ▼
+//                                        api.Call, one per slot - none
+//                                        ever rejected, still running
+//                                        in parallel
 //
 // Right now FetchAll does neither well: it fires off every request
-// all at once with no concurrency limit whatsoever, so as soon as
-// there are more requests than the API can handle simultaneously, it
-// regularly blows past the API's concurrency budget and gets a pile
-// of errors back.
+// all at once with no concurrency limit whatsoever.
 //
 // Your task is to bound how many requests are in flight at once by
 // implementing your OWN counting semaphore from scratch, using a
 // buffered channel of struct{} - do not import
 // golang.org/x/sync/semaphore or any other pre-built semaphore, the
-// whole point of this exercise is to build one yourself. A buffered
-// channel makes an easy semaphore: create it with
+// whole point of this exercise is to build one yourself.
 //
-//     sem := make(chan struct{}, maxInFlight)
-//
-// then have each goroutine acquire a slot before calling api.Call by
-// sending on the channel (sem <- struct{}{}), and release its slot
-// afterwards by receiving from the channel (<-sem). Because the
-// channel only holds maxInFlight values, at most maxInFlight
-// goroutines can be holding a slot at any given time - anything past
-// that blocks until a slot is released.
-//
-// Pick a fixed maxInFlight that is strictly less than the API's own
-// maxConcurrent budget. Below, the API is constructed with
-// NewFlakyAPI(3), meaning it happily tolerates 3 concurrent calls and
-// only rejects the 4th and beyond - so set your own maxInFlight to 2,
-// giving yourself headroom below the API's real limit rather than
-// riding the exact edge of it. At the same time, make sure requests
-// are still dispatched concurrently rather than one at a time - the
-// point of a semaphore is to cap concurrency, not eliminate it, so
-// FetchAll should still be meaningfully faster than a sequential
-// loop. Keep the function signature identical:
+// Pick a fixed cap that is strictly less than the API's own
+// maxConcurrent budget (see NewFlakyAPI below), giving yourself
+// headroom rather than riding the exact edge of it. At the same
+// time, make sure requests are still dispatched concurrently rather
+// than one at a time - the point of a semaphore is to cap
+// concurrency, not eliminate it, so FetchAll should still be
+// meaningfully faster than a sequential loop. Keep the function
+// signature identical:
 //
 //     func FetchAll(api *FlakyAPI, reqs []string) []string
 //
