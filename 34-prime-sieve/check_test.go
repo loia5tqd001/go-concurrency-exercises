@@ -12,6 +12,36 @@ import (
 	"time"
 )
 
+// primesTimeout bounds how long a single call to Primes may take
+// before a test gives up on it. The naive scaffold leaks goroutines
+// but still returns promptly - it never blocks inside Primes itself.
+// The wrong turn that CAN make Primes hang forever is a fix that tries
+// to wait for the whole chain to drain, or to close done, in the wrong
+// order: every stage is still blocked trying to send, and nothing is
+// left reading, so the wait never completes. This guard turns that
+// deadlock into a fast failure instead of a hang toward Go's default
+// test timeout.
+const primesTimeout = 2 * time.Second
+
+// primesWithTimeout calls Primes(n) on its own goroutine and fails the
+// test fast if Primes itself never returns.
+func primesWithTimeout(t *testing.T, n int) []int {
+	t.Helper()
+
+	resultCh := make(chan []int, 1)
+	go func() {
+		resultCh <- Primes(n)
+	}()
+
+	select {
+	case got := <-resultCh:
+		return got
+	case <-time.After(primesTimeout):
+		t.Fatalf("Primes(%d) did not return within %s", n, primesTimeout)
+		return nil
+	}
+}
+
 // TestPrimesReturnsCorrectPrimes checks that Primes(n) returns exactly
 // the first n primes, in order. This passes against the naive
 // implementation too - the sieve itself always computes the right
@@ -20,7 +50,7 @@ import (
 func TestPrimesReturnsCorrectPrimes(t *testing.T) {
 	want := []int{2, 3, 5, 7, 11, 13, 17, 19, 23, 29}
 
-	got := Primes(len(want))
+	got := primesWithTimeout(t, len(want))
 	if len(got) != len(want) {
 		t.Fatalf("Primes(%d) returned %d primes, want %d: %v", len(want), len(got), len(want), got)
 	}
@@ -60,7 +90,7 @@ func TestPrimesDoesNotLeakGoroutines(t *testing.T) {
 	before := runtime.NumGoroutine()
 
 	const n = 50
-	got := Primes(n)
+	got := primesWithTimeout(t, n)
 	if len(got) != n {
 		t.Fatalf("Primes(%d) returned %d primes, want %d", n, len(got), n)
 	}
@@ -82,7 +112,7 @@ func TestPrimesRepeatedCallsDoNotAccumulateGoroutines(t *testing.T) {
 
 	const calls = 5
 	for i := 0; i < calls; i++ {
-		Primes(30)
+		primesWithTimeout(t, 30)
 	}
 
 	after := numGoroutinesToSettle(before+3, 500*time.Millisecond)

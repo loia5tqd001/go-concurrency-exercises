@@ -58,7 +58,7 @@ candidate integer down a pipeline nobody is reading from anymore:
 
 ```
 --- FAIL: TestPrimesDoesNotLeakGoroutines
-    check_test.go:70: goroutine count went from 13 to 64 after Primes(50)
+    check_test.go:100: goroutine count went from 13 to 64 after Primes(50)
     returned (want it back near 13) - looks like the generate/filter chain
     was never told to stop and is still running in the background
 ```

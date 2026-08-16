@@ -22,26 +22,8 @@ correct; don't change either one.
 
 ## The bug
 
-`Primes` wires the whole chain up with `nil` as `done`:
-
-```go
-ch := generate(nil)
-...
-ch = filter(nil, ch, prime)
-```
-
-A receive on a nil channel inside `select` is never ready, so every
-stage's shutdown case is dead code:
-
-```go
-select {
-case out <- i:     // ← the only case that can ever fire
-case <-done:        // ← done is nil: blocks forever, never wins
-}
-```
-
-The primes `Primes` returns are all correct — the leak happens *after*
-it returns:
+Every prime `Primes` returns is correct — the bug is entirely in what's
+left running *after* it returns:
 
 ```
 Primes(50) returns its 50 primes
@@ -51,7 +33,7 @@ nobody is reading from the chain anymore ──▶ but every stage is still
                                               trying to send its next
                                               candidate downstream
         │
-generate:  out <- 51        ⇐ blocks forever, no done to rescue it
+generate:  out <- 51        ⇐ blocks forever
 filter(2): out <- 53        ⇐ blocks forever
 filter(3): out <- 53        ⇐ blocks forever
    ...                          (one blocked goroutine per stage)

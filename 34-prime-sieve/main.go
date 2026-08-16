@@ -17,14 +17,12 @@
 //
 // The bug is entirely in Primes. It builds the chain exactly as
 // described and reads exactly n primes off the end of it, and every
-// value it returns is correct - but look at what it hands generate and
-// every filter as their done channel: nil. A receive on a nil channel
-// inside a select is never ready, so the done case in every stage's
-// select can never fire. Once Primes has its n-th prime and returns,
-// every one of those n+1 goroutines is still out there, blocked
-// forever trying to send the NEXT candidate integer to a pipeline
-// nobody is reading from anymore. Call Primes(50) a few times in a row
-// and you leak dozens of goroutines every single call, forever.
+// value it returns is correct - but once it has its n-th prime and
+// returns, every one of those n+1 goroutines is still out there,
+// blocked forever trying to send the NEXT candidate integer to a
+// pipeline nobody is reading from anymore. Call Primes(50) a few times
+// in a row and you leak dozens of goroutines every single call,
+// forever.
 //
 // Your task is to fix Primes so that once it has collected n primes,
 // it shuts the entire chain down - generate and every filter stage it
@@ -92,9 +90,9 @@ func filter(done <-chan struct{}, in <-chan int, prime int) <-chan int {
 // everything flowing past it.
 //
 // NAIVE / BROKEN: it builds and drains exactly that pipeline, and the
-// n primes it returns are always correct - but it wires every stage up
-// with a nil done channel, so none of them can ever be told to stop.
-// Every call leaks its entire n+1-goroutine chain, forever.
+// n primes it returns are always correct - but nothing ever tells any
+// stage in the chain to stop. Every call leaks its entire
+// n+1-goroutine chain, forever.
 func Primes(n int) []int {
 	ch := generate(nil)
 
