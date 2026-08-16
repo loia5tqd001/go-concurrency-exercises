@@ -402,6 +402,135 @@ when every caller you'd block is already waiting on that exact call
 anyway - never when a *different* caller's unrelated work is what's
 waiting behind the lock.
 
+## Alternative: one owner goroutine instead of a lock
+
+The mutex design above needs a `fired` flag and the WaitGroup-inside-
+the-lock discipline specifically because *three different goroutines*
+(the caller reaching `MaxBatchSize`, the timer's own goroutine, and
+whichever goroutine calls `Close`) can all try to decide "fire this
+batch" at once. [19](../19-actor-model)'s answer to "many goroutines,
+one piece of shared state" applies here too: give one long-lived
+goroutine sole ownership of the batch, and make every trigger - a new
+request, the deadline, `Close` - arrive as a message on a channel
+instead of a lock acquisition.
+
+```go
+type request struct {
+	value int
+	reply chan Result
+}
+
+type Collector struct {
+	cfg  Config
+	fn   BatchFunc
+	reqs chan request
+	stop chan chan error // Close sends its own reply-channel in here
+	done chan struct{}   // closed once the owner goroutine has exited
+}
+
+func NewCollector(cfg Config, fn BatchFunc) *Collector {
+	c := &Collector{
+		cfg:  cfg,
+		fn:   fn,
+		reqs: make(chan request),
+		stop: make(chan chan error),
+		done: make(chan struct{}),
+	}
+	go c.run()
+	return c
+}
+
+func (c *Collector) Add(value int) <-chan Result {
+	reply := make(chan Result, 1)
+	select {
+	case c.reqs <- request{value, reply}:
+	case <-c.done:
+		reply <- Result{Err: ErrCollectorClosed}
+	}
+	return reply
+}
+
+// run is the sole owner of the current batch. Every trigger this
+// exercise cares about - a request that fills the batch, the batch's
+// own deadline, and Close - is just another case in this one select,
+// so only ever one goroutine can decide "fire now".
+func (c *Collector) run() {
+	defer close(c.done)
+
+	var current []request
+	var deadline <-chan time.Time
+	var inflight sync.WaitGroup
+
+	fire := func() {
+		if len(current) == 0 {
+			return
+		}
+		batch := current
+		current, deadline = nil, nil
+		inflight.Add(1) // same goroutine that will Wait() - no race to order
+		go func() { defer inflight.Done(); c.runBatch(batch) }()
+	}
+
+	for {
+		select {
+		case req := <-c.reqs:
+			current = append(current, req)
+			if len(current) == 1 && c.cfg.MaxWait > 0 {
+				deadline = time.After(c.cfg.MaxWait)
+			}
+			if len(current) >= c.cfg.MaxBatchSize {
+				fire()
+			}
+		case <-deadline:
+			fire()
+		case reply := <-c.stop:
+			fire()
+			go func() { inflight.Wait(); reply <- nil }()
+			return
+		}
+	}
+}
+```
+
+Both of this exercise's headline traps disappear structurally rather
+than by discipline: there's no `fired` flag because only `run` ever
+decides to fire, and there's no WaitGroup-ordering hazard because
+`inflight.Add(1)` and the "is a batch pending" check both happen inside
+the same goroutine, in program order - nothing to race against.
+
+That's not "no synchronization," though - it's synchronization moved,
+not removed, and it comes with its own cost:
+
+- `Add` still needs a way to fail fast after `Close`: sending on
+  `c.reqs` would block forever once `run` has returned, so `Add` has to
+  race that send against `c.done` closing - the channel equivalent of
+  the mutex version's `if c.closed`.
+- The deadline timer has to be armed exactly on empty→non-empty and
+  cleared on every fire (`deadline = nil` disarms the `<-deadline` case
+  entirely rather than leaving a stale channel to accidentally select
+  on) - get that wrong and either a batch never gets a deadline or an
+  old batch's timer fires into a new one, the same stale-timer hazard
+  as the mutex version, just relocated into the select's bookkeeping
+  instead of a `c.batch == b` check.
+- `Close`'s `ctx` handling (bounding the wait, not `fn`'s runtime) still
+  has to be wired in - omitted above for brevity, but it's the same
+  "race `inflight.Wait()` against `ctx.Done()`" shape as the mutex
+  version, just triggered by the `c.stop` case instead of `Close`
+  itself holding a lock.
+- One extra goroutine lives for the Collector's entire lifetime
+  (`run`), not just for the duration of a batch - `Close` returning
+  must mean it has actually exited, or the "no leaked goroutines" bar
+  this repo holds every solution to slips.
+
+Neither design is strictly simpler: the mutex version puts three
+triggers under one flag-and-lock discipline that has to be applied
+correctly in three call sites; the channel version puts them under one
+select loop where the bug moves from "did I check `fired` under the
+lock" to "did I get the timer-arm/disarm bookkeeping right." Pick
+based on which invariant your team finds easier to keep honest under
+review - not because one is "the real concurrent Go way" and the other
+isn't.
+
 ## Key takeaways
 
 - A rolling batcher needs per-batch identity (a struct, not scattered

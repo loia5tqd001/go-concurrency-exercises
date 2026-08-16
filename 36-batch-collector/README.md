@@ -93,56 +93,32 @@ batch's MaxWait timer fires  ──────┼──▶  EXACTLY ONE of thes
 Close is called            ────────┘      call fn for this one batch
 ```
 
-The fix is a `fired`-style flag on the batch itself, checked-and-set as
-one atomic step under the same lock that guards the batch's state, so
-whichever of the three gets there first is the only one that ever sees
-`false`. The other two see `true` and back off - no re-running `fn`, no
-touching a channel that already got its `Result`.
-
-There's a second, quieter version of this same race worth calling out
-because it's easy to trust too much: `time.Timer.Stop()` does **not**
-guarantee its function hasn't already started running. Calling `Stop()`
-the moment the count trigger fires does not, by itself, prevent that
-batch's deadline timer from *also* calling its callback concurrently -
-the same `fired` flag, checked under the lock inside that callback too,
-is what actually closes the gap, not the `Stop()` call.
+Worth trusting less than it looks like: `time.Timer.Stop()` does
+**not** guarantee its function hasn't already started running. Calling
+`Stop()` the moment the count trigger fires does not, by itself,
+prevent that batch's deadline timer from *also* calling its callback
+concurrently a moment later - whatever decides "has this batch already
+fired" has to hold up even when the count path and the timer path are
+both live at once, not just when they're neatly sequential.
 
 ## Rolling to the next batch
 
 Once one batch fires, `Add` needs to start filling a *new* one -
-forever, not just once. That means each batch needs its own identity
-(its own slice of requests, its own timer, its own `fired` flag), and
-whichever trigger fires a batch needs to detach *that specific batch*
-from "the currently open one" without disturbing whatever batch may
-already be open by the time the trigger gets around to firing. A stale
-deadline timer belonging to a batch that already fired by count, if it
-isn't checked against that batch's own `fired` flag specifically (and
-not some shared, Collector-wide flag), can otherwise reset or corrupt
-whatever *new* batch has opened in the meantime.
+forever, not just once. Whichever trigger fires a batch has to detach
+*that specific batch* from "the currently open one" without disturbing
+whatever batch may already be open by the time the trigger gets around
+to firing: a stale deadline timer belonging to a batch that already
+fired by count must not be able to reset or corrupt whatever *new*
+batch has opened in the meantime.
 
-## Close: stop, flush, wait - or give up waiting
+## Close: a hazard worth building a test for
 
-`Close` has three jobs, in order: stop accepting new requests, fire
-whatever's still queued as one final batch, and then wait for every
-batch - including that final one - to actually finish. The tradeoff
-`ctx` buys you here mirrors `http.Server.Shutdown` exactly: it bounds
-how long `Close` itself waits, not how long the batch's own `fn` is
-allowed to run. If `ctx` expires first, `Close` returns `ctx.Err()`
-and stops waiting - but the batch that's still mid-flight keeps running
-to completion in the background regardless; `Close` giving up on
-waiting for it isn't the same as cancelling it.
-
-One easy-to-miss ordering matters here: whatever mechanism `Close`
-uses to know "every batch has finished" (a `sync.WaitGroup` is the
-natural choice) must have its "one more batch just started" side
-recorded **before** the lock that also guards `Close`'s own view of
-"is there a batch still pending" is released - not after. Do the
-bookkeeping after unlocking instead, and there's a window where `Close`
-can observe zero batches in flight and return, while a batch that
-*just* started firing (from a concurrent `Add` or a timer that fired a
-moment earlier) hasn't recorded itself yet - `go test -race` will catch
-exactly this if it happens, but only if a test actually forces the
-two to race concurrently, which is worth building deliberately.
+Whatever mechanism `Close` uses to know "every batch has finished"
+must never be able to observe zero batches in flight while a batch
+that *just* started firing (from a concurrent `Add`, or a timer that
+fired moments earlier) hasn't been counted yet. `go test -race` catches
+exactly this ordering bug - but only if a test actually forces the two
+to race concurrently, which is worth building deliberately.
 
 ## Test your solution
 
