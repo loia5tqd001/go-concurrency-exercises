@@ -233,9 +233,15 @@ low, 2 = moderate, 3 = high):
   control flow (a loop + goroutine + synchronization placement). 3 =
   design a new composite type with its own lifecycle, used across
   multiple methods.
-- **D. Trap subtlety** — a single well-known idiom applied directly
-  (0-1), one documented near-miss trap that looks correct but isn't
-  (2), or multiple compounding traps/edge cases (3)?
+- **D. Trap subtlety** — score the trap a solver hits on the *path of
+  least resistance* (the fix most solvers reach for first), not the
+  most subtle trap the solutions doc happens to document. A single
+  well-known idiom applied directly (0-1), one documented near-miss
+  trap that looks correct but isn't *and that the natural first
+  attempt actually walks into* (2), or multiple compounding traps/edge
+  cases on that natural path (3). A trap that only catches someone
+  deliberately trying a fancier optimization doesn't count — score
+  what the obvious fix runs into, not what an advanced one might.
 - **E. Shutdown/lifecycle burden** — 0 = no shutdown concern at all. 1
   = a simple one-time `Close` with no concurrency concern. 2 = `Close`
   must coordinate with in-flight work but only one caller/trigger. 3 =
@@ -261,6 +267,15 @@ the whole exercise that hard on its own. Don't average the five scores
 together; use them as supporting evidence for a holistic placement
 against the anchors, and say so explicitly if an exercise is genuinely
 borderline between two tiers rather than forcing a confident pick.
+
+**Lettered sequels never score below their parent.** `14b`/`16b`/`33b`
+are defined as "same lesson, harder variant" (see SKILL.md step 1) —
+that's a structural guarantee, not just a naming convention. If scoring
+a sequel in isolation suggests a lower tier than its parent (e.g. its
+own new surface is small because it builds on already-correct inherited
+machinery), that means the *parent's* tier is the one worth
+re-examining, or the sequel should floor at the parent's tier — never
+publish a sequel rated easier than the exercise it follows.
 
 ## Root README table
 

@@ -10,6 +10,14 @@
       "request": "launch",
       "mode": "auto",
       "program": "${fileDirname}"
+    },
+    {
+      "name": "Launch Package (race)",
+      "type": "go",
+      "request": "launch",
+      "mode": "auto",
+      "program": "${fileDirname}",
+      "buildFlags": "-race"
     }
   ]
 }
