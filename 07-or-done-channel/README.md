@@ -9,10 +9,23 @@ the consumer stopped listening.
 closing `done`, without leaking the forwarding goroutine or forcing
 every read site to write its own done-aware `select`.
 
-Currently `orDone` just does `return c` - a no-op. Closing `done` has
-no effect: the wrapped channel is literally the same channel, so the
-producer can end up blocked forever trying to send a value nobody
-will ever read again.
+Currently `orDone` just does `return c` - a no-op:
+
+```
+Today:   c ──────────────────────────▶ out        (out IS c, literally)
+
+         close(done)  ✗ never observed anywhere - orDone doesn't even
+                         have a goroutine that could react to it
+
+Goal:    c ──▶ [forwarder goroutine] ──▶ out
+                 │                 │
+                 selects on        selects on
+                 <-c  or  <-done   out<-v  or  <-done
+
+         close(done) ──▶ unblocks whichever select is currently
+                          parked (waiting on c, or waiting to send)
+                          ──▶ forwarder returns ──▶ close(out)
+```
 
 ## See the bug by running it
 
@@ -28,14 +41,13 @@ metric: 3
 metric: 4
 metric: 5
 done reading, done closed - checking whether orDone actually stopped...
-unexpected: got a value after done closed: 6 true
+unexpected: got a value after done closed: 6
 ```
 
-Since `orDone` is a no-op, `out` literally *is* `stream` - closing
-`done` does nothing to it. `StartMetricStream`'s goroutine is still
-ticking every 20ms, so the next value (6) shows up right on schedule
-instead of the channel closing. Once you implement `orDone` for real,
-that last read should instead see `out` closed (`ok == false`).
+`StartMetricStream`'s goroutine is still ticking every 20ms regardless
+of `done`, so the next value (6) shows up right on schedule instead of
+`out` closing. Once you implement `orDone` for real, that last read
+should instead see `out` closed (`ok == false`).
 
 ## Your task
 
