@@ -2,7 +2,19 @@
 
 This exercise picks up right where [16](../16-errgroup-failfast) left off. Given is a `Group` whose `Go`/`Wait` pair already does everything 16 asked for — `Go` launches tasks concurrently, tracked via an internal `sync.WaitGroup`, and safely captures the first error via `sync.Once`. What's new here is `WithContext`, meant to mimic `golang.org/x/sync/errgroup.WithContext`: it should hand back a `*Group` alongside a `context.Context` that gets cancelled the instant any task fails, so cooperating siblings can notice via `ctx.Done()` and stop early instead of running to completion regardless — and that also gets cancelled once `Wait` returns, even if every task succeeded, so its resources are never leaked.
 
-The current `WithContext` just hands back the same `ctx` it was given, completely unchanged — so nothing is ever cancelled, on either the failure path or the success path.
+The current `WithContext` just hands back the same `ctx` it was given, completely unchanged:
+
+```
+today:  WithContext(ctx) ──▶ ctx, unchanged
+        task 0 fails    ──▶ firstErr set ── nothing cancelled
+        task 1..4  ── select ctx.Done() ── never fires ──▶ each burns its full 1s
+
+goal:   WithContext(ctx) ──▶ child, cancel := context.WithCancel(ctx)
+        task 0 fails    ──▶ firstErr set + cancel() ──┐
+        task 1..4  ── select ctx.Done() ◀─────────────┘
+                                       └──▶ return in ms, not 1s
+        Wait()          ──▶ cancel() unconditionally ──▶ Context released even on success
+```
 
 Your task is to fix `WithContext` and wire the two other methods so that:
 

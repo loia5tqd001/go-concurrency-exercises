@@ -132,6 +132,40 @@ func TestWaitCancelsContextEvenOnSuccess(t *testing.T) {
 	}
 }
 
+// TestWithContextDerivesFromParent guards against a fix that creates a
+// brand new cancelable Context from context.Background() instead of
+// deriving one from the ctx it was actually given - every other test
+// in this file passes context.Background() as the parent, so a
+// WithContext that silently ignores its argument and calls
+// context.WithCancel(context.Background()) would slip past all of
+// them undetected. Here the parent carries a value and gets cancelled
+// independently, so only a Context genuinely derived from it behaves
+// correctly on both counts.
+func TestWithContextDerivesFromParent(t *testing.T) {
+	type ctxKey string
+	const key ctxKey = "trace-id"
+
+	parent, parentCancel := context.WithCancel(context.WithValue(context.Background(), key, "abc123"))
+	defer parentCancel()
+
+	_, ctx := WithContext(parent)
+
+	if v, _ := ctx.Value(key).(string); v != "abc123" {
+		t.Fatalf("derived Context lost the parent's value: got %q, want %q - "+
+			"looks like WithContext isn't deriving from the ctx it was given",
+			v, "abc123")
+	}
+
+	parentCancel()
+
+	select {
+	case <-ctx.Done():
+	case <-time.After(time.Second):
+		t.Fatal("derived Context was not cancelled when its parent was cancelled - " +
+			"looks like WithContext isn't deriving from the ctx it was given")
+	}
+}
+
 // TestFirstErrorAndCancelRaceSafe stress-tests the "first error wins"
 // bookkeeping (and its accompanying cancel call) with many tasks that
 // all fail immediately, racing to finish and to trigger cancellation
