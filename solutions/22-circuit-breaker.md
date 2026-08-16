@@ -32,16 +32,26 @@ The `CircuitBreaker` type and the `Execute(amountCents int) error` signature mus
 - Every single call reaches `gateway.Charge`, whether the gateway is healthy or has been failing for the last hour. A struggling downstream service never gets any relief; it keeps getting hammered at exactly the moment it can least handle it.
 - `ErrCircuitOpen` is declared but never returned by anything.
 
-Verified: running the current `check_test.go` against this naive `main.go` in a throwaway scratch copy fails both state-machine tests:
+Verified: running the current `check_test.go` against this naive `main.go` fails three of the five tests:
 
 ```
+=== RUN   TestCircuitOpensAfterThreshold
+    check_test.go:92: expected ErrCircuitOpen on 6th call, got payment gateway: connection down
 --- FAIL: TestCircuitOpensAfterThreshold (0.00s)
-    check_test.go:42: expected ErrCircuitOpen on 6th call, got payment gateway: connection down
+=== RUN   TestCircuitHalfOpenRecovery
+    check_test.go:117: expected breaker to be open, got payment gateway: connection down
 --- FAIL: TestCircuitHalfOpenRecovery (0.00s)
-    check_test.go:67: expected breaker to be open, got payment gateway: connection down
+=== RUN   TestCircuitClosedDoesNotSerializeOnGatewayCall
+--- PASS: TestCircuitClosedDoesNotSerializeOnGatewayCall (0.15s)
+=== RUN   TestCircuitHalfOpenTrialFailsFastForOthers
+    check_test.go:224: expected concurrent call during the half-open trial to get ErrCircuitOpen, got <nil>
+--- FAIL: TestCircuitHalfOpenTrialFailsFastForOthers (2.21s)
+=== RUN   TestCircuitConcurrentSafety
+--- PASS: TestCircuitConcurrentSafety (0.00s)
+FAIL
 ```
 
-(`TestCircuitConcurrentSafety` happens to pass even against the naive version — it only asserts a loose upper bound on gateway call count, which a plain pass-through trivially satisfies.)
+`TestCircuitClosedDoesNotSerializeOnGatewayCall` and `TestCircuitConcurrentSafety` happen to pass even against the naive version: the former because a plain pass-through never holds any lock at all (so it can't serialize anyone), and the latter because it only asserts a loose upper bound on gateway call count, which a plain pass-through trivially satisfies. The whole suite fails fast, in well under 3 seconds — `check_test.go` guards every blocking wait on `Execute` (`waitWithTimeout`, `executeWithTimeout`) so a self-deadlocking attempt doesn't hang the run instead of failing it.
 
 ## Approach 1: mutex-protected state machine
 
@@ -192,7 +202,7 @@ Design notes:
 - **The gateway call itself happens outside the lock.** `Execute` calls `cb.gateway.Charge` between `allow()` and `afterCall()`, neither of which holds `cb.mu` while the (potentially slow) network call is in flight. This is important: holding the breaker's own lock across the call to the wrapped service would serialize *all* callers on the breaker itself, defeating half of the point of a circuit breaker (letting healthy-state traffic run concurrently).
 - **`afterCall`'s `default` branch relies on a real invariant, not just tidiness**: a call can only reach `afterCall` having been let through by `allow()`, and `allow()` only returns `true` for `stateClosed` or `stateHalfOpen` — never `stateOpen`. So the `switch` only needs to distinguish "was this the half-open trial" from "was this an ordinary closed-state call"; there's no third case to handle.
 
-**Verified**: copied the exercise into a throwaway scratch directory, confirmed the naive `main.go` fails `TestCircuitOpensAfterThreshold` and `TestCircuitHalfOpenRecovery` as shown above, then dropped in this solution. `go test -race -count=1 ./...` passes, and was repeated 5 times in a row with no flakes — including `TestCircuitHalfOpenRecovery`, which runs inside `synctest.Test` and sleeps past the 2-second cooldown, and `TestCircuitConcurrentSafety`, which hammers `Execute` from 50 goroutines at once under `-race`.
+**Verified**: copied the exercise into a throwaway scratch directory, confirmed the naive `main.go` fails the three tests shown above, then dropped in this solution. `go test -race -count=5 ./...` passes with no flakes — including `TestCircuitHalfOpenRecovery`, which runs inside `synctest.Test` and sleeps past the 2-second cooldown, `TestCircuitHalfOpenTrialFailsFastForOthers`, which relies on real wall-clock timing to catch a concurrent trial slot leak, and `TestCircuitConcurrentSafety`, which hammers `Execute` from 50 goroutines at once under `-race`.
 
 ## Approach 2: lock-free state machine with `sync/atomic` (alternative)
 
@@ -344,7 +354,7 @@ Design notes and honest tradeoffs versus Approach 1:
 - **No fundamental correctness gap remains once the ordering rules above are followed** — every compound transition here was deliberately built store-before-publish (deadline before state, flag-claim before state-flip, state-settle before flag-release) specifically to close the gaps a naive atomic port would have. But that's exactly the caveat: it took three separate, easy-to-miss ordering decisions to get there, versus zero for the mutex, which gets all of this for free from a single `Lock()`/`Unlock()` pair.
 - **When it's worth it:** atomics avoid lock contention and OS-level blocking/wakeup entirely, which can matter under very high call rates. For a breaker like this — where `allow()`/`afterCall()` are already cheap, uncontended in the common (`stateClosed`) case, and the actual expensive work (`gateway.Charge`) happens outside any lock either way — the mutex version's simplicity is very likely the better default; reach for the atomic version only if profiling actually shows lock contention on the breaker itself.
 
-**Verified**: same scratch-directory protocol as Approach 1 — dropped this version into the same throwaway copy in place of the mutex version, confirmed `go build ./...` is clean, and ran `go test -race -count=1 ./...` five times in a row with no flakes, covering the same three tests (including the `synctest`-driven half-open recovery test and the 50-goroutine concurrent-safety test).
+**Verified**: same scratch-directory protocol as Approach 1 — dropped this version into the same throwaway copy in place of the mutex version, confirmed `go build ./...` is clean, and ran `go test -race -count=5 ./...` with no flakes, covering the same tests (including the `synctest`-driven half-open recovery test, the wall-clock-timed trial-exclusivity test, and the 50-goroutine concurrent-safety test).
 
 ## Key takeaways
 

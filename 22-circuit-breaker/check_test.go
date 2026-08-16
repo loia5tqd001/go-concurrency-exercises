@@ -14,6 +14,56 @@ import (
 	"time"
 )
 
+// guardTimeout bounds every blocking join or Execute call below that a
+// self-deadlocking solution could otherwise hang forever - e.g. a
+// non-reentrant sync.Mutex locked twice on the same goroutine, or a
+// buffered channel used as a semaphore that's never drained back on
+// some code path. Without a guard, that kind of bug turns one broken
+// submission into a 10-minute `go test` timeout with no useful
+// message instead of a fast, clear failure. It's set well above the
+// slowest legitimate wait in this file (the 150ms gateway delay) so it
+// can never mask a real timing assertion.
+const guardTimeout = 5 * time.Second
+
+// executeWithTimeout bounds a call to cb.Execute itself, not just
+// anything it might return - a solution that deadlocks on its own
+// lock while handling this call would otherwise block the calling
+// goroutine forever.
+func executeWithTimeout(t *testing.T, cb *CircuitBreaker, amountCents int) error {
+	t.Helper()
+
+	out := make(chan error, 1)
+	go func() { out <- cb.Execute(amountCents) }()
+
+	select {
+	case err := <-out:
+		return err
+	case <-time.After(guardTimeout):
+		t.Fatalf("Execute(%d) did not return within %s - a broken CircuitBreaker must never block a caller forever", amountCents, guardTimeout)
+		return nil
+	}
+}
+
+// waitWithTimeout bounds a sync.WaitGroup.Wait() call. If any
+// goroutine that owes wg.Done() is instead stuck inside a
+// self-deadlocked Execute, a bare wg.Wait() would hang for the rest of
+// the test run - this turns that into a fast, clear failure instead.
+func waitWithTimeout(t *testing.T, wg *sync.WaitGroup, timeout time.Duration) {
+	t.Helper()
+
+	done := make(chan struct{})
+	go func() {
+		wg.Wait()
+		close(done)
+	}()
+
+	select {
+	case <-done:
+	case <-time.After(timeout):
+		t.Fatalf("wg.Wait() did not return within %s - a goroutine is likely stuck inside a self-deadlocked Execute", timeout)
+	}
+}
+
 // TestCircuitOpensAfterThreshold checks that the breaker passes
 // failures straight through to the gateway while closed, but trips to
 // Open and starts fail-fasting (without touching the gateway at all)
@@ -118,7 +168,7 @@ func TestCircuitClosedDoesNotSerializeOnGatewayCall(t *testing.T) {
 			_ = cb.Execute(100)
 		}()
 	}
-	wg.Wait()
+	waitWithTimeout(t, &wg, guardTimeout)
 	elapsed := time.Since(start)
 
 	// Run concurrently: ~1x delay. Serialized behind the breaker's own
@@ -167,7 +217,7 @@ func TestCircuitHalfOpenTrialFailsFastForOthers(t *testing.T) {
 	time.Sleep(delay / 3)
 
 	secondStart := time.Now()
-	secondErr := cb.Execute(100)
+	secondErr := executeWithTimeout(t, cb, 100)
 	secondElapsed := time.Since(secondStart)
 
 	if !errors.Is(secondErr, ErrCircuitOpen) {
@@ -177,7 +227,11 @@ func TestCircuitHalfOpenTrialFailsFastForOthers(t *testing.T) {
 		t.Fatalf("concurrent call during the half-open trial took %v to fail fast (gateway delay %v) - it was likely blocked on the breaker's own lock instead of being rejected immediately", secondElapsed, delay)
 	}
 
-	<-trialDone
+	select {
+	case <-trialDone:
+	case <-time.After(guardTimeout):
+		t.Fatalf("half-open trial call did not return within %s - the trial goroutine is likely stuck on the breaker's own lock", guardTimeout)
+	}
 	if trialErr != nil {
 		t.Fatalf("expected the half-open trial call to succeed, got %v", trialErr)
 	}
@@ -204,7 +258,7 @@ func TestCircuitConcurrentSafety(t *testing.T) {
 		}()
 	}
 
-	wg.Wait()
+	waitWithTimeout(t, &wg, guardTimeout)
 
 	// Loose, non-flaky sanity bound: the gateway can never have been
 	// hit more often than the number of callers.

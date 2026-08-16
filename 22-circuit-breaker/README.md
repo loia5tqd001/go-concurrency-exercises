@@ -2,18 +2,34 @@
 
 Given is a `CircuitBreaker` that wraps calls to a flaky downstream
 `PaymentGateway` (see `mockgateway.go`). The gateway occasionally goes
-down for a while, and right now the `CircuitBreaker` does nothing to
-protect it: every call to `Execute` is simply passed straight through
-to the gateway, no matter how many times in a row it has just failed.
+down for a while, and right now `CircuitBreaker` remembers nothing
+between calls:
 
-This is a problem. When the gateway is down, every single caller still
-pays the full cost of reaching out to it (and getting an error back)
-instead of failing fast - and a struggling downstream service gets
-hammered with even more load exactly when it can least handle it,
+```
+caller ──▶ Execute ──▶ gateway.Charge ──▶ result
+```
+
+Every call is passed straight through, no matter how many times in a
+row it has just failed. When the gateway is down, every single caller
+still pays the full cost of reaching out to it (and getting an error
+back) instead of failing fast - and a struggling downstream service
+gets hammered with even more load exactly when it can least handle it,
 instead of being given room to recover.
 
-Your task is to implement the actual circuit breaker pattern on top of
-`CircuitBreaker`, safe for concurrent use from multiple goroutines:
+Your task is to turn `Execute` into the classic three-state breaker,
+safe for concurrent use from multiple goroutines:
+
+```
+ CLOSED
+   │  5 consecutive failures
+   ▼
+  OPEN
+   │  cooldown (2s) elapses
+   ▼
+HALF-OPEN ──── trial succeeds ────▶ CLOSED (fail counter reset to 0)
+   │
+   └──── trial fails, cooldown restarts ────▶ OPEN
+```
 
 - **Closed** (initial state): calls pass through to `gateway.Charge`.
   Each failure increments a consecutive-failure counter; a success
@@ -27,11 +43,17 @@ Your task is to implement the actual circuit breaker pattern on top of
   counter back to 0). If it fails, the breaker goes back to **Open**
   and the cooldown restarts.
 
-Keep the `CircuitBreaker` type and the `Execute(amountCents int) error`
-signature identical - add whatever unexported state you need to track
-the current state, the failure counter and the cooldown deadline.
-Export a sentinel `var ErrCircuitOpen = errors.New(...)` for callers to
-check against.
+Signatures stay the same:
+
+```go
+func NewCircuitBreaker(gateway *PaymentGateway) *CircuitBreaker
+func (cb *CircuitBreaker) Execute(amountCents int) error
+```
+
+Add whatever unexported state you need to track the current state, the
+failure counter, and the cooldown deadline. Export a sentinel
+`var ErrCircuitOpen = errors.New(...)` for callers to check against
+with `errors.Is`.
 
 ## Test your solution
 
