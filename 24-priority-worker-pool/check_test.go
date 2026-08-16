@@ -167,8 +167,17 @@ func TestSchedulerRace(t *testing.T) {
 			done <- struct{}{}
 		}(i)
 	}
+	// Guarded: if a broken Submit deadlocks (e.g. a signal sent while
+	// still holding the lock the worker needs, or a Cond waited on the
+	// wrong mutex), the matching Submit call above never returns and
+	// this receive never arrives - fail fast instead of hanging toward
+	// Go's default 10-minute test timeout.
 	for i := 0; i < n; i++ {
-		<-done
+		select {
+		case <-done:
+		case <-time.After(5 * time.Second):
+			t.Fatalf("timed out waiting for Submit %d/%d to return", i+1, n)
+		}
 	}
 
 	seen := make(map[int]bool, n)
