@@ -235,6 +235,58 @@ The concrete timing math behind `TestStallDetectedPromptly`'s bound, for referen
 
 The repo's real `27-heartbeats/main.go` was left untouched (still the naive version above) throughout this verification; only the throwaway scratch copy ever received the fix.
 
+## Alternative approach: a fresh `time.After` per iteration instead of one reused timer
+
+The fix above allocates a single `time.Timer` before the loop and calls
+`Reset` on it from both firing branches. A commonly-reached-for
+alternative skips `Reset` (and the version-sensitivity that comes with
+it) entirely and just re-arms with a fresh `time.After` every time the
+`select` is re-entered:
+
+```go
+for {
+	select {
+	case <-heartbeat:
+		// no reset call needed - looping back into select below
+		// re-evaluates time.After(perPulseTimeout) from this instant
+	case r, ok := <-results:
+		if !ok {
+			return collected, nil
+		}
+		collected = append(collected, r)
+	case <-time.After(perPulseTimeout):
+		return nil, fmt.Errorf("worker stalled: no heartbeat or result within %s", perPulseTimeout)
+	}
+}
+```
+
+This is correct, and arguably simpler to read: there's no `Reset` call
+to place correctly on two different branches, and no need to reason
+about `Timer.Reset`'s pre-1.23-vs-1.23+ semantics at all, since a new
+timer is created fresh each time rather than an existing one being
+rearmed. `go doc time.After` explains why that's no longer the
+efficiency trap it once was:
+
+> Before Go 1.23, this documentation warned that the underlying Timer
+> would not be recovered by the garbage collector until the timer
+> fired... As of Go 1.23, the garbage collector can recover
+> unreferenced, unstopped timers. There is no reason to prefer
+> `NewTimer` when `After` will do.
+
+So on this module's pinned `go 1.25.6`, a `time.After` per iteration
+doesn't leak - the abandoned timer from the previous iteration (the
+one that lost the race to whichever case fired) is reclaimed by the
+GC even though nothing ever stops or drains it. The remaining
+difference is allocation churn, not correctness: `timer.Reset` reuses
+one `runtime.timer` for the entire call, while `time.After` inside the
+loop starts a brand-new one on every single heartbeat and every single
+result - potentially dozens per call on a multi-unit job pulsing every
+`workerPulseInterval`. For one `WorkWithTimeout` call that's
+negligible; it stops being negligible if this watch-loop shape were
+lifted into something hotter (many concurrent long-lived watchers,
+each re-arming on every pulse) - which is exactly when reaching for the
+reused, `Reset`-based timer earns its extra complexity.
+
 ## Key takeaways
 
 - A heartbeat is only meaningful if it's causally tied to genuine progress on the work being monitored. A pulse driven by an independent ticker that fires on a fixed schedule regardless of what the worker is actually doing can't distinguish "still going" from "wedged" — it will happily keep ticking even while the thing it's supposed to be reporting on is completely stuck. The pulse has to originate from the same execution path that would also, eventually, produce the result.

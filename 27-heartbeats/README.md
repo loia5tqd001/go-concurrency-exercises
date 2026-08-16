@@ -6,30 +6,44 @@ that processes `workUnits` units of work one at a time (see
 per completed unit on `results` and closing `results` once the whole
 job is done. While it is actively working on a unit, it is also
 supposed to pulse on `heartbeat` roughly every `pulseInterval`, for as
-long as that unit takes - that pulse is the only way a caller
-monitoring the worker can tell "still working, just slow" apart from
-"wedged forever", since a unit that simply takes a long time and a
-unit that has stalled completely look identical if all you can do is
-wait for its result.
+long as that unit takes - that pulse is the only way a caller can tell
+"still working, just slow" apart from "wedged forever", since a slow
+unit and a stalled one look identical to anyone who can only wait for
+a result.
 
-Right now `DoWork`'s heartbeat is basically decorative: it fires a
-single pulse the instant the goroutine starts, then never again - no
-matter how long an individual unit takes, or whether one has stalled
-outright.
+```
+healthy unit:  pulse  pulse  pulse  pulse  result
+                 │      │      │      │      │
+                 ▼      ▼      ▼      ▼      ▼
+watcher timer: reset  reset  reset  reset  reset   ─▶ never gets close to firing,
+                                                        however long the job runs
 
-`WorkWithTimeout` is supposed to run `DoWork` and use the heartbeat to
-detect a stalled worker quickly: reset a timer every time a heartbeat
-OR a result arrives, and fail the moment `perPulseTimeout` elapses with
-neither. Right now it does nothing like that - it starts a single flat
-timer sized off the whole job at the very beginning and never resets
-it, and it never even looks at `heartbeat`. That means it can't tell
-"worker pulsing normally on a slow-but-fine job" apart from "worker
-wedged": a healthy job that happens to run a bit long gets killed just
-as dead as a genuinely stalled one, and a real stall isn't caught
-within one pulse interval of it starting - only whenever that same
-flat deadline happens to expire, however long that turns out to be.
+stalled unit:  pulse  (nothing - SimulateUnit blocks for StallDuration,
+                 │      no more checkIns, no more results, until it
+                 ▼      eventually - if ever - gives up)
+watcher timer: reset ──────────── silence ──────────▶ perPulseTimeout later: FIRES
+                                                        (one pulse interval after the
+                                                         LAST sign of life, not "however
+                                                         long the job would've taken")
+```
 
-Your task is to fix both:
+Today, neither half of that exists:
+
+- `DoWork`'s heartbeat is decorative - it fires one pulse the instant
+  the goroutine starts, then never again, no matter how long a unit
+  takes or whether one stalls outright.
+- `WorkWithTimeout` never looks at `heartbeat` at all, and instead of a
+  timer that resets on every sign of life, it starts a single flat
+  timer sized off the *whole job* up front and never touches it again.
+  That can't tell "pulsing normally on a slow job" from "wedged": a
+  healthy job that runs a bit long gets killed just as dead as a
+  stalled one, and a real stall isn't caught within one pulse interval
+  of starting - only whenever that same flat deadline happens to
+  expire, however long that turns out to be.
+
+## Your task
+
+Fix both:
 
 - `DoWork` must pulse on `heartbeat` throughout each unit's work, not
   just once at startup, while still respecting `done` (stop promptly
@@ -41,7 +55,7 @@ Your task is to fix both:
   elapses with neither, instead of waiting for however long the
   stalled unit would otherwise have taken.
 
-Keep the signatures identical:
+Signatures stay the same:
 
 ```go
 func DoWork(done <-chan struct{}, pulseInterval time.Duration, workUnits int) (heartbeat <-chan struct{}, results <-chan int)
