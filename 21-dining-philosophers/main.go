@@ -18,33 +18,11 @@
 // waiting for THEM to release the fork they're holding. It's a
 // perfect circle of waiting, so nobody ever eats again.
 //
-// Your task is to fix Dine so it can never deadlock, using a
-// standard, well-known deadlock-avoidance strategy. The simplest and
-// most idiomatic fix here is resource ordering: change fork
-// acquisition so every philosopher always locks the LOWER-INDEXED
-// fork of their two forks first, regardless of which one happens to
-// be their "left" fork and which their "right" - e.g.
-//
-//     first, second := p.leftFork, p.rightFork
-//     if second.index < first.index {
-//         first, second = second, first
-//     }
-//
-// Because every philosopher now agrees on a single global order for
-// acquiring any two forks, the circular-wait condition that causes
-// the deadlock can never arise: there's always at least one
-// philosopher (the one sitting between the two highest-indexed forks)
-// who reaches for the same fork first as their neighbor, so someone is
-// always able to make progress.
-//
-// (An equally valid alternative fix is an arbitrator/semaphore that
-// only allows numPhilosophers-1 philosophers to attempt to pick up
-// forks at once, which also breaks the circular wait - either
-// approach is acceptable, but resource ordering is simplest to
-// implement here.)
-//
-// Keep the function signature identical so it remains a drop-in
-// replacement for the naive version below:
+// Your task is to fix Dine so it can never deadlock, no matter how
+// many philosophers sit down or how their goroutines happen to get
+// scheduled - using a standard, well-known deadlock-avoidance
+// strategy. Keep the function signature identical so it remains a
+// drop-in replacement for the naive version below:
 //
 //     func Dine(numPhilosophers, mealsToEat int) (totalMealsEaten int32)
 //
@@ -93,7 +71,7 @@ func (p *Philosopher) Dine(wg *sync.WaitGroup, mealsEaten *int32) {
 		p.rightFork.mu.Lock()
 
 		// eat
-		time.Sleep(time.Millisecond)
+		time.Sleep(10 * time.Microsecond)
 		atomic.AddInt32(mealsEaten, 1)
 
 		p.rightFork.mu.Unlock()

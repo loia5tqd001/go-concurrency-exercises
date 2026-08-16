@@ -6,30 +6,29 @@ philosophers. To eat, a philosopher needs to pick up BOTH the fork to
 their left and the fork to their right - only then can they eat, after
 which they put both forks back down so their neighbors can use them.
 
-`Dine` is supposed to let every philosopher finish all of their meals
-without the table ever grinding to a halt. But the current
-implementation always acquires forks in the same order for every
-philosopher - left fork first, then right fork - which is exactly the
-textbook setup for deadlock: if every philosopher picks up their left
-fork at roughly the same time, every single one of them ends up
-holding one fork while waiting forever for their right fork, which is
-being held by their neighbor who is, in turn, waiting for THEM to
-release the fork they're holding. It's a perfect circle of waiting, so
-nobody ever eats again.
+Right now every philosopher reaches for forks in the same order -
+left, then right - which lets a circular wait close around the whole
+table:
 
-Your task is to fix `Dine` so it can never deadlock, using a standard,
-well-known deadlock-avoidance strategy. The simplest and most
-idiomatic fix here is **resource ordering**: change fork acquisition
-so every philosopher always locks the lower-indexed fork of their two
-forks first, regardless of which one happens to be their "left" fork
-and which their "right". Because every philosopher then agrees on a
-single global order for acquiring any two forks, the circular-wait
-condition that causes the deadlock can never arise.
+```
+P0 holds F0, wants F1 ──▶ held by P1
+P1 holds F1, wants F2 ──▶ held by P2
+P2 holds F2, wants F3 ──▶ held by P3
+P3 holds F3, wants F4 ──▶ held by P4
+P4 holds F4, wants F0 ──▶ held by P0   ◀── closes the ring back to P0
+```
 
-(An equally valid alternative is an arbitrator/semaphore that only
-allows `numPhilosophers - 1` philosophers to attempt to pick up forks
-at once, which also breaks the circular wait - either approach is
-acceptable, but resource ordering is simplest to implement.)
+If every philosopher succeeds in grabbing their left fork at roughly
+the same time, each is left holding one fork while waiting forever for
+their right fork - held by a neighbor who is, in turn, stuck waiting on
+THEM. Every wanted fork in the ring is already held by someone else
+also waiting, so nobody ever eats again and `Dine` never returns.
+
+Your task is to fix `Dine` so every philosopher finishes all
+`mealsToEat` meals, no matter how many philosophers sit down or how
+their goroutines happen to get scheduled - using a standard,
+well-known deadlock-avoidance strategy. Whatever mechanism you pick,
+the ring above must never be able to close completely.
 
 The function signature must stay the same:
 

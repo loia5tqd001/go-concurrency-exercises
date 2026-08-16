@@ -50,20 +50,26 @@ func dineWithTimeout(t *testing.T, numPhilosophers, mealsToEat int, timeout time
 	}
 }
 
-// TestDineCompletesWithoutDeadlock is the key test. It relies on the
-// well-known reliability of the "everyone grabs their left fork
-// first" race actually manifesting under Go's scheduler: when all N
-// philosopher goroutines start at roughly the same time, they very
-// reliably all succeed in picking up their left fork before any of
-// them tries for their right fork, so the naive version deadlocks on
-// essentially every single run. This test times out (and fails) on
-// the naive implementation, and passes quickly once fork acquisition
-// order no longer permits a circular wait.
+// TestDineCompletesWithoutDeadlock is the key test. mealsToEat is set
+// far higher than a "natural" handful of meals on purpose: the naive
+// implementation's deadlock is only reliable because of a brief
+// artificial pause between grabbing the left and right fork (see
+// main.go), which forces every philosopher into lockstep on the very
+// first meal. A solver who notices that pause and deletes it - without
+// actually fixing fork acquisition order - would shrink the collision
+// window down to whatever's left of scheduling noise and could
+// otherwise slip a still-broken implementation past a low meal count
+// on a lucky run. Looping mealsToEat this many times gives that same
+// still-broken implementation enough independent chances to collide
+// that it deadlocks reliably anyway (verified: fails 10/10 runs even
+// with the artificial pause removed entirely), while a genuine fix -
+// which never depends on timing luck in the first place - still
+// finishes in well under a second.
 func TestDineCompletesWithoutDeadlock(t *testing.T) {
 	const numPhilosophers = 5
-	const mealsToEat = 10
+	const mealsToEat = 10_000
 
-	total := dineWithTimeout(t, numPhilosophers, mealsToEat, 2*time.Second)
+	total := dineWithTimeout(t, numPhilosophers, mealsToEat, 3*time.Second)
 
 	want := int32(numPhilosophers * mealsToEat)
 	if total != want {
