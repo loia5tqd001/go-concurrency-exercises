@@ -74,8 +74,9 @@ after the very first one, because there's no buffer standing between
 
 Rewrite `Balance` so it never blocks trying to send to any one
 `Worker`, no matter how backed up that `Worker` is — a request that
-can't be handed off immediately must queue *inside* `Balance`, not
-stall its loop. Every request submitted must still eventually
+can't be handed off immediately must queue *inside* `Balance`, in a
+data structure the loop itself owns, not one goroutine parked per
+waiting request. Every request submitted must still eventually
 complete, and the least-loaded `Worker` must still get first claim on
 whatever's queued once it has room.
 

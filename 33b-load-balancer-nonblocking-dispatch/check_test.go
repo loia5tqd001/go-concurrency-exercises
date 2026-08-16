@@ -7,6 +7,7 @@
 package main
 
 import (
+	"runtime"
 	"sync"
 	"testing"
 	"time"
@@ -206,6 +207,84 @@ func TestBalancerSurvivesMoreRequestsThanWorkers(t *testing.T) {
 		if want := i + 1; got != want {
 			t.Errorf("request %d result = %d, want %d", i, got, want)
 		}
+	}
+}
+
+// TestBalancerQueuesWithoutASeparateGoroutinePerRequest catches the
+// tempting near-miss of "solving" the blocking send by shipping it off
+// to its own goroutine (`go func() { w.requests <- req }()`) instead of
+// queuing inside Balance's own backlog. That dodge never blocks
+// Balance's loop either, and every request still eventually completes -
+// it passes every test above - but it costs one live goroutine per
+// request still waiting for a busy Worker, instead of a plain data
+// structure Balance already owns. A round-robin dispatcher that ignores
+// the heap entirely falls into the same trap for the same reason: with
+// only two Workers and a burst well beyond what either can be running
+// at once, most of the burst has nowhere to live except the queue this
+// exercise asks for - so if goroutine count balloons with the burst
+// size instead of staying flat, the requests aren't actually queued.
+func TestBalancerQueuesWithoutASeparateGoroutinePerRequest(t *testing.T) {
+	const numWorkers = 2
+	const numRequests = 50
+
+	runtime.GC()
+	baseline := runtime.NumGoroutine()
+
+	b := NewBalancer(numWorkers)
+	work := make(chan Request)
+	go b.Balance(work)
+
+	// Hand off all numRequests from this one goroutine, back to back,
+	// with no submitter goroutines of our own to muddy the count.
+	// Balance's `case req := <-work` must always be immediately ready -
+	// that's the whole point of queuing internally - so none of these
+	// sends should need anywhere near the full timeout.
+	results := make([]chan int, numRequests)
+	for i := 0; i < numRequests; i++ {
+		i := i
+		c := make(chan int, 1)
+		results[i] = c
+		req := Request{
+			fn: func() int {
+				time.Sleep(20 * time.Millisecond)
+				return i
+			},
+			c: c,
+		}
+		select {
+		case work <- req:
+		case <-time.After(2 * time.Second):
+			t.Fatalf("request %d was never dispatched - balancer looks wedged", i)
+		}
+	}
+
+	// Only numWorkers requests can be running at once; with a burst of
+	// numRequests far beyond that, a correct Balance is holding the
+	// rest in its own backlog, not in extra goroutines.
+	time.Sleep(50 * time.Millisecond)
+	if delta := runtime.NumGoroutine() - baseline; delta > numWorkers+10 {
+		t.Fatalf("goroutine count grew by %d while %d requests were queued "+
+			"against %d workers (want at most ~%d); Balance looks like it's "+
+			"spawning a goroutine per request to dodge the blocking send "+
+			"instead of queuing internally", delta, numRequests, numWorkers, numWorkers+10)
+	}
+
+	for i, c := range results {
+		select {
+		case <-c:
+		case <-time.After(2 * time.Second):
+			t.Fatalf("request %d never completed", i)
+		}
+	}
+
+	// Once every request has actually completed, the only goroutines
+	// left belong to this one Balance and its numWorkers Workers -
+	// nothing should still be parked waiting to send.
+	time.Sleep(50 * time.Millisecond)
+	if delta := runtime.NumGoroutine() - baseline; delta > numWorkers+10 {
+		t.Fatalf("goroutine count is still %d above baseline after every request "+
+			"completed (want at most ~%d); something is leaking a goroutine per "+
+			"request instead of letting it exit once delivered", delta, numWorkers+10)
 	}
 }
 

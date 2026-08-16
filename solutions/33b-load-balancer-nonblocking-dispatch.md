@@ -33,8 +33,8 @@ forever.
 
 ```
 --- FAIL: TestBalancerSurvivesBackToBackRequestsOnOneWorker (2.00s)
-    check_test.go:113: request 1 was never dispatched - balancer looks wedged
-    check_test.go:121: request 3 never completed
+    check_test.go:114: request 1 was never dispatched - balancer looks wedged
+    check_test.go:122: request 3 never completed
 ```
 
 Against 33's buffered inbox, this took a burst bigger than the whole
@@ -128,6 +128,33 @@ restores heap order around that one element in `O(log n)` without a
 round trip through `Pop`+`Push`, exactly the primitive 33 asks you to
 use for the same reason.
 
+## The near-miss that also passes the functional tests
+
+It's tempting to "fix" the blocking send a different way: keep
+`heap.Pop`/`w.requests <- req`/`heap.Push` exactly as it was, just run
+the send in its own goroutine —
+
+```go
+case req := <-work:
+	w := heap.Pop(&b.pool).(*Worker)
+	go func() { w.requests <- req }()   // <-- looks non-blocking...
+	w.pending++
+	heap.Push(&b.pool, w)
+```
+
+This never blocks `Balance`'s own loop, so every request in the test
+suite above still eventually completes — it's not a functional bug.
+What it costs is one live goroutine per request still waiting on a busy
+`Worker`, for as long as that `Worker` stays backed up, instead of the
+plain `backlog` slice `Balance` already owns. A round-robin dispatcher
+that also ignores the heap and spawns a goroutine per send falls into
+the identical trap for the identical reason. `TestBalancerQueuesWithoutASeparateGoroutinePerRequest`
+catches both: it submits a burst well beyond what the pool can be
+running at once, from the test's own goroutine (no submitter
+goroutines to muddy the count), and asserts `runtime.NumGoroutine()`
+barely moves — a correct `Balance` is holding the backlog in a slice,
+not in parked goroutines.
+
 ## An explicit tension with exercise 18
 
 [18](../18-bounded-pipeline-backpressure) argues *against* unbounded
@@ -155,10 +182,14 @@ dispatch loop itself become the reason `done` never gets read.
 - `heap.Fix` works the same way whether load went up or down; only the
   before/after `pending` mutation differs.
 
-**Verified**: the naive scaffold above passes
+**Verified**: of the six tests, only two pass against the naive scaffold
+above — `TestWorkerInboxIsUnbuffered` and
 `TestBalancerCompletesABurstNoBiggerThanThePool` (fresh `Worker`s are
-always ready) but fails `TestBalancerSurvivesBackToBackRequestsOnOneWorker`
-with the exact `... balancer looks wedged` signature reported for 33's
-own bug. The fix above is `gofmt`/`vet` clean and passes
-`go test -race -count=3` with no flakes, and holds up under an ad hoc
-200-request burst against just 2 workers.
+always ready). The remaining four fail: `TestBalancerSurvivesBackToBackRequestsOnOneWorker`,
+`TestBalancerSurvivesMoreRequestsThanWorkers`, and
+`TestBalancerQueuesWithoutASeparateGoroutinePerRequest` each hit the
+same `... balancer looks wedged` signature reported for 33's own bug,
+and `TestBalancerConcurrentSafety` times out under load. The fix above
+is `gofmt`/`vet` clean and passes `go test -race -count=20` with no
+flakes, and holds up under an ad hoc 200-request burst against just 2
+workers.
