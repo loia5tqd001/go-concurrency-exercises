@@ -12,7 +12,7 @@ import (
 )
 
 // MockDB used to simulate a database model
-type MockDB struct{
+type MockDB struct {
 	Calls int32
 }
 

@@ -15,35 +15,69 @@ The test harness (`mockserver.go`) hammers this with `15 * 100 = 1500` concurren
 
 There is no synchronization at all around `cache` or `pages`, and both are mutated concurrently:
 
-- **The map.** One goroutine's `cache[key] = ...` write races with another goroutine's `cache[key]` read (a plain map read concurrent with a write is undefined behavior in Go, not just "unsafe on write vs write"). `go test -race` reports this directly:
+- **The map.** One goroutine's `cache[key] = ...` write races with another goroutine's `cache[key]` read (a plain map read concurrent with a write is undefined behavior in Go, not just "unsafe on write vs write"). `go test -race -run TestMain` reports this directly:
 
   ```
   WARNING: DATA RACE
-  Write at 0x00c0000ba600 by goroutine 88:
+  Write at 0x00c000096690 by goroutine 316:
     runtime.mapaccess2_faststr()
-    verify2.(*KeyStoreCache).Get()
-        main.go:62   (the `if e, ok := k.cache[key]; ok` on a miss path being written concurrently)
+    github.com/loia5tqd001/go-concurrency-exercises/02-race-in-cache.(*KeyStoreCache).Get()
+        main.go:63   (the `k.cache[key] = k.pages.Front()` on a miss path)
 
-  Previous read at 0x00c0000ba600 by goroutine 1455:
+  Previous read at 0x00c000096690 by goroutine 1117:
     runtime.mapaccess1_faststr()
-    verify2.(*KeyStoreCache).Get()
-        main.go:47
+    github.com/loia5tqd001/go-concurrency-exercises/02-race-in-cache.(*KeyStoreCache).Get()
+        main.go:48   (the `if e, ok := k.cache[key]; ok` hit check, from another goroutine)
   ```
 
-- **The list.** This is the easy-to-miss half of the bug: `container/list.List` is a plain doubly linked list with no internal locking, and `MoveToFront` **mutates** the list even though it looks like it belongs on the "read/hit" path. Two goroutines both hitting the cache concurrently and calling `MoveToFront` race on the same list nodes; `PushFront` on a miss races with any concurrent `MoveToFront`/`PushFront`/`Remove`. `-race` catches this too:
+  Run without `-race` and it can instead crash outright:
+  `fatal error: concurrent map writes`.
+
+- **The list.** This is the easy-to-miss half of the bug: `container/list.List` is a plain doubly linked list with no internal locking, and `MoveToFront` **mutates** the list even though it looks like it belongs on the "read/hit" path. `PushFront` on a miss races with any concurrent `PushFront`/`MoveToFront`/`Remove` - the same `TestMain` run also reports this:
 
   ```
   WARNING: DATA RACE
-  Read at 0x00c0000ae988 by goroutine 216:
+  Read at 0x00c000092948 by goroutine 187:
     container/list.(*List).lazyInit()
     container/list.(*List).PushFront()
-    verify2.(*KeyStoreCache).Get()
-        main.go:61
+    github.com/loia5tqd001/go-concurrency-exercises/02-race-in-cache.(*KeyStoreCache).Get()
+        main.go:62
+
+  Previous write at 0x00c000092948 by goroutine 316:
+    container/list.(*List).Init()
+    container/list.(*List).lazyInit()
+    container/list.(*List).PushFront()
+    github.com/loia5tqd001/go-concurrency-exercises/02-race-in-cache.(*KeyStoreCache).Get()
+        main.go:62
   ```
 
-  This second race is why an `RWMutex` that only takes an `RLock` on the "hit" path is **not** a valid fix: the hit path still writes to the list via `MoveToFront`. It's also why swapping `cache` for a `sync.Map` doesn't rescue you — that only makes the map safe; the LRU ordering still lives in a `container/list.List` that needs its own mutual exclusion regardless of which map type backs it.
+  That block is two concurrent *misses* racing on `PushFront`, which already rules out `sync.Map` as a fix (it would make the map safe, but the LRU ordering still lives in `container/list.List`, which needs its own mutual exclusion regardless of which map type backs it). But it doesn't yet rule out the single most tempting near-miss: an `RWMutex` that only takes `RLock` on the *hit* path, since a hit "just reads" the cache. `check_test.go`'s `TestConcurrentHits` exists specifically to catch that: it hammers a handful of already-cached keys with heavy repeated concurrent hits, so `MoveToFront` collides with itself directly. Verified against exactly that RWMutex-with-RLock-on-hit variant:
 
-There's a second, more subtle correctness requirement hiding in `check_test.go`: `db.Calls` must not exceed 100. Naively narrowing the critical section to just the map/list touches — i.e. releasing the lock while `k.load(key)` runs — keeps `-race` quiet (map and list are always touched under the lock) but breaks correctness in a different way: many goroutines can simultaneously miss on the same key before any of them finishes loading it, so each issues its own DB call. Verified empirically against this exact test suite: that variant is race-free but consistently fails with `db.Calls == 1500` (every single call reloads from the DB) and `pages.Len()` in the 1400s against a `cache` map size of 99 — the duplicate concurrent misses push multiple list elements for the same key while the map keeps only the last one, so the two data structures drift out of sync in count as well. The takeaway: whatever synchronization you use, the "check cache, and if missing, load + insert" sequence for a given key must be atomic end-to-end, not just the map/list bookkeeping around it.
+  ```
+  WARNING: DATA RACE
+  Read at 0x00c00010e2c0 by goroutine 11:
+    container/list.(*List).MoveToFront()
+    github.com/loia5tqd001/go-concurrency-exercises/02-race-in-cache.(*KeyStoreCache).Get()
+        main.go:36 in this throwaway RWMutex variant (MoveToFront called while only holding RLock)
+
+  Previous write at 0x00c00010e2c0 by goroutine 9:
+    container/list.(*List).move()
+    container/list.(*List).MoveToFront()
+    github.com/loia5tqd001/go-concurrency-exercises/02-race-in-cache.(*KeyStoreCache).Get()
+        main.go:36 (the other concurrent RLock holder)
+  ```
+
+  Two goroutines both holding `RLock()` at once is exactly the point of an `RWMutex` - but both are also calling `MoveToFront`, a write, so they race with each other. Verified empirically: `TestMain`/`TestLRU` alone pass this variant clean 5/5 under `go test -race -count=5 -run 'TestMain|TestLRU'` (each distinct key is mostly moved to the front once, so the same node is rarely touched twice at once); `go test -race -count=5 -run TestConcurrentHits` against the same variant fails 5/5, each run reporting dozens of `WARNING: DATA RACE` blocks - `TestConcurrentHits`'s repeated-hits-on-few-keys pattern is what makes the collision reliable.
+
+There's a second, more subtle correctness requirement hiding in `check_test.go`: `db.Calls` must not exceed 100. Naively narrowing the critical section to just the map/list touches — i.e. releasing the lock while `k.load(key)` runs — keeps `-race` quiet (map and list are always touched under the lock) but breaks correctness in a different way: many goroutines can simultaneously miss on the same key before any of them finishes loading it, so each issues its own DB call. Verified empirically against this exact test suite: that variant is race-free but fails with
+
+```
+check_test.go:33: Incorrect cache size 99
+check_test.go:36: Incorrect pages size 1490
+check_test.go:39: Too much db uses 1500
+```
+
+— every single call reloads from the DB, and the duplicate concurrent misses push multiple list elements for the same key while the map keeps only the last one, so the two data structures drift out of sync in count as well. The takeaway: whatever synchronization you use, the "check cache, and if missing, load + insert" sequence for a given key must be atomic end-to-end, not just the map/list bookkeeping around it.
 
 ## Approach 1: single mutex around the whole critical section
 
@@ -108,9 +142,9 @@ func (k *KeyStoreCache) Get(key string) string {
 }
 ```
 
-**Verified**: `go vet ./...` clean; `go test -race -count=5 ./...` passes 5/5 with no races and correct assertions (`TestMain`, `TestLRU`).
+**Verified**: `go vet ./...` clean; `go test -race -count=5 ./...` passes 5/5 with no races and correct assertions (`TestMain`, `TestLRU`, `TestConcurrentHits`).
 
-Cost model: because the lock is held across `k.load`, every cache *miss* is fully serialized against every other miss (and every hit). Total time is roughly `(number of distinct keys) × (DB latency)`, independent of how much concurrency the caller throws at it. In this exercise that's `100 keys × 20ms ≈ 2s` per `TestMain` run — measured at ~2.10–2.13s under `-race` on go1.25.6/darwin-arm64, so ~4.2s total across `TestMain` + `TestLRU`. That comfortably clears the README's "under 30 seconds" goal and just barely clears "under 5 seconds," but the margin is thin and the approach doesn't scale: with more distinct keys or a slower backing store, this serialization becomes the bottleneck. That's exactly the gap Approach 2 closes.
+Cost model: because the lock is held across `k.load`, every cache *miss* is fully serialized against every other miss (and every hit). Total time is roughly `(number of distinct keys) × (DB latency)`, independent of how much concurrency the caller throws at it. In this exercise that's `100 keys × 20ms ≈ 2s` per `TestMain` run — measured at ~2.16–2.20s under `-race` on go1.25.6/darwin-arm64, so ~4.3s total across `TestMain` + `TestLRU`. That comfortably clears the README's "under 30 seconds" goal and just barely clears "under 5 seconds," but the margin is thin and the approach doesn't scale: with more distinct keys or a slower backing store, this serialization becomes the bottleneck. That's exactly the gap Approach 2 closes.
 
 ## Approach 2: per-key load deduplication ("singleflight"), lock released during the DB call
 

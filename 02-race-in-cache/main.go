@@ -1,16 +1,17 @@
 //////////////////////////////////////////////////////////////////////
 //
-// Given is some code to cache key-value pairs from a database into
-// the main memory (to reduce access time). Note that golang's map are
-// not entirely thread safe. Multiple readers are fine, but multiple
-// writers are not. Change the code to make this thread safe.
+// KeyStoreCache is an LRU cache: a map for O(1) lookup, plus a
+// container/list.List that tracks recency so the least-recently-used
+// entry can be evicted once the cache fills up. Get has zero
+// synchronization right now - not just around the map (a concurrent
+// write races any read) but around the list too, since MoveToFront
+// mutates it even on a cache *hit*. See README.md for the full task.
 //
 
 package main
 
 import (
 	"container/list"
-	"testing"
 )
 
 // CacheSize determines how big the cache can grow
@@ -78,17 +79,8 @@ func (l *Loader) Load(key string) string {
 	return val
 }
 
-func run(t *testing.T) (*KeyStoreCache, *MockDB) {
-	loader := Loader{
-		DB: GetMockDB(),
-	}
-	cache := New(&loader)
-
-	RunMockServer(cache, t)
-
-	return cache, loader.DB
-}
-
 func main() {
-	run(nil)
+	loader := Loader{DB: GetMockDB()}
+	cache := New(&loader)
+	RunMockServer(cache, nil)
 }

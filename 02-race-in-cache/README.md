@@ -1,35 +1,68 @@
-# Race condition in caching scenario
+# Race in an LRU Cache
 
-Given is some code to cache key-value pairs from a mock database into
-the main memory (to reduce access time). The code is buggy and
-contains a race condition. Change the code to make this thread safe.
+`KeyStoreCache` is an LRU cache: a map for O(1) lookup, plus a
+`container/list.List` that tracks recency so the least-recently-used
+entry can be evicted once the cache fills up. `Get` mutates *both*
+structures with no synchronization at all - including on a cache
+**hit**, which calls `MoveToFront` to mark the entry as most-recently
+used. This is the same shape as a real in-process cache in front of a
+slow backing store (see the production writeups on Mailgun's and
+Allegro's Go caches, linked below) - and production traffic calls
+`Get` from many goroutines at once:
 
-Also, try to get your solution down to less than 30 seconds to run tests.  *Hint*: fetching from the database takes the longest.
-
-*Note*: Map access is unsafe only when updates are occurring. As long as all goroutines are only reading and not changing the map, it is safe to access the map concurrently without synchronization. (See [https://golang.org/doc/faq#atomic_maps](https://golang.org/doc/faq#atomic_maps))
-
-If possible, get your solution down to less than 5 seconds for all tests.
-
-## Background Reading
-
-* [https://tour.golang.org/concurrency/9](https://tour.golang.org/concurrency/9)
-* [https://golang.org/ref/mem](https://golang.org/ref/mem)
-
-# Test your solution
-
-Use the following command to test for race conditions and correct functionality:
 ```
-go test -race
+goroutine A: Get("x") hit  ──▶ MoveToFront(e) ─┐
+goroutine B: Get("x") hit  ──▶ MoveToFront(e) ─┼─▶ same list node,
+goroutine C: Get("y") miss ──▶ cache["y"] = e ─┘   no lock → race
 ```
 
-Correct solution:
-No output = solution correct:
-```
-$ go test -race
-$
+Right now `Get` has zero synchronization:
+
+- **The map.** One goroutine's `cache[key] = ...` on a miss races any
+  other goroutine's `cache[key]` read - a plain map read concurrent
+  with a write is undefined behavior in Go. `go test --race` reports it
+  as a data race; run without `--race` and with enough concurrent
+  callers it can instead crash outright with "fatal error: concurrent
+  map writes".
+- **The list.** `MoveToFront` on a *hit* and `PushFront`/`Remove` on a
+  *miss* all mutate the same `container/list.List`, which has no
+  locking of its own. This is the easy-to-miss half of the bug: it's
+  tempting to reach for an `RWMutex` that only takes `RLock` on the
+  hit path (since it "just reads" the cache), but the hit path still
+  *writes* to the list via `MoveToFront` - so that fix still races.
+
+## Your task
+
+Make `Get` safe to call from any number of goroutines at once, without
+changing its externally observable behavior. The signatures stay the
+same:
+
+```go
+func New(load KeyStoreCacheLoader) *KeyStoreCache
+func (k *KeyStoreCache) Get(key string) string
 ```
 
-Incorrect solution:
+- No data race on the map or the list (`go test --race`).
+- The cache still holds at most `CacheSize` entries and evicts the
+  least-recently-used one - `cache` and `pages` must always agree on
+  size.
+- Each key is loaded from the database **at most once**. Narrowing the
+  lock to just the map/list bookkeeping and reloading from the
+  database *outside* of it keeps `-race` quiet but breaks this: two
+  goroutines can both miss on the same key before either finishes
+  loading it, each issuing its own DB call.
+
+Try to get your test run under 30 seconds - and if you can, under 5.
+*Hint*: the database load is by far the slowest part of `Get`.
+
+## Test your solution
+
+```
+go test --race
+```
+
+No output means it's correct. A race prints something like:
+
 ```
 ==================
 WARNING: DATA RACE
@@ -39,13 +72,9 @@ Write by goroutine 7:
 Found 3 data race(s)
 ```
 
-## Additional Reading
+## Further reading
 
-* [https://golang.org/pkg/sync/](https://golang.org/pkg/sync/)
-* [https://gobyexample.com/mutexes](https://gobyexample.com/mutexes)
-* [https://golangdocs.com/mutex-in-golang](https://golangdocs.com/mutex-in-golang)
-
-### High Performance Caches in Production
-
-* [https://www.mailgun.com/blog/golangs-superior-cache-solution-memcached-redis/](https://www.mailgun.com/blog/golangs-superior-cache-solution-memcached-redis/)
-* [https://allegro.tech/2016/03/writing-fast-cache-service-in-go.html](https://allegro.tech/2016/03/writing-fast-cache-service-in-go.html)
+* [A Tour of Go: Mutexes](https://go.dev/tour/concurrency/9)
+* [The Go Memory Model](https://go.dev/ref/mem)
+* [`sync` package docs](https://pkg.go.dev/sync)
+* Real-world shape: [Mailgun's Go cache](https://www.mailgun.com/blog/golangs-superior-cache-solution-memcached-redis/), [Allegro's fast cache service](https://allegro.tech/2016/03/writing-fast-cache-service-in-go.html)
