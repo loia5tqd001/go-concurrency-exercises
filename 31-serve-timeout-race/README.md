@@ -13,15 +13,28 @@ CPU loop can't. `Serve` can't reach into it and stop it early; all it
 can do is stop *waiting* for it once the deadline passes, and hand the
 caller a timeout error instead of the handler's eventual result.
 
-The current implementation ignores `ctx` entirely: it calls
-`handler()` directly and returns whatever it gets, however long that
-takes. A caller's deadline never has any effect.
+```
+today (broken):                        goal:
+Serve(ctx, handler)                    Serve(ctx, handler)
+      │                                      │
+      ▼                                      ├──▶ handler runs on its own,
+  handler() blocks Serve                     │    unattended
+  however long it takes                      ▼
+      │                                 whichever lands first wins:
+      ▼                                  handler finishes → return its (value, err)
+  return whatever handler                 ctx's deadline passes → return ctx.Err()
+  returns - ctx never read
+                                        the loser keeps running to completion
+                                        with nobody left listening
+```
 
-Your task is to fix `Serve` so that it returns by `ctx`'s deadline
-(with `ctx.Err()`) if the handler hasn't finished by then, without
-ever blocking on the handler for longer than that - while still
-letting the handler's real result through if it finishes first. The
-function signature must stay exactly the same:
+## Your task
+
+Fix `Serve` so that it returns by `ctx`'s deadline (with `ctx.Err()`)
+if the handler hasn't finished by then, without ever blocking on the
+handler for longer than that - while still letting the handler's real
+result through if it finishes first. The function signature must stay
+exactly the same:
 
 ```go
 func Serve(ctx context.Context, handler func() (string, error)) (string, error)
