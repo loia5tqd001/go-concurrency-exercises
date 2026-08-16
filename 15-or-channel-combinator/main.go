@@ -1,54 +1,36 @@
 //////////////////////////////////////////////////////////////////////
 //
-// A service often needs to shut down as soon as ANY of several
-// independent triggers fires - a failed health check, an
-// admin-requested shutdown, a deadline expiring, ... . Each of these
-// is naturally represented as its own <-chan struct{} that gets
-// closed the moment that particular condition occurs. or is supposed
-// to combine an arbitrary, variadic number of such signal channels
-// into a single channel that callers can select on: it must close as
-// soon as ANY ONE of the input channels closes, no matter which one.
+// or combines any number of independent shutdown-trigger channels - a
+// failed health check, an admin-requested shutdown, a deadline
+// expiring, ... - into a single channel a caller can select on. It
+// must close as soon as ANY ONE of the input channels closes, no
+// matter which one:
 //
-// Right now or ignores every channel except the first one it was
-// given: it only ever waits on channels[0], so closing any channel
-// OTHER than channels[0] has no effect on the returned channel at
-// all - the combined channel just sits there, blocked forever, even
-// though one of the shutdown triggers already fired.
+//   today (broken):                      goal:
+//   channels[0] ──▶ watched               channels[0] ─┐
+//   channels[1] ···  ignored               channels[1] ─┼─▶ combined closes
+//   channels[2] ···  ignored               channels[2] ─┘   the instant ANY
+//   (closing 1 or 2 does nothing)                           one of them closes
+//
+// Right now or only ever watches channels[0]. Closing any channel
+// OTHER than channels[0] has no effect on the returned channel at all
+// - it just sits there, blocked forever, even though one of the
+// shutdown triggers already fired.
 //
 // Your task is to fix or so the returned channel closes as soon as
 // ANY of the input channels closes:
 //
 //   - With zero input channels there is nothing to wait on, so the
-//     simplest correct behavior - and the one the naive version below
-//     already gives you - is to return a channel that is never
-//     closed. Don't call or() with no channels expecting it to ever
-//     fire; there's nothing for it to react to.
-//   - With exactly one input channel, there's nothing to combine it
-//     with: just hand that single channel straight back. Resist the
-//     urge to wrap it in a relay goroutine that watches it and closes
-//     a new output channel in response - that relay would have no way
-//     to know when to give up, so it leaks forever any time the
-//     channel it's watching is never closed (which is completely
-//     normal for one of several independent triggers - only one of
-//     them fires, so the others simply stay open).
-//   - With more than one input channel, use the classic recursive
-//     divide-and-conquer idiom: watch channels[0] and channels[1]
-//     directly in a select, and recurse on the rest as a third branch
-//     of that same select. Whichever branch fires first - one of the
-//     two directly-watched channels, or the recursive "or" of the
-//     rest - closes the output.
-//
-//     There's a trap here: if you recurse on plain or(channels[2:]...)
-//     and this level's select happens to fire because of channels[0]
-//     or channels[1] (NOT the recursive branch), the goroutine that
-//     recursive call already spawned is left behind forever, still
-//     blocked waiting on channels further down the list that may
-//     never close - a goroutine leak every time. Avoid it by folding
-//     this level's own output channel into what you recurse on, e.g.
-//     or(append(channels[2:], orDone)...): that way, closing orDone
-//     (via the defer above) also unblocks the recursive call's
-//     goroutine instead of orphaning it, and the same reasoning
-//     applies at every level all the way down.
+//     simplest correct behavior is to return a channel that is never
+//     closed.
+//   - With exactly one input channel, closing it must close the
+//     combined channel promptly - without leaving behind a goroutine
+//     that outlives the call when that one channel never closes
+//     (completely normal for one of several independent triggers that
+//     doesn't end up firing).
+//   - With more than one input channel, the combined channel must
+//     close the instant any of them closes, no matter which one, and
+//     no matter how many there are.
 //
 // The function signature must stay the same:
 //
@@ -62,7 +44,6 @@ package main
 
 import (
 	"fmt"
-	"sync"
 	"time"
 )
 
@@ -76,18 +57,15 @@ import (
 // all.
 func or(channels ...<-chan struct{}) <-chan struct{} {
 	orDone := make(chan struct{})
-	var once sync.Once
-	for i := range channels {
-		go func() {
-			select {
-			case <-orDone:
-			case <-channels[i]:
-				once.Do(func() {
-					close(orDone)
-				})
-			}
-		}()
+	if len(channels) == 0 {
+		return orDone
 	}
+
+	go func() {
+		defer close(orDone)
+		<-channels[0]
+	}()
+
 	return orDone
 }
 
