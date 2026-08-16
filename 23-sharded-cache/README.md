@@ -11,6 +11,16 @@ unrelated key `"b"` for just as long, even though `"a"` and `"b"`
 don't logically conflict at all - there is no reason for that
 serialization other than this cache's overly coarse locking.
 
+```
+today:  Do("a", slow work) ──▶ lock ──▶ held for the whole call ──▶ unlock
+        Do("b", fast work) ──────────▶ blocked on the SAME lock, even
+                                       though "a" and "b" never conflict
+
+goal:   Do("a", slow work) ──▶ shard[a]'s lock ──▶ held only by "a"
+        Do("b", fast work) ──▶ shard[b]'s lock ──▶ proceeds immediately,
+                                                    independent of "a"
+```
+
 Your task is to reimplement `Cache` internally as N independent shards
 (e.g. `const numShards = 16`), each with its own mutex and its own
 sub-map, so operations on keys that land in different shards can
