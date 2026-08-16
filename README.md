@@ -62,7 +62,7 @@ The exercises are numbered in the order they were added — difficulty generally
 | 36  | [Batch Collector: A Reusable Batcher With a Deadline and a Real Shutdown](./36-batch-collector) |    ![extreme](https://img.shields.io/badge/-extreme-red)     | `batching` `channels` `mutex` `timer` `sync.waitgroup` `context` `graceful-shutdown` |
 | 37  | [Safe Pool Shutdown: Closing a Multi-Producer Job Queue Without Panicking](./37-safe-pool-shutdown) |      ![hard](https://img.shields.io/badge/-hard-orange)      | `worker-pool` `graceful-shutdown` `sync.rwmutex` `sync.waitgroup` |
 | 38  | [Settle Once: CompareAndSwap Between a Timeout and a Completion](./38-settle-once)      |     ![medium](https://img.shields.io/badge/-medium-blue)     | `atomic` `compare-and-swap` `mutex-free`                          |
-| 39  | [Load Shedding: Reject Fast Instead of Blocking the Hot Path](./39-load-shedding)      |     ![medium](https://img.shields.io/badge/-medium-blue)     | `worker-pool` `select` `load-shedding` `error-handling`         |
+| 39  | [Load Shedding: Reject Fast Instead of Blocking the Hot Path](./39-load-shedding)      |   ![easy](https://img.shields.io/badge/-easy-brightgreen)    | `worker-pool` `select` `load-shedding` `error-handling`         |
 
 ## Suggested order, mapped to _Concurrency in Go_
 
