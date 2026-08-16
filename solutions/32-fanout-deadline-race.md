@@ -119,7 +119,77 @@ Walking through the pieces:
   whichever writer is still in flight, which is exactly what returning
   `&result` on the deadline branch would do.
 
+## Approach 2: Skip the `WaitGroup` — let each component signal on a channel sized to exactly four
+
+`wg.Wait()` can't be selected on directly, which is *why* Approach 1
+needs a dedicated helper goroutine just to turn it into something
+`select`-able. An alternative sidesteps that indirection entirely: give
+each component its own completion signal on one shared channel, and
+race four receives against `ctx.Done()` instead of racing one:
+
+```go
+func Construct(ctx context.Context, basic, shipping, refund, history Component) (*Result, error) {
+	var result Result
+	done := make(chan struct{}, 4)
+
+	go func() { result.Basic = basic(); done <- struct{}{} }()
+	go func() { result.Shipping = shipping(); done <- struct{}{} }()
+	go func() { result.Refund = refund(); done <- struct{}{} }()
+	go func() { result.History = history(); done <- struct{}{} }()
+
+	for i := 0; i < 4; i++ {
+		select {
+		case <-done:
+		case <-ctx.Done():
+			return nil, ctx.Err()
+		}
+	}
+	return &result, nil
+}
+```
+
+No `sync.WaitGroup`, no helper goroutine calling `wg.Wait()` — each
+component goroutine signals its own completion directly, and
+`Construct` counts to four itself. Two things make this equivalent to,
+not just a shorter rewrite of, Approach 1:
+
+- **`done` is buffered to exactly 4 — the number of sends that will
+  ever happen — for the same reason `31-serve-timeout-race`'s `resCh`
+  is buffered to exactly 1.** If the deadline wins the race, `Construct`
+  stops receiving after the first `ctx.Done()`, but the components that
+  haven't finished yet still need somewhere to put their signal once
+  they eventually do — an unbuffered `done` would leave those sends
+  permanently blocked, leaking every one of those goroutines forever.
+  Sizing the buffer to the exact, known number of senders is what
+  makes "stop listening early" safe.
+- **Four received signals establish the same happens-before edge that
+  `close(done)` does in Approach 1.** The reason it's safe to read
+  `result` after the loop is not "because the loop ran four times" in
+  some informal sense — each `<-done` receive is itself synchronized
+  with the `done <- struct{}{}` send that unblocked it, and that send
+  happens *after* that component has already written its field of
+  `result`. By the time the fourth receive completes, all four writes
+  are ordered-before this point exactly as they'd be ordered-before
+  `wg.Wait()` returning in Approach 1 — the memory-model guarantee is
+  identical, it's just spread across four synchronization points
+  instead of funneled through one.
+
+The tradeoff: Approach 1 reads as "wait for a known, fixed set of
+goroutines" — the standard job for `sync.WaitGroup` — and keeps the
+completion-counting arithmetic out of `Construct` entirely. Approach 2
+drops the extra goroutine and the `sync` import, at the cost of a
+hand-rolled counter (`i < 4`) that has to stay in sync with the number
+of `go func` statements above it — add a fifth component later and
+Approach 1's `wg.Add(4)` is a one-line, hard-to-miss change, while
+Approach 2's loop bound and buffer size are two separate places that
+both have to be remembered.
+
 ## Why the still-writing goroutines don't leak, and why `result` outlives `Construct`
+
+The rest of this section walks through Approach 1's shape
+specifically; Approach 2's reasoning is the same in substance (see the
+happens-before point above) but there's no `wg` for the compiler to
+move to heap — only `result`, captured by the four component closures.
 
 Two things about this design are worth being explicit about, since
 they look related but are answered by two different mechanisms.
@@ -176,13 +246,15 @@ that's the whole rule escape analysis is checking for.
 
 - `wg.Wait()` can't be selected on directly — racing it against a
   deadline needs a helper goroutine that calls `wg.Wait()` and then
-  closes a `done` channel, which can.
+  closes a `done` channel, which can — or skip the `WaitGroup` entirely
+  and have each goroutine signal on a channel buffered to the exact
+  number of senders, counting the receives yourself.
 - Disjoint-field writes to a shared struct across goroutines are safe
   without a mutex — but that only covers the writes. Reading the
   struct before a proper happens-before point (`wg.Wait()` returning,
-  or equivalently `done` closing) races with whichever writer hasn't
-  finished yet, so the bail-out path must return `nil`, not a pointer
-  into the struct still being written.
+  `done` closing, or all four completion signals received) races with
+  whichever writer hasn't finished yet, so the bail-out path must
+  return `nil`, not a pointer into the struct still being written.
 - Returning early from `Construct` doesn't stop the component
   goroutines — it just stops the caller from waiting on them. They run
   to completion in the background regardless, the same as the
