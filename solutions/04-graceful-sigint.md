@@ -19,8 +19,6 @@ The mock's `Stop()` is deliberately adversarial: it never returns
 unconditionally for `Stop()` to finish will hang forever unless it also
 listens for a second signal (or a timeout).
 
-## Why the naive version is wrong
-
 ```go
 func main() {
 	proc := MockProcess{}
@@ -31,9 +29,24 @@ func main() {
 There is no `signal.Notify` call at all, so the *default* OS disposition for
 SIGINT applies: the very first Ctrl-C terminates the process outright.
 `proc.Stop()` is never invoked — there is no graceful shutdown, no matter how
-many times you press Ctrl-C. The naive version doesn't even distinguish
-"first" from "second" signal because it never intercepts any signal in the
-first place.
+many times you press Ctrl-C. `check_test.go` spawns this exact scaffold as a
+subprocess and sends it real `os.Interrupt` signals; against the naive
+version above it fails fast instead of hanging:
+
+```
+$ go test -v ./04-graceful-sigint/...
+=== RUN   TestFirstSigintTriesGracefulStopWithoutExiting
+    check_test.go:134: timed out after 5s waiting for output containing "Stopping process"; got:
+        Process running...
+--- FAIL: TestFirstSigintTriesGracefulStopWithoutExiting (5.12s)
+=== RUN   TestSecondSigintForcesPromptExit
+    check_test.go:161: timed out after 5s waiting for output containing "Stopping process"; got:
+        Process running...
+--- FAIL: TestSecondSigintForcesPromptExit (5.13s)
+FAIL
+FAIL	github.com/loia5tqd001/go-concurrency-exercises/04-graceful-sigint	12.046s
+FAIL
+```
 
 ## Approach 1: buffered signal channel + `select` (recommended)
 
@@ -109,31 +122,24 @@ func main() {
   for the (never-finishing) graceful stop goroutine — exactly the "last
   resort" behavior the exercise asks for.
 
-### Empirical verification
+### Verified
 
-I copied the exercise into a scratch directory, restored the *original*
-naive `main.go`/`mockprocess.go` from `git show HEAD:...`, confirmed the
-naive version builds, then built this fixed version and drove it with real
-signals via `kill -INT <pid>` (never touching the live repo):
+`check_test.go` spawns the program as a real subprocess and drives it with
+actual `os.Interrupt` signals. Against this fix, both tests pass — the first
+SIGINT reaches `proc.Stop()` without exiting, and the second SIGINT forces a
+prompt exit even though `Stop()` never returns:
 
-- **Naive baseline**: has no `signal.Notify` at all, so it relies on the
-  OS's default SIGINT disposition — in a normal interactive terminal, the
-  very first Ctrl-C kills it immediately without ever calling `Stop()`.
-- **Fixed version, first SIGINT only**: output showed
-  `Process running.... First signal received, stopping process
-  gracefully... Stopping process......` and the process stayed alive,
-  endlessly retrying the graceful stop (correct — the mock's `Stop()` is
-  designed to never succeed, so without a second signal it legitimately
-  keeps trying forever).
-- **Fixed version, first SIGINT then second SIGINT** (a couple of seconds
-  apart): output showed the graceful-stop attempt start, then
-  `Second signal received, killing process`, and the process exited
-  immediately with exit code 1. Confirmed via `kill -0 <pid>` that the
-  process was actually gone (no orphan left behind).
+```
+$ go test -v -race ./04-graceful-sigint/...
+=== RUN   TestFirstSigintTriesGracefulStopWithoutExiting
+--- PASS: TestFirstSigintTriesGracefulStopWithoutExiting (0.63s)
+=== RUN   TestSecondSigintForcesPromptExit
+--- PASS: TestSecondSigintForcesPromptExit (0.14s)
+PASS
+ok  	github.com/loia5tqd001/go-concurrency-exercises/04-graceful-sigint	3.224s
+```
 
-All test binaries and background processes were cleaned up in the scratch
-directory; nothing under the live `04-graceful-sigint/` was read as code or
-written to.
+Also clean across `go test -race -count=20`, with no flakes.
 
 ## Approach 2: bound the wait with a `context.Context` timeout (alternative)
 
@@ -191,16 +197,9 @@ adds `ctx.Done()` as a third `select` case, so the program also gives up on
 its own after a fixed grace period — handy in non-interactive contexts
 (systemd, containers) where nothing may ever send a second signal.
 
-I verified both branches empirically in the scratch copy with a shortened
-3-second timeout:
-
-- **Timeout path**: sent one SIGINT, then waited past the timeout without
-  sending a second one — output showed the graceful-stop attempt, then
-  `Graceful shutdown timed out - killing now`, and the process exited with
-  code 1.
-- **Second-signal path**: sent two SIGINTs a second apart — output showed
-  `Second interrupt - killing now` and the process exited with code 1,
-  well before the timeout would have fired.
+This variant also passes `check_test.go` unchanged: the first SIGINT still
+reaches `proc.Stop()` without exiting, and the second SIGINT still forces a
+prompt exit, well before the 10-second timeout would ever fire.
 
 ## Key takeaways
 
