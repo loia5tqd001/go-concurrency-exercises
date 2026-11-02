@@ -75,8 +75,11 @@ Commit only the scaffold, then copy the backup back.
   idea. Numbers are 1-based from the first line of the block. Band only
   what a reader skimming the block would otherwise miss — the lines that
   differ from the scaffold, or the one to three lines that implement the
-  trick. Most fences stay plain, and a block where every line is equally
-  the point gets no bands at all. See `web/README.md`.
+  trick. Most fences stay plain, and the reason is contrast: a band only
+  says something if unbanded code is left beside it. When the band would
+  cover the block's whole informative content — leaving a signature, a
+  brace or a bare `return` — the reader is already reading every line, so
+  leave the fence plain. See `web/README.md`.
 
 ## When you learn a lesson
 
