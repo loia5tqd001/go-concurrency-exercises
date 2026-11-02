@@ -285,3 +285,12 @@ Keep row formatting identical to neighbors: `| N | [Title](./NN-folder) |
 `extreme` (red) — pick using the rubric above, not by guessing.
 Lettered sequels (`14b`, `16b`, `33b`) sit directly after their parent
 row.
+
+This table is the single source of truth for each exercise's title,
+difficulty, and topics. The web site parses it, and `make gen` derives
+the "Browse by topic" index and the `solutions/README.md` index from it.
+Before `make gen` existed, both copies drifted: the topic index listed
+05 under `timer` while the table said `ticker`, and the solutions index
+linked a renamed file (`38-flash-sale-inventory.md`) and missed 33b and
+39. `make lint` checks the row format, the badge URL, and the folder
+order, and that a sequel never rates below its parent.

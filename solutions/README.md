@@ -8,12 +8,13 @@
 
 ## Index
 
+<!-- BEGIN GENERATED solutions-index: edit the overview table in README.md, then run `make gen` -->
 | # | Exercise | Solution |
 |---|----------|----------|
 | 0 | Limit your Crawler | [00-limit-crawler.md](00-limit-crawler.md) |
 | 1 | Producer-Consumer | [01-producer-consumer.md](01-producer-consumer.md) |
-| 2 | Race Condition in Caching Scenario | [02-race-in-cache.md](02-race-in-cache.md) |
-| 3 | Limit Service Time for Free-Tier Users | [03-limit-service-time.md](03-limit-service-time.md) |
+| 2 | Race in an LRU Cache | [02-race-in-cache.md](02-race-in-cache.md) |
+| 3 | Limit Service Time for Free-tier Users | [03-limit-service-time.md](03-limit-service-time.md) |
 | 4 | Graceful SIGINT Killing | [04-graceful-sigint.md](04-graceful-sigint.md) |
 | 5 | Clean Inactive Sessions to Prevent Memory Overflow | [05-session-cleaner.md](05-session-cleaner.md) |
 | 6 | Fan-Out, Fan-In: Concurrent Thumbnail Generation | [06-fan-out-fan-in.md](06-fan-out-fan-in.md) |
@@ -46,11 +47,14 @@
 | 31 | Serve Timeout Race: First-Wins Response Under a Deadline | [31-serve-timeout-race.md](31-serve-timeout-race.md) |
 | 32 | Racing a Fan-Out Against a Deadline | [32-fanout-deadline-race.md](32-fanout-deadline-race.md) |
 | 33 | Load Balancer: Self-Scheduling Workers That Report Their Own Load | [33-load-balancer.md](33-load-balancer.md) |
+| 33b | Non-Blocking Dispatch: A Load Balancer That Can't Depend on a Buffer | [33b-load-balancer-nonblocking-dispatch.md](33b-load-balancer-nonblocking-dispatch.md) |
 | 34 | Concurrent Prime Sieve: A Growing Pipeline That Must Learn to Shut Down | [34-prime-sieve.md](34-prime-sieve.md) |
 | 35 | Your Own singleflight: Deduping In-Flight Duplicate Calls | [35-singleflight.md](35-singleflight.md) |
-| 36 | Batch Collector: Coalescing N Concurrent Calls Into One Batch API Request | [36-batch-collector.md](36-batch-collector.md) |
+| 36 | Batch Collector: A Reusable Batcher With a Deadline and a Real Shutdown | [36-batch-collector.md](36-batch-collector.md) |
 | 37 | Safe Pool Shutdown: Closing a Multi-Producer Job Queue Without Panicking | [37-safe-pool-shutdown.md](37-safe-pool-shutdown.md) |
-| 38 | Flash-Sale Inventory: Lock-Free Stock Claims with CompareAndSwap | [38-flash-sale-inventory.md](38-flash-sale-inventory.md) |
+| 38 | Settle Once: CompareAndSwap Between a Timeout and a Completion | [38-settle-once.md](38-settle-once.md) |
+| 39 | Load Shedding: Reject Fast Instead of Blocking the Hot Path | [39-load-shedding.md](39-load-shedding.md) |
+<!-- END GENERATED solutions-index -->
 
 ## A note on exercises 0-5
 

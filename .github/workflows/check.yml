@@ -1,0 +1,42 @@
+# Runs the same rules as the local commit gate (.githooks/pre-commit), so a
+# commit made with --no-verify or from another clone still gets checked.
+name: check
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  go:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+      - name: Lint (layout, README tables, docs, gofmt)
+        run: go run ./tools/check lint -src=head
+      # Three runs, because a scaffold that passes even once is either a
+      # committed solution or a test that does not catch the bug reliably.
+      - name: Every scaffold builds and fails its own tests
+        run: go run ./tools/check scaffolds -src=head -runs=3
+
+  web:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - run: npm ci
+        working-directory: web
+      # Builds the in-browser Go toolchain and the exercise data from HEAD.
+      - run: npm run prepare-data
+        working-directory: web
+      - name: Every scaffold builds and fails in the browser runner
+        run: npm run smoke
+        working-directory: web

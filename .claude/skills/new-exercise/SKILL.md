@@ -81,17 +81,22 @@ just the ones that are convenient this time:
    37's "submit after Close has already returned" test), plus a
    `-race`-reliant test for the messier concurrent-overlap case.
 
-5. **Verify empirically, don't guess — against BOTH ends.** From the
-   repo root: `gofmt -l <folder>`, `go vet ./<folder>/...`, then
-   `go test -v ./<folder>/...` and `go test -race ./<folder>/...`
-   against the naive scaffold — confirm it fails, *fast* (sub-second to
-   a few seconds, never hanging toward Go's default 10-minute timeout).
-   Then temporarily write the reference fix in `main.go`, rerun both,
-   confirm everything passes clean including `-race` (repeat with
-   `-count=20` if timing-sensitive) with zero goroutine leaks, and only
-   *then* revert to the naive scaffold. Skipping the fixed-version pass
-   is how untested exercises ship with a second, unintended bug baked
-   into the "already correct" parts of the naive code.
+5. **Verify empirically, don't guess — against BOTH ends.**
+   - **Naive end:** `make verify EX=NN`. It builds the scaffold, runs
+     `go vet`, and runs the tests 10 times; every run must fail, and
+     fail fast (a run that lasts 2 minutes is reported as a hang). Read
+     `go test -v ./<folder>/...` once too, and confirm that the tests
+     that fail are the ones meant to catch the bug.
+   - **Fixed end:** write the reference fix to a scratch file outside
+     the repo, then run `make try EX=NN MAIN=/tmp/NN-ref.go`. It copies
+     the exercise to a temp folder, swaps in your file, and runs the
+     tests 20 times with `-race`; confirm zero goroutine leaks as well.
+     Never write the fix into the repo's `main.go`: in the owner's
+     checkout that file can hold their own solution.
+
+   Skipping the fixed-version pass is how untested exercises ship with
+   a second, unintended bug baked into the "already correct" parts of
+   the naive code.
 
 6. **Write `solutions/NN-*.md`** — spoiler warning banner, then "The
    problem" quoting main.go's actual naive code verbatim plus the
@@ -110,7 +115,9 @@ just the ones that are convenient this time:
    difficulty badge using [REFERENCE.md](REFERENCE.md)'s **Difficulty
    rubric** — score against its 5 dimensions and place the exercise
    relative to the fixed anchor examples, don't eyeball it or copy the
-   nearest-numbered neighbor's badge without scoring.
+   nearest-numbered neighbor's badge without scoring. Then run
+   `make gen`: it rewrites the "Browse by topic" index and
+   `solutions/README.md` from the table. Never edit those two by hand.
 
 8. **Cross-check the trio.** `main.go`'s header comment, `README.md`'s
    "right now" section, and `solutions/NN-*.md`'s "The problem" section
@@ -118,11 +125,17 @@ just the ones that are convenient this time:
    and confirm they agree. This is the single most common drift point
    when an exercise gets edited once and not fully.
 
+9. **Run `make check`** before you commit. The commit gate runs the
+   same checks and refuses the commit if any fails; never bypass it
+   with `--no-verify`. Commit with explicit paths, never `git add -A`.
+
 ## Redesigning an existing exercise in place
 
 Same steps, but also: check `git diff`/`git status` for any uncommitted
 solution sitting in that folder's `main.go` before you overwrite it —
-back it up (copy aside) so it can be restored after you commit the new
-scaffold, per this repo's rule that a solved `main.go` never gets
-committed. Re-run step 5 against the new scaffold specifically (an old
-solution's test pass doesn't tell you the new scaffold fails correctly).
+back it up to `.wip-backup/<folder>/main.go` (the edit guard refuses
+the edit until that copy exists) so it can be restored after you commit
+the new scaffold, per this repo's rule that a solved `main.go` never
+gets committed. Re-run step 5 against the new scaffold specifically (an
+old solution's test pass doesn't tell you the new scaffold fails
+correctly).

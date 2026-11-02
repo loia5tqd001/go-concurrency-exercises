@@ -1,0 +1,5 @@
+#!/bin/sh
+# The commit gate. `make setup` points git at this folder once per clone.
+# The rules live in tools/check (see AGENTS.md); this file only runs them
+# against the index, which is what the commit will contain.
+exec go run ./tools/check precommit

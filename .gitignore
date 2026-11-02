@@ -1,3 +1,20 @@
 # Machine-local direnv config (points at this machine's gvm Go install)
 .envrc
 log/*
+# Build and profiling output: `go test -c`, `go build`, -cpuprofile, -trace.
+# Inside an exercise folder, a file whose name starts with two digits is a
+# binary named after its folder.
+*.test
+*.out
+*.prof
+/[0-9][0-9]*-*/[0-9][0-9]*
+
+# Copies of the owner's uncommitted files, made before an agent edits them
+# (the edit guard in .claude/settings.json asks for this).
+.wip-backup/
+
+# Isolated worktrees that Claude Code agents check out.
+.claude/worktrees/
+
+# Binary that .claude/hooks/check.sh builds from tools/check.
+.claude/.bin/
