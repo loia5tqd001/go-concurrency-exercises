@@ -10,7 +10,7 @@ today:                                goal:
 Ctrl-C ──▶ OS kills the process       1st Ctrl-C ──▶ proc.Stop() (graceful)
            immediately, mid-work            │              │
            proc.Stop() never runs           │        still running?
-                                             │              │
+                                            │              │
                                        2nd Ctrl-C ──▶ kill immediately
                                                        (last resort)
 ```

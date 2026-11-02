@@ -20,7 +20,7 @@ whatever that in-flight call was about to do.
 jobs producer ──▶ jobs (chan int) ──▶ closed after the last send
                         │
         ┌───────────────┼───────────────┬───────────────┐
-        ▼                ▼               ▼               ▼
+        ▼               ▼               ▼               ▼
     worker 1         worker 2        worker 3        worker 4
     range jobs {     range jobs {    range jobs {    range jobs {
       process(i)       process(i)     process(i)      process(i)
@@ -32,7 +32,7 @@ TODAY   Start returns done := make(chan struct{}); close(done) - shut
 
 GOAL    done closes only once EVERY worker has returned from range
         jobs - i.e. its last process() call has actually completed
-        caller: <-done fires ⟹ safe to tear down whatever process()
+        caller: <-done fires ⇒ safe to tear down whatever process()
         was writing into
 ```
 

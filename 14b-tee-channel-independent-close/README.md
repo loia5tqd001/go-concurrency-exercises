@@ -8,9 +8,9 @@ What's missing is a stricter requirement on **closing**. Right now, closing is g
 
 ```
 today:  in ──▶ [one goroutine: holds v until BOTH out1 AND out2 took it] ──┬──▶ out1
-                                                                            └──▶ out2
+                                                                           └──▶ out2
         out2 left unread ⇒ goroutine parked forever on out2's send
-                          ⇒ out1 starves too, and close(out1) waits on out2 catching up
+                         ⇒ out1 starves too, and close(out1) waits on out2 catching up
 
 goal:   in ──┬──▶ [out1's own delivery, own completion-tracking] ──▶ out1 closes the
              │                                                       instant OUT1 has it all

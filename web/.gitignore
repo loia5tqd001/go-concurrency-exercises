@@ -1,0 +1,7 @@
+node_modules/
+dist/
+.vercel/
+# Build outputs of scripts/prepare.sh
+public/go/
+public/data/
+src/generated/

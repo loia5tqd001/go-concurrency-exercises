@@ -7,7 +7,7 @@ right now.
 
 ```
                 dispatch: heap.Pop → least-loaded Worker
-       ┌─────────────────────────────────────────────┐
+       ┌──────────────────────────────────────────────┐
        ▼                                              │
 work ─▶ Balance ◀──────────── done ◀──── Worker.work ─┘
          (pool: min-heap by pending)      (runs req, then

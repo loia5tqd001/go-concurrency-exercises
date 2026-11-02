@@ -30,7 +30,7 @@ ever actually shared.
 ```
 no entry for "k" ──Do("k")──▶ entry created, leader runs fn ──fn returns──▶ entry deleted
         ▲                                                                       │
-        └───────────────────── next Do("k") is a brand-new call ───────────────┘
+        └───────────────────── next Do("k") is a brand-new call ────────────────┘
 ```
 
 Only callers genuinely *concurrent* with an in-flight call get to
