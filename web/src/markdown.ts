@@ -17,11 +17,18 @@ const escapeHTML = (s: string) =>
   s.replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" })[c]!);
 
 // slug follows GitHub's heading anchors, so "#the-bug" links keep working.
-function slug(text: string): string {
-  return text
+// GitHub slugs the rendered heading, so this takes rendered inline HTML and
+// removes the markup first - otherwise the "_" of an emphasised word survives
+// into the anchor and the link misses. Entities are decoded because the
+// renderer escapes "&" and "'" before we ever see them.
+const entities: Record<string, string> = { "&amp;": "&", "&lt;": "<", "&gt;": ">", "&quot;": '"', "&#39;": "'" };
+
+function slug(html: string): string {
+  return html
+    .replace(/<[^>]+>/g, "")
+    .replace(/&(?:amp|lt|gt|quot|#39);/g, (e) => entities[e]!)
     .toLowerCase()
     .trim()
-    .replace(/<[^>]+>/g, "")
     .replace(/[^\p{L}\p{N}\s_-]/gu, "")
     .replace(/\s/g, "-");
 }
@@ -54,12 +61,13 @@ export function renderMarkdown(src: string, ctx: DocContext): string {
   const md = new Marked({ gfm: true });
   md.use({
     renderer: {
-      heading({ tokens, depth, text }) {
-        let id = slug(text);
+      heading({ tokens, depth }) {
+        const inline = this.parser.parseInline(tokens);
+        let id = slug(inline);
         const n = seen.get(id) ?? 0;
         seen.set(id, n + 1);
         if (n > 0) id += `-${n}`;
-        return `<h${depth} id="${escapeHTML(id)}">${this.parser.parseInline(tokens)}</h${depth}>\n`;
+        return `<h${depth} id="${escapeHTML(id)}">${inline}</h${depth}>\n`;
       },
       link({ href, title, tokens }) {
         const t = title ? ` title="${escapeHTML(title)}"` : "";

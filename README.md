@@ -1,11 +1,5 @@
 # Go Concurrency Exercises
 
-## Credit
-
-This repo started as a fork of [loong/go-concurrency-exercises](https://github.com/loong/go-concurrency-exercises) and has since diverged heavily (new exercises, rewritten scaffolds, redesigned problems) — credit to Long Hoang for the original idea and structure.
-
-Most of the patterns exercised here (and the [Suggested order](#suggested-order-mapped-to-concurrency-in-go) below) follow the structure of Katherine Cox-Buday's [_Concurrency in Go_](https://www.oreilly.com/library/view/concurrency-in-go/9781491941294/) (O'Reilly, 2017) — race conditions, deadlock/livelock/starvation, the `sync` and channel building blocks, the pipeline/fan-out-fan-in/or-done/tee/bridge family, and the at-scale patterns (heartbeats, replicated requests, healing unhealthy goroutines). If an exercise here feels familiar, it's likely because the book covers the same idea in more depth — it's a great companion read.
-
 ## How to take this challenge
 
 1. _Only edit `main.go`_ to solve the problem. Do not touch any of the other files.
@@ -306,3 +300,9 @@ when every real case was ready to try but none of them could proceed
 | `timeout`             | [27](./27-heartbeats)                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                  |
 | `timer`               | [05](./05-session-cleaner), [36](./36-batch-collector)                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                 |
 | `worker-pool`         | [06](./06-fan-out-fan-in), [10](./10-semaphore), [11](./11-worker-pool), [16](./16-errgroup-failfast), [25](./25-graceful-multistage-shutdown), [33](./33-load-balancer), [37](./37-safe-pool-shutdown), [39](./39-load-shedding)                                                                                                                                                                                                                                                            |
+
+## Credit
+
+This repo started as a fork of [loong/go-concurrency-exercises](https://github.com/loong/go-concurrency-exercises) and has since diverged heavily (new exercises, rewritten scaffolds, redesigned problems) — credit to Long Hoang for the original idea and structure.
+
+Most of the patterns exercised here (and the [Suggested order](#suggested-order-mapped-to-concurrency-in-go) above) follow the structure of Katherine Cox-Buday's [_Concurrency in Go_](https://www.oreilly.com/library/view/concurrency-in-go/9781491941294/) (O'Reilly, 2017) — race conditions, deadlock/livelock/starvation, the `sync` and channel building blocks, the pipeline/fan-out-fan-in/or-done/tee/bridge family, and the at-scale patterns (heartbeats, replicated requests, healing unhealthy goroutines). If an exercise here feels familiar, it's likely because the book covers the same idea in more depth — it's a great companion read.
