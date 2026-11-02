@@ -11,7 +11,7 @@ Ctrl-C ──▶ OS kills the process       1st Ctrl-C ──▶ proc.Stop() (gr
            immediately, mid-work            │              │
            proc.Stop() never runs           │        still running?
                                             │              │
-                                       2nd Ctrl-C ──▶ kill immediately
+                                      2nd Ctrl-C ──▶ kill immediately
                                                        (last resort)
 ```
 

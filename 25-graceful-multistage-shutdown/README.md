@@ -23,7 +23,7 @@ jobs producer ──▶ jobs (chan int) ──▶ closed after the last send
         ▼               ▼               ▼               ▼
     worker 1         worker 2        worker 3        worker 4
     range jobs {     range jobs {    range jobs {    range jobs {
-      process(i)       process(i)     process(i)      process(i)
+      process(i)       process(i)      process(i)      process(i)
     }                }               }               }
 
 TODAY   Start returns done := make(chan struct{}); close(done) - shut

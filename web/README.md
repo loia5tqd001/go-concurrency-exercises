@@ -45,10 +45,20 @@ npm run smoke -- --solutions ..   # your local main.go files instead; each must 
 
 ## Deploy to Vercel
 
-`vercel.json` at the repository root holds the whole configuration. You do not need to change any project settings.
+Two `vercel.json` files exist, because Vercel reads the one that sits in the
+directory you set as the project's Root Directory, and each root needs
+different paths:
+
+| Root Directory | Config Vercel reads | Install command |
+|---|---|---|
+| repository root | `vercel.json` | `cd web && npm ci` |
+| `web` | `web/vercel.json` | `npm ci` |
+
+Vercel's import screen pre-selects `web`, because that is where the Vite app
+lives. Either choice deploys correctly, so you do not need to change anything.
 
 1. Push the repository to GitHub.
-2. In Vercel, import the repository, and keep the root directory as the repository root.
+2. In Vercel, import the repository.
 3. Deploy. Each push to `main` deploys again.
 
 The build reads exercises from the commit that Vercel checked out, so only committed files are published. A plain `vercel deploy` from your machine uploads files without `.git`, and the generator then stops with an error. This prevents a local `main.go` solution from being published by accident. To deploy from the CLI, run `vercel build` and then `vercel deploy --prebuilt`.

@@ -18,7 +18,7 @@ today:  Do("a", slow work) ──▶ lock ──▶ held for the whole call ─�
 
 goal:   Do("a", slow work) ──▶ shard[a]'s lock ──▶ held only by "a"
         Do("b", fast work) ──▶ shard[b]'s lock ──▶ proceeds immediately,
-                                                    independent of "a"
+                                                   independent of "a"
 ```
 
 Your task is to reimplement `Cache` internally as N independent shards

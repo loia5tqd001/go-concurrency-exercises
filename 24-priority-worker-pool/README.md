@@ -24,7 +24,7 @@ submit order:   1(p1)  2(p1)  3(p1)  4(p1)  5(p1)  6(p1)  7(p10)
 
 today - jobs chan Job (FIFO, buffered but that doesn't help):
   [1][2][3][4][5][6][7] ──▶ worker drains strictly in send order
-                             job 7 (p10) still finishes dead last
+                            job 7 (p10) still finishes dead last
 
 goal - priority queue, ties broken by arrival order:
   [7][1][2][3][4][5][6] ──▶ worker always pops the highest-Priority

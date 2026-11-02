@@ -13,8 +13,8 @@ today:  goroutine A ─┐
 
 goal:   goroutine A ─┐        request           actor goroutine
         goroutine B ─┼─▶ {op, amount, reply} ─▶ owns balance, one
-        goroutine C ─┘                          request at a time
-                     ◀───────────── reply ──────────────┘
+        goroutine C ─┘                         │ request at a time
+                     ◀───────────── reply ─────┘
 ```
 
 Your task is to reimplement `Account` the "share memory by

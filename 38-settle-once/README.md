@@ -21,7 +21,7 @@ func (r *Responder) Complete(result string) bool {
 
 ```
 goroutine A (work finishes):  reads settled (false) ──▶ notify("completed") ──▶ settled = true
-goroutine B (deadline fires): reads settled (false) ──▶ notify("timed out")  ──▶ settled = true
+goroutine B (deadline fires): reads settled (false) ──▶ notify("timed out") ──▶ settled = true
                                  ↑ both read settled before either wrote it - notify fires TWICE
 ```
 

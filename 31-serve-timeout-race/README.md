@@ -22,7 +22,7 @@ Serve(ctx, handler)                    Serve(ctx, handler)
   however long it takes                      ▼
       │                                 whichever lands first wins:
       ▼                                  handler finishes → return its (value, err)
-  return whatever handler                 ctx's deadline passes → return ctx.Err()
+  return whatever handler                ctx's deadline passes → return ctx.Err()
   returns - ctx never read
                                         the loser keeps running to completion
                                         with nobody left listening

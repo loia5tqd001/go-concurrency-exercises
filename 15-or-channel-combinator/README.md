@@ -9,10 +9,10 @@ signal channels into a single channel a caller can select on.
 
 ```
 today (broken):                      goal:
-channels[0] ──▶ watched                channels[0] ─┐
+channels[0] ──▶  watched               channels[0] ─┐
 channels[1] ···  ignored               channels[1] ─┼─▶ combined closes
 channels[2] ···  ignored               channels[2] ─┘   the instant ANY
-(closing 1 or 2 does nothing)                            one of them closes
+(closing 1 or 2 does nothing)                           one of them closes
 ```
 
 Right now `or` only ever watches `channels[0]`. Closing any channel

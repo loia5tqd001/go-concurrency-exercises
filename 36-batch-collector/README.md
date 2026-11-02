@@ -90,7 +90,7 @@ ways to reach it instead of one:
 ```
 Add pushes count to MaxBatchSize ──┐
 batch's MaxWait timer fires  ──────┼──▶  EXACTLY ONE of these may ever
-Close is called            ────────┘      call fn for this one batch
+Close is called            ────────┘     call fn for this one batch
 ```
 
 Worth trusting less than it looks like: `time.Timer.Stop()` does

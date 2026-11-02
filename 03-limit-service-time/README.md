@@ -16,19 +16,19 @@ HandleRequest(process, u)
         │
         ▼
   premium user? ──yes──▶ process() runs to completion, however long -
-        │                 never killed, ok=true
+        │                never killed, ok=true
         │no
         ▼
   free user: remaining lifetime quota (10s total, all calls combined)
         │
         ├──▶ finishes before quota runs out ──▶ ok=true, credits the
-        │                                        time it actually used
+        │                                       time it actually used
         │
         └──▶ hits the lifetime mark mid-run ──▶ cut loose right there,
-                                                  ok=false, credits only
-                                                  time actually burned -
-                                                  process keeps running
-                                                  anyway, orphaned
+                                                ok=false, credits only
+                                                time actually burned -
+                                                process keeps running
+                                                anyway, orphaned
 ```
 
 Right now `HandleRequest` does none of this - it calls `process()`

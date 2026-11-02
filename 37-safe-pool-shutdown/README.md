@@ -24,7 +24,7 @@ func (p *Pool) Close() {
 goroutine A: Submit(job) ──▶ p.jobs <- job  ─────┐
                                                  ├──▶ race: which happens first?
 goroutine B: Close()     ──▶ close(p.jobs)  ─────┘
-                                                   send on a closed channel → PANIC
+                                                      send on a closed channel → PANIC
 ```
 
 `Close` closes `jobs` with no regard for what's still in flight.

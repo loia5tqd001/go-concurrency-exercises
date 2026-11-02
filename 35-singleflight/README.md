@@ -12,7 +12,7 @@ today (broken):                     goal:
    │      │      │                    │      │      │
    ▼      ▼      ▼                    └──┬───┴──────┘
   fn()   fn()   fn()  ← 3 calls          first one in becomes leader,
-                                          runs fn() ONCE
+                                         runs fn() ONCE
                                                   │
                                      other 2 wait, share its (v, err),
                                      report shared = true

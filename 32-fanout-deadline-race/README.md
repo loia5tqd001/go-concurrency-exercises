@@ -12,7 +12,7 @@ once started it always runs for its full latency.
 today:  basic ────┐
         shipping ─┼─▶ write result's fields ─▶ wg.Wait() ─▶ &result, nil
         refund ───┤      (concurrently)          (blocks unconditionally,
-        history ──┘                               ctx never consulted)
+        history ──┘                              ctx never consulted)
 
 goal:   basic ────┐
         shipping ─┼─▶ write result's fields ─▶ race: wg.Wait() vs ctx.Done()

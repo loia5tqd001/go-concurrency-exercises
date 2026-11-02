@@ -23,7 +23,7 @@ Goal:    c ──▶ [forwarder goroutine] ──▶ out
                  <-c  or  <-done   out<-v  or  <-done
 
          close(done) ──▶ unblocks whichever select is currently
-                          parked (waiting on c, or waiting to send)
+                         parked (waiting on c, or waiting to send)
                           ──▶ forwarder returns ──▶ close(out)
 ```
 

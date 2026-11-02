@@ -23,8 +23,8 @@ stalled unit:  pulse  (nothing - SimulateUnit blocks for StallDuration,
                  ▼      eventually - if ever - gives up)
 watcher timer: reset ──────────── silence ──────────▶ perPulseTimeout later: FIRES
                                                         (one pulse interval after the
-                                                         LAST sign of life, not "however
-                                                         long the job would've taken")
+                                                        LAST sign of life, not "however
+                                                        long the job would've taken")
 ```
 
 Today, neither half of that exists:

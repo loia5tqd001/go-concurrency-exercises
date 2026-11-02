@@ -15,7 +15,7 @@ today:  in ──▶ [one goroutine: holds v until BOTH out1 AND out2 took it] �
 goal:   in ──┬──▶ [out1's own delivery, own completion-tracking] ──▶ out1 closes the
              │                                                       instant OUT1 has it all
              └──▶ [out2's own delivery, own completion-tracking] ──▶ out2 closes the
-                                                                      instant OUT2 has it all
+                                                                     instant OUT2 has it all
 ```
 
 So if one consumer has already received everything the sensor will ever produce, but the other hasn't read a single value yet, the fast consumer's channel still won't close.

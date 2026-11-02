@@ -11,8 +11,8 @@ right now.
        ▼                                              │
 work ─▶ Balance ◀──────────── done ◀──── Worker.work ─┘
          (pool: min-heap by pending)      (runs req, then
-                                            reports itself
-                                            back on done)
+                                           reports itself
+                                           back on done)
 ```
 
 `Worker.work` (already correct — do not touch) runs requests off its

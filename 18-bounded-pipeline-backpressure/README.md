@@ -38,7 +38,7 @@ run concurrently, connected by a channel with a small, fixed buffer
 ```
 Goal: a bounded channel makes the producer wait on the consumer
   produce(i) ──▶ ch (small, fixed cap) ──▶ consume(item)
-   goroutine         buffered channel          range loop
+   goroutine        buffered channel         range loop
 
   Once cap(ch) items are buffered AND the consumer is mid-item,
   the next  ch <- produce(i)  blocks until consume() drains one.

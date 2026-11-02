@@ -16,7 +16,7 @@ today: CreateSession/UpdateSessionData ──▶ sessions[id] = {data}
 
 goal:  CreateSession/UpdateSessionData ──▶ sessions[id] = {data, ...}
                                                   │
-                                5-7s pass with no further touch
+                                 5-7s pass with no further touch
                                                   │
                                                   ▼
                                  session is reclaimed

@@ -5,7 +5,7 @@ Modeled directly on the classic concurrent prime sieve from Rob Pike's
 per prime found:
 
 ```
-generate ──▶ filter(2) ──▶ filter(3) ──▶ filter(5) ──▶ ...  ──▶ Primes reads n values
+generate ──▶ filter(2) ──▶ filter(3) ──▶ filter(5) ──▶ ... ──▶ Primes reads n values
  2,3,4,5,..   drops evens    drops ×3      drops ×5
 ```
 
