@@ -402,5 +402,11 @@ func guardStop(root string, in hookInput) string {
 	if err == nil {
 		return ""
 	}
-	return "Before you finish: `make lint` fails after your edits. Fix these problems, or tell the owner why you cannot:\n" + string(out)
+	// Cap the message: it lands in the agent's context, and the first
+	// problems are enough to start on; `make lint` lists the rest.
+	lines := strings.Split(strings.TrimRight(string(out), "\n"), "\n")
+	if len(lines) > 25 {
+		lines = append(lines[:25], fmt.Sprintf("... %d more lines; run `make lint` to see them all.", len(lines)-25))
+	}
+	return "Before you finish: `make lint` fails after your edits. Fix these problems, or tell the owner why you cannot:\n" + strings.Join(lines, "\n")
 }

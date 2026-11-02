@@ -53,13 +53,16 @@ func runScaffolds(args []string) error {
 func pick(t *tree, args []string) ([]string, error) {
 	exs := exercises(t)
 	if len(args) == 0 {
-		var ids []string
+		var ids, skipped []string
 		for _, ex := range exs {
 			if t.src == "worktree" && changedFromHEAD(t.root, ex.id+"/main.go") {
-				fmt.Printf("skip %s: main.go has local changes (the owner's solution?); name the exercise to check it anyway\n", ex.id)
+				skipped = append(skipped, ex.prefix)
 				continue
 			}
 			ids = append(ids, ex.id)
+		}
+		if len(skipped) > 0 {
+			fmt.Printf("skip %d exercise(s) whose main.go has local changes (the owner's solutions?): %s. Name one to check it anyway.\n", len(skipped), strings.Join(skipped, " "))
 		}
 		return ids, nil
 	}
@@ -127,14 +130,23 @@ func checkScaffolds(t *tree, ids []string, runs int, timeout time.Duration) bool
 	}
 	wg.Wait()
 
-	ok := true
+	// Name each passing exercise only in a small run (make verify EX=36),
+	// where the failing test names help. A full run prints failures and
+	// one summary line, so it does not flood an agent's context.
+	ok, passed := true, 0
 	for _, v := range verdicts {
 		if v.ok {
-			fmt.Printf("ok   %s: %s\n", v.id, v.detail)
+			passed++
+			if len(verdicts) <= 3 {
+				fmt.Printf("ok   %s: %s\n", v.id, v.detail)
+			}
 		} else {
 			ok = false
 			fmt.Fprintf(os.Stderr, "FAIL %s: %s\n", v.id, v.detail)
 		}
+	}
+	if len(verdicts) > 3 {
+		fmt.Printf("scaffolds (%s): %d of %d fail their tests as intended\n", t.src, passed, len(verdicts))
 	}
 	if !ok {
 		fmt.Fprintf(os.Stderr, "\nscaffolds (%s): a committed main.go must build and fail its own tests fast. See AGENTS.md.\n", t.src)
