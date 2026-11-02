@@ -34,7 +34,7 @@ HandleRequest(process, u)
 Right now `HandleRequest` does none of this - it calls `process()`
 synchronously and always returns `true`:
 
-```go {2,3}
+```go
 func HandleRequest(process func(), u *User) bool {
 	process()
 	return true

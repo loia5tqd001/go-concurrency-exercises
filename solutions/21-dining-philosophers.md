@@ -14,7 +14,7 @@ ever grinding to a halt.
 The given implementation always acquires forks in the same order —
 left first, then right, for every philosopher:
 
-```go
+```go {5,13}
 func (p *Philosopher) Dine(wg *sync.WaitGroup, mealsEaten *int32) {
 	defer wg.Done()
 

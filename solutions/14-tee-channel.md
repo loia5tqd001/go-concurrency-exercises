@@ -8,7 +8,7 @@
 
 The naive implementation is:
 
-```go {2}
+```go
 func Tee(done <-chan struct{}, in <-chan int) (<-chan int, <-chan int) {
 	return in, in
 }

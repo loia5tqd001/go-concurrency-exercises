@@ -6,7 +6,7 @@
 
 The starting point is a `FetchFastest` that fans out the same request to several redundant `Replica` handlers concurrently and is supposed to return whichever one answers first, so that no single replica's unpredictable tail latency slows the caller down:
 
-```go
+```go {17}
 type Replica func(done <-chan struct{}) (string, error)
 
 func FetchFastest(done <-chan struct{}, replicas ...Replica) (string, error) {

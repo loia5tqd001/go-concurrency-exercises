@@ -6,7 +6,7 @@
 
 The starting point is a `Cache` that is already race-free — one mutex protects one map — but pays for that safety with terrible contention:
 
-```go
+```go {7,8,11}
 type Cache struct {
 	mu   sync.Mutex
 	data map[string]int

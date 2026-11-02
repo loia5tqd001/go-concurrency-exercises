@@ -9,7 +9,7 @@ and calls `Close`.
 
 Right now there's zero coordination between the two:
 
-```go {2,7}
+```go
 func (p *Pool) Submit(job func()) (accepted bool) {
 	p.jobs <- job
 	return true
@@ -60,7 +60,7 @@ Say you've added a `sync.WaitGroup` field to `Pool` yourself, to track
 when accepted jobs have actually finished. The single most tempting
 near-miss then looks like this:
 
-```go
+```go {7,8}
 func (p *Pool) Submit(job func()) (accepted bool) {
 	defer func() {
 		if recover() != nil {

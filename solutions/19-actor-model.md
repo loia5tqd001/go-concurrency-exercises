@@ -10,7 +10,7 @@
 
 ## Why the naive version is wrong
 
-```go {2,6}
+```go
 func (a *Account) Deposit(amount int) {
 	a.balance = a.balance + amount
 }

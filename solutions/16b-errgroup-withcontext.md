@@ -4,9 +4,9 @@
 
 ## The problem
 
-This exercise picks up where [16](../16-errgroup-failfast) left off. `Go`/`Wait` already do everything 16 asked for — launch concurrently, track via `sync.WaitGroup`, safely capture the first error via `sync.Once` — and that part is given as already correct:
+This exercise picks up where [16](../16-errgroup-failfast) left off. `Go`/`Wait` already do everything 16 asked for — launch concurrently, track via `sync.WaitGroup`, safely capture the first error via `sync.Once` — and that `Go`/`Wait` part is given as already correct:
 
-```go
+```go {8}
 type Group struct {
 	wg       sync.WaitGroup
 	errOnce  sync.Once

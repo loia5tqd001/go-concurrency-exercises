@@ -6,7 +6,7 @@
 
 `Complete` and `Timeout` both guard `notify` with a plain `bool`:
 
-```go
+```go {2,5,11,14}
 func (r *Responder) Complete(result string) bool {
 	if r.settled {
 		return false

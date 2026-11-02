@@ -17,7 +17,7 @@ Concurrency Patterns" talk.
 the or-done idiom from [exercise 07](../07-or-done-channel). The bug is
 entirely in `Primes`:
 
-```go
+```go {2,8}
 func Primes(n int) []int {
 	ch := generate(nil)
 

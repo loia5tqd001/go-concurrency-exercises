@@ -82,7 +82,7 @@ Verified in a scratch copy of the exercise directory: `go test -race -count=5 ./
 
 ## Approach 2: Mutex-guarded "last fetch" timestamp + `time.Sleep`
 
-```go
+```go {17,18,20}
 package main
 
 import (

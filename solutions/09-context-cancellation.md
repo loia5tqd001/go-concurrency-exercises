@@ -18,7 +18,7 @@ context it's given is cancelled or times out. That machinery is
 useless, though, if `HandleRequest` never hands the layers the real
 `ctx`:
 
-```go
+```go {2,7,12}
 func HandleRequest(ctx context.Context) (string, error) {
 	a, err := CallLayerA(context.Background())
 	if err != nil {
