@@ -54,7 +54,7 @@ Verified: running the current `check_test.go` against this naive `main.go` in a 
 
 ## The fix: `context.WithCancel` + calling `cancel` from both `Go` and `Wait`
 
-```go
+```go {20,32,42}
 package main
 
 import (

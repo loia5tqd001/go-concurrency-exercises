@@ -206,7 +206,7 @@ shared `results` channel drained by a collector loop, each goroutine
 writes its own result directly into a pre-sized slice at its own
 index.
 
-```go
+```go {2,7}
 func GenerateThumbnails(urls []string) []Thumbnail {
 	thumbnails := make([]Thumbnail, len(urls))
 

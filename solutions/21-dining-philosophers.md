@@ -124,7 +124,7 @@ or right fork. The artificial "reaching" pause was only ever there to
 make the naive bug reproduce reliably — a genuine fix has no reason to
 keep it:
 
-```go
+```go {5,6}
 func (p *Philosopher) Dine(wg *sync.WaitGroup, mealsEaten *int32) {
 	defer wg.Done()
 
@@ -179,7 +179,7 @@ philosophers may attempt to pick up forks at once* to
 used as a permit pool). Fork acquisition order is left unchanged —
 still left-then-right:
 
-```go
+```go {5,17,27}
 func (p *Philosopher) Dine(wg *sync.WaitGroup, mealsEaten *int32, arbitrator chan struct{}) {
 	defer wg.Done()
 

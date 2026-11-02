@@ -43,7 +43,7 @@ moment you can least afford it.
 
 Drain `done` in the same `select` as `work`:
 
-```go
+```go {6,7,8}
 func (b *Balancer) Balance(work <-chan Request) {
 	for {
 		select {

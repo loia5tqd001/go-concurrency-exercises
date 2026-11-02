@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useRef, type MouseEvent } from "react";
-import { renderMarkdown, type DocContext } from "../markdown.ts";
+import { linesFromAttr, renderMarkdown, wrapCodeLines, type DocContext } from "../markdown.ts";
 import { monaco } from "../monaco.ts";
 import { navigate } from "../router.ts";
 import { onThemeChange } from "../theme.ts";
@@ -23,14 +23,25 @@ export function Markdown({ src, ctx, onOpenFile }: Props) {
     // docs looks exactly like code in the editor. The output's classes
     // belong to the current theme, so it is redone on every theme change.
     let live = true;
+    // A fence that names lines is rebuilt as one block per line, so the named
+    // lines can be banded. For Go that has to happen after colorize, which
+    // replaces the whole markup.
+    const paint = (code: HTMLElement, html: string) => {
+      const hl = linesFromAttr(code.dataset.hl);
+      code.innerHTML = hl.size ? wrapCodeLines(html, hl) : html;
+    };
     const colorize = () => {
       for (const code of ref.current?.querySelectorAll<HTMLElement>('code[data-lang="go"]') ?? []) {
         code.dataset.src ??= code.textContent ?? "";
         monaco.editor.colorize(code.dataset.src, "go", { tabSize: 4 }).then((out) => {
-          if (live) code.innerHTML = out;
+          if (live) paint(code, out);
         });
       }
     };
+    // Other languages are not colorized, so their markup is already final.
+    for (const code of ref.current?.querySelectorAll<HTMLElement>('code[data-hl]:not([data-lang="go"])') ?? []) {
+      paint(code, code.innerHTML);
+    }
     colorize();
     const unsubscribe = onThemeChange(colorize);
     return () => {

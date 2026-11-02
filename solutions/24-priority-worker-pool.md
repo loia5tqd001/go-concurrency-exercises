@@ -54,7 +54,7 @@ Instead, the tests use real-clock waits sized against `jobLatency = 20 * time.Mi
 
 ## Approach 1: `container/heap` + `sync.Cond`
 
-```go
+```go {30,32,74,75}
 package main
 
 import (
@@ -169,7 +169,7 @@ Design notes:
 
 A genuinely different mechanism worth knowing about when priorities come from a **small, fixed set of levels** rather than a continuous range: instead of one heap ordered by an arbitrary `Priority` value, keep one plain FIFO channel per priority tier, and have the worker scan the tiers from highest to lowest on every pick.
 
-```go
+```go {48,50,82}
 package main
 
 import (

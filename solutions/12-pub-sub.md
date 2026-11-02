@@ -25,7 +25,7 @@ The two bugs named in the file comment are real, but there's a third,
 sharper one underneath them: the blocking send happens **while holding
 `b.mu`**.
 
-```go
+```go {6}
 func (b *EventBus) Publish(e Event) {
 	b.mu.Lock()
 	defer b.mu.Unlock()
@@ -74,7 +74,7 @@ buffer just drops that one event for that one subscriber instead of blocking
 anything else. `Unsubscribe` takes the same lock and deletes the entry
 directly.
 
-```go
+```go {38,68-69}
 package main
 
 import (
@@ -174,7 +174,7 @@ There is no `sync.Mutex` anywhere in this version; serialization is
 structural (only one goroutine ever touches the map), not enforced by lock
 discipline.
 
-```go
+```go {74,101}
 package main
 
 import (

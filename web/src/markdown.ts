@@ -74,10 +74,97 @@ export function renderMarkdown(src: string, ctx: DocContext): string {
         return `<a ${rewriteLink(href, ctx)}${t}>${this.parser.parseInline(tokens)}</a>`;
       },
       code({ text, lang }) {
-        const l = (lang ?? "").split(/\s/)[0];
-        return `<pre class="md-code"><code data-lang="${escapeHTML(l)}">${escapeHTML(text)}</code></pre>\n`;
+        // A fence may name the lines that carry the idea: ```go {6,12,23}.
+        // The numbers are 1-based and count from the first line of the block.
+        // Markdown.tsx bands them once the block has been colorized.
+        const [l = "", ...rest] = (lang ?? "").trim().split(/\s+/);
+        const hl = fenceLines(rest.join(" "));
+        const attr = hl.length ? ` data-hl="${hl.join(",")}"` : "";
+        return `<pre class="md-code"><code data-lang="${escapeHTML(l)}"${attr}>${escapeHTML(text)}</code></pre>\n`;
       },
     },
   });
   return md.parse(src, { async: false });
+}
+
+// fenceLines reads the {…} that follows a fence's language. It accepts single
+// lines and ranges, separated by commas or spaces: {6}, {6,12,23}, {6,12-14}.
+function fenceLines(rest: string): number[] {
+  const spec = rest.match(/\{([^}]*)\}/)?.[1];
+  if (!spec) return [];
+  const lines = new Set<number>();
+  for (const part of spec.split(/[,\s]+/)) {
+    const range = part.match(/^(\d+)(?:-(\d+))?$/);
+    if (!range) continue;
+    const last = Number(range[2] ?? range[1]);
+    for (let n = Number(range[1]); n <= last; n++) lines.add(n);
+  }
+  return [...lines].sort((a, b) => a - b);
+}
+
+// linesFromAttr reads back what the fence renderer wrote into data-hl.
+export function linesFromAttr(attr: string | undefined): Set<number> {
+  return new Set((attr ?? "").split(",").filter(Boolean).map(Number));
+}
+
+// wrapCodeLines puts every line of a colorized block in its own span, so the
+// lines named by the fence can be banded and the rest can step back. The block
+// is then laid out by those spans, so the <br> Monaco puts between lines is
+// dropped, and one left over at the end does not become a blank last line.
+// A span still open at a line break (a block comment, a raw string) is closed
+// at the end of that line and reopened on the next, which keeps every line a
+// well-formed fragment.
+export function wrapCodeLines(html: string, hl: Set<number>): string {
+  const tag = /<(\/?)([a-zA-Z][^>]*?)>/g;
+  const open: string[] = [];
+  const out: { html: string; text: string }[] = [];
+  let cur = "";
+  let text = "";
+  let line = 1;
+  let at = 0;
+
+  const endLine = () => {
+    const close = open
+      .slice()
+      .reverse()
+      .map((t) => `</${/^<([a-zA-Z0-9]+)/.exec(t)![1]}>`)
+      .join("");
+    out.push({ html: `<span class="md-line${hl.has(line) ? " hl" : ""}">${cur}${close}</span>`, text });
+    cur = open.join("");
+    text = "";
+    line++;
+  };
+
+  // Text carries a real newline only in a fence that was never colorized.
+  const pushText = (chunk: string) => {
+    const parts = chunk.split("\n");
+    for (let i = 0; i < parts.length; i++) {
+      if (i > 0) endLine();
+      cur += parts[i]!;
+      text += parts[i]!;
+    }
+  };
+
+  for (let m = tag.exec(html); m; m = tag.exec(html)) {
+    pushText(html.slice(at, m.index));
+    at = tag.lastIndex;
+    const t = m[0];
+    const name = m[2]!.split(/[\s/>]/, 1)[0]!.toLowerCase();
+    if (m[1] === "/") {
+      open.pop();
+      cur += t;
+    } else if (name === "br") {
+      endLine();
+    } else if (t.endsWith("/>")) {
+      cur += t;
+    } else {
+      open.push(t);
+      cur += t;
+    }
+  }
+  pushText(html.slice(at));
+  out.push({ html: `<span class="md-line${hl.has(line) ? " hl" : ""}">${cur}</span>`, text });
+
+  while (out.length > 1 && out[out.length - 1]!.text === "") out.pop();
+  return out.map((l) => l.html).join("");
 }

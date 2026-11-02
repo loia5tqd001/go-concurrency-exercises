@@ -6,7 +6,7 @@
 
 This exercise picks up where [14](../14-tee-channel) left off. The given starting point is already a complete, correct answer to 14 itself:
 
-```go
+```go {23}
 func Tee(done <-chan struct{}, in <-chan int) (<-chan int, <-chan int) {
 	out1 := make(chan int)
 	out2 := make(chan int)
@@ -72,7 +72,7 @@ So fixing this needs more than moving the `close` calls around — it needs aban
 
 ## The fix: per-output completion tracking, independent closers
 
-```go
+```go {39,48,61,62}
 package main
 
 import (

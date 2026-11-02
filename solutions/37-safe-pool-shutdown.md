@@ -34,7 +34,7 @@ bug without depending on luck.
 
 ## The fix: `sync.RWMutex`-guarded `closed` flag
 
-```go
+```go {9,16,21,25}
 type Pool struct {
 	mu     sync.RWMutex
 	closed bool
@@ -101,7 +101,7 @@ Close:              Lock() ◀── blocks until EVERY RLock above is released
 
 The single most tempting near-miss:
 
-```go
+```go {7,8}
 func (p *Pool) Submit(job func()) (accepted bool) {
 	defer func() {
 		if recover() != nil {
@@ -139,7 +139,7 @@ This exercise is modeled on a production `sync.RWMutex`-guarded worker
 pool whose non-blocking `Offer` variant has a genuine ordering bug,
 easy to introduce when refactoring `Submit` into a non-blocking form:
 
-```go
+```go {2,3}
 select {
 case execChan <- f:
 	wait.Add(1) // BUG: Add happens AFTER the send already succeeded

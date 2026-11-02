@@ -23,7 +23,7 @@ func ProcessReadings(done <-chan struct{}, readings []string) []Result
 
 Both stages currently `return` from their goroutine — closing their output channel — the instant they hit a single bad reading, instead of reporting the problem on that one `Result` and moving on to the rest of the batch:
 
-```go
+```go {8}
 func parse(done <-chan struct{}, readings []string) <-chan Result {
 	out := make(chan Result)
 	go func() {
@@ -76,7 +76,7 @@ With `readings := []string{"10", "abc", "5", "0", "-3", "xyz", "0", "7"}`, `pars
 
 The fix removes the early `return` from each stage's failure branch and replaces it with "build the right `Result`, then keep looping":
 
-```go
+```go {30-35,56}
 package main
 
 import (

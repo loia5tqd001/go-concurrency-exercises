@@ -44,7 +44,7 @@ every `filter` as their `done` channel: `nil`. A receive on a nil
 channel inside a `select` is never ready, so the `done` case in every
 stage can never fire:
 
-```go
+```go {3}
 select {
 case out <- i:
 case <-done: // done is nil here — never selectable
@@ -73,7 +73,7 @@ process.
 
 ## Approach: one real `done`, shared by the whole chain
 
-```go
+```go {2,3,5,11}
 func Primes(n int) []int {
 	done := make(chan struct{})
 	defer close(done)

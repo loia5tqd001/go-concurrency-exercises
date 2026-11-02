@@ -37,7 +37,7 @@ thing broken, and check_test.go catches exactly that.
 
 ## The fix: `select` + `default`
 
-```go
+```go {5,6}
 func (q *Queue) Submit(job Job) error {
 	select {
 	case q.jobs <- job:
@@ -83,7 +83,7 @@ not-yet-finished jobs with an `atomic.Int64` and a
 [38](../38-flash-sale-inventory) teaches for check-then-act races on a
 plain counter:
 
-```go
+```go {10,13,24}
 type Queue struct {
 	jobs     chan Job
 	capacity int64

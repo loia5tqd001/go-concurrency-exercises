@@ -19,7 +19,7 @@ func WorkWithTimeout(workUnits int, stallAfter int, perPulseTimeout time.Duratio
 
 ## Why the naive version is wrong
 
-```go
+```go {14}
 func DoWork(done <-chan struct{}, pulseInterval time.Duration, workUnits int) (heartbeat <-chan struct{}, results <-chan int) {
 	hb := make(chan struct{}, 1) // buffered so the lone startup pulse below can complete even though nobody ever reads it
 	res := make(chan int)
@@ -53,7 +53,7 @@ func DoWork(done <-chan struct{}, pulseInterval time.Duration, workUnits int) (h
 
 `DoWork` sends exactly one heartbeat, at startup, then never again — the `checkIn` callback it hands to `SimulateUnit` (exactly where the exercise wants a real, per-slice pulse) is a no-op that just returns `true`. `WorkWithTimeout` compounds the problem: it never even reads from `heartbeat`, and instead of resetting a timer on every heartbeat/result, it sets a single flat `perPulseTimeout * workUnits` deadline once, up front, and never touches it again:
 
-```go
+```go {1}
 timedOut := time.After(perPulseTimeout * time.Duration(workUnits))
 for {
 	select {
@@ -96,7 +96,7 @@ FAIL	github.com/loia5tqd001/go-concurrency-exercises/27-heartbeats	1.035s
 
 ## The fix
 
-```go
+```go {37-44,93,100}
 package main
 
 import (
@@ -243,7 +243,7 @@ alternative skips `Reset` (and the version-sensitivity that comes with
 it) entirely and just re-arms with a fresh `time.After` every time the
 `select` is re-entered:
 
-```go
+```go {11}
 for {
 	select {
 	case <-heartbeat:

@@ -72,7 +72,7 @@ FAIL
 
 ## Approach 1: a single shared `stop` channel, closed via `defer`
 
-```go
+```go {36,37,39,43}
 package main
 
 import (
@@ -163,7 +163,7 @@ Design notes:
 
 A genuinely different cancellation primitive: instead of a raw `chan struct{}` you control directly, use a `context.Context` and hand each replica `ctx.Done()`.
 
-```go
+```go {40-46,52}
 package main
 
 import (

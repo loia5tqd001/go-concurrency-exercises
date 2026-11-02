@@ -85,7 +85,7 @@ type Collector struct {
 
 ### Add: open-or-join, fire on count, never touch a closed Collector
 
-```go
+```go {12,17,37}
 func (c *Collector) Add(request int) <-chan Result {
 	ch := make(chan Result, 1)
 
@@ -135,7 +135,7 @@ request.
 
 ### detach: the one gate all three triggers share
 
-```go
+```go {6,9}
 // detach marks b as fired - idempotent, only the first caller (from
 // whichever trigger: count reached, deadline, or Close) ever gets
 // true back - and detaches it from c.batch if it's still current.
@@ -248,7 +248,7 @@ batch A's own (unrelated) request slice.
 
 ### Close: stop, flush, wait — bounded by ctx
 
-```go
+```go {3,7,24}
 func (c *Collector) Close(ctx context.Context) error {
 	c.mu.Lock()
 	c.closed = true
@@ -302,7 +302,7 @@ The most tempting way to write `detach` is to keep the bookkeeping
 `c.inflight.Add(1)` down into `startExecute`, right next to the
 `inflight.Done()` it's paired with:
 
-```go
+```go {2}
 func (c *Collector) startExecute(b *batch) {
 	c.inflight.Add(1) // BUG: moved out from under c.mu
 	go func() {

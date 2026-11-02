@@ -72,7 +72,7 @@ run concurrently regardless of how many jobs there are.
 
 ## Approach 1: Fixed-size worker pool, fan-in through a results channel
 
-```go
+```go {28,32,33}
 const numWorkers = 4
 
 type Result struct {
@@ -148,7 +148,7 @@ nothing to race on, which is why `TestProcessJobsRace` passes under
 
 ## Approach 2: Fixed-size worker pool, direct indexed writes into a pre-sized slice (alternative)
 
-```go
+```go {9,20}
 const numWorkers = 4
 
 type Result struct {

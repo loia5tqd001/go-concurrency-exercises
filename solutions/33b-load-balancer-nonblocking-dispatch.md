@@ -14,7 +14,7 @@ w := &Worker{requests: make(chan Request)}
 
 `Balance`'s dispatch send is still
 
-```go
+```go {3}
 case req := <-work:
 	w := heap.Pop(&b.pool).(*Worker)
 	w.requests <- req   // <-- can block, right here
@@ -48,7 +48,7 @@ dispatch send itself a `select` case — conditionally enabled via a
 `nil` channel — instead of a blocking statement that runs outside the
 `select`:
 
-```go
+```go {5,10,17}
 func (b *Balancer) Balance(work <-chan Request) {
 	var backlog []Request
 
@@ -134,7 +134,7 @@ It's tempting to "fix" the blocking send a different way: keep
 `heap.Pop`/`w.requests <- req`/`heap.Push` exactly as it was, just run
 the send in its own goroutine —
 
-```go
+```go {3}
 case req := <-work:
 	w := heap.Pop(&b.pool).(*Worker)
 	go func() { w.requests <- req }()   // <-- looks non-blocking...

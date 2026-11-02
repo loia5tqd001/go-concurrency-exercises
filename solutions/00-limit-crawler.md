@@ -23,7 +23,9 @@ Concurrency itself isn't the bug — the fix must *keep* `go Crawl(...)`. What's
 
 ## Approach 1: `time.Tick` gate (the "3 lines" hint)
 
-```go
+The three banded lines are the whole change. Everything around them is the starting code.
+
+```go {6,12,23}
 package main
 
 import (

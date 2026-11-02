@@ -12,6 +12,9 @@
   --accent-soft: #e0f3f8;
   --pass: #1a7f37;
   --fail: #c9252d;
+  --fail-hover: #ad1f26;
+  --fail-active: #93191f;
+  --fail-fg: #ffffff;
   --err-text: #9a3412;
   --banner-bg: #fff6d6;
   --shadow: 0 8px 28px rgb(15 23 42 / 0.14);
@@ -40,6 +43,9 @@
     --accent-soft: #0b2d36;
     --pass: #3fb950;
     --fail: #f85149;
+    --fail-hover: #ff6f68;
+    --fail-active: #e04a43;
+    --fail-fg: #2a0b09;
     --err-text: #f0a37a;
     --banner-bg: #3a2f0b;
     --shadow: 0 8px 28px rgb(0 0 0 / 0.5);
@@ -66,6 +72,9 @@
   --accent-soft: #0b2d36;
   --pass: #3fb950;
   --fail: #f85149;
+  --fail-hover: #ff6f68;
+  --fail-active: #e04a43;
+  --fail-fg: #2a0b09;
   --err-text: #f0a37a;
   --banner-bg: #3a2f0b;
   --shadow: 0 8px 28px rgb(0 0 0 / 0.5);
@@ -142,6 +151,10 @@ pre {
   text-decoration: none;
   white-space: nowrap;
   cursor: pointer;
+  transition:
+    background-color 0.12s ease,
+    border-color 0.12s ease,
+    color 0.12s ease;
 }
 .btn:hover:not(:disabled) {
   background: var(--bg-hover);
@@ -161,7 +174,17 @@ pre {
 .btn.danger {
   background: var(--fail);
   border-color: var(--fail);
-  color: #fff;
+  color: var(--fail-fg);
+}
+/* .btn:hover:not(:disabled) outranks .btn.danger, so the red needs its own
+   hover rule; without it the label turns white on --bg-hover. */
+.btn.danger:hover:not(:disabled) {
+  background: var(--fail-hover);
+  border-color: var(--fail-hover);
+}
+.btn.danger:active:not(:disabled) {
+  background: var(--fail-active);
+  border-color: var(--fail-active);
 }
 .btn.ghost {
   background: transparent;
@@ -610,6 +633,26 @@ a:focus-visible {
   font-size: 12.5px;
   line-height: 1.55;
   overflow-x: auto;
+}
+/* A fence that names lines (```go {6,12,23}) is rebuilt as one block per line,
+   so the named lines can be banded and the rest can step back. The min-height
+   is what keeps a blank line in the source from collapsing to nothing. The
+   code element is as wide as its widest line, so a band spans the whole line
+   rather than the visible part of a block that scrolls sideways. */
+.md-code code[data-hl] {
+  display: block;
+  width: max-content;
+  min-width: 100%;
+}
+.md-code .md-line {
+  display: block;
+  min-height: 1lh;
+}
+.md-code code[data-hl] .md-line:not(.hl) {
+  opacity: 0.68;
+}
+.md-code code[data-hl] .md-line.hl {
+  background: color-mix(in srgb, var(--accent) 16%, transparent);
 }
 .markdown blockquote {
   margin: 0 0 12px;

@@ -13,7 +13,7 @@
 
 ## Why the naive version is wrong
 
-```go
+```go {1}
 items := make([]T, 0, itemCount) // unbounded: buffers the whole run
 for i := 0; i < itemCount; i++ {
     items = append(items, produce(i))
@@ -37,7 +37,7 @@ This isn't just a "the producer is briefly ahead" nuance — it's a memory bug t
 
 Replace the slice with a channel sized to a small constant (2 in the reference solution). Once that many items (plus the one item the consumer may be actively processing) are in flight, the producer's next `ch <- produce(i)` blocks until the consumer drains one — that's the backpressure, and it holds regardless of `itemCount`.
 
-```go
+```go {10,20,25}
 package main
 
 import "fmt"

@@ -83,7 +83,7 @@ crucially, each callback's underlying goroutine is only alive for the
 `AfterFunc`'s own duration, so nothing outlives a `synctest` bubble
 that never advances the clock again.
 
-```go
+```go {53,73,109}
 package main
 
 import (
@@ -271,7 +271,7 @@ goroutine, started once in `NewSessionManager`, wakes up on a ticker
 every couple of seconds, takes the lock, and deletes anything past its
 TTL:
 
-```go
+```go {15}
 const sessionTTL = 5 * time.Second
 const cleanupInterval = 2 * time.Second
 

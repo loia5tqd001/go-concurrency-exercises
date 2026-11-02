@@ -6,7 +6,7 @@
 
 The starting point is a `Future` function:
 
-```go
+```go {3}
 func Future(key string) <-chan int {
 	ch := make(chan int, 1)
 	ch <- ComputeExpensive(key)
@@ -44,7 +44,7 @@ Verified: running the current `check_test.go` against this naive `main.go` in a 
 
 ## Approach 1 (recommended default): `sync.OnceValue`, keyed by a map
 
-```go
+```go {19,21,29}
 package main
 
 import (
@@ -103,7 +103,7 @@ Design notes:
 
 ## Approach 2: keyed `done` channel, closed once the result is stored
 
-```go
+```go {27,31,32,40}
 package main
 
 import (

@@ -60,7 +60,7 @@ There's also a structural constraint worth calling out before picking a design: 
 
 This is the idiomatic fix and the one the exercise is steering you toward: turn the producer into something that streams results instead of returning a finished slice.
 
-```go
+```go {1,2,3,4,10,17}
 func producer(stream Stream) <-chan *Tweet {
 	out := make(chan *Tweet)
 	go func() {
@@ -114,7 +114,7 @@ Would a buffered channel help here? No — the consumer is the tail bottleneck (
 
 A genuinely different design: keep the single-producer goroutine (required, since `Stream` isn't threadsafe), but spin up several consumer goroutines pulling from the same channel, synchronized with a `sync.WaitGroup` instead of relying solely on range-until-closed in one place.
 
-```go
+```go {17,35,37,39}
 func producer(stream Stream) <-chan *Tweet {
 	out := make(chan *Tweet)
 	go func() {

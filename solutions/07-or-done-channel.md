@@ -59,7 +59,7 @@ The fix spawns exactly one goroutine that ranges over `c`, forwarding
 each value onto a fresh `out` channel, and uses `select` at *both*
 points where it could otherwise block forever:
 
-```go
+```go {8,9,15,17}
 func orDone(done <-chan struct{}, c <-chan int) <-chan int {
 	out := make(chan int)
 
@@ -105,7 +105,7 @@ Why two selects and not one:
 A tempting-looking but broken alternative is a single select inside a
 `for range c` loop:
 
-```go
+```go {2}
 // BROKEN: only the send is done-aware
 for v := range c {
 	select {

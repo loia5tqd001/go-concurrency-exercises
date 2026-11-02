@@ -56,7 +56,7 @@ and run `Stop()` in *its own* goroutine too — that's the key trick that lets
 `main` keep listening for a second signal instead of being stuck inside a
 blocking `Stop()` call.
 
-```go
+```go {30,31,32}
 package main
 
 import (
@@ -148,7 +148,7 @@ stop. A meaningfully different variant adds a **timeout** as a third exit
 path — useful if you want the program to self-terminate after a grace
 period even if the user never sends a second Ctrl-C:
 
-```go
+```go {22,37}
 package main
 
 import (

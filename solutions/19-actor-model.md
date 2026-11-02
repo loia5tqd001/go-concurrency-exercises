@@ -10,7 +10,7 @@
 
 ## Why the naive version is wrong
 
-```go
+```go {2,6}
 func (a *Account) Deposit(amount int) {
 	a.balance = a.balance + amount
 }
@@ -47,7 +47,7 @@ Previous write at 0x00c000010358 by goroutine 16:
 
 A single goroutine (`run`) owns `balance` as a plain local variable — never shared, never touched by any other goroutine — and processes `request` values one at a time from an unbuffered channel. Since only one goroutine ever reads or writes `balance`, and it processes requests strictly sequentially, there's nothing left to race on and no lock is needed.
 
-```go
+```go {42,50,77}
 package main
 
 import (
@@ -179,7 +179,7 @@ Two correctness details worth calling out because they're easy to get wrong when
 
 Same idea as Approach 1 — a single actor goroutine owns `balance` as a local variable, no locks anywhere — but the message shape is different: instead of one `request` struct with a `kind` enum field, each operation gets its own concrete message type, and the actor `switch`es on the message's dynamic type rather than an `int`.
 
-```go
+```go {12,42}
 package main
 
 import (

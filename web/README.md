@@ -22,6 +22,18 @@ _testmain.go (generated at build time) ─compile.wasm─▶ _testmain.a ──l
 | Toolchain worker (builds) and runner worker (one per run, so Stop always works) | `src/runner/*.worker.ts` |
 | UI: React + Monaco | `src/components/` |
 
+## Banding the lines that matter
+
+A Go fence can name the lines that carry the idea, so a reader skimming a long block sees which three lines are the change:
+
+````
+```go {6,12,23}
+````
+
+Numbers are 1-based from the first line of the block, and `{6,12-14}` and `{6 12}` work too. Those lines get a tinted band; every other line of that block steps back to 68% opacity. A fence with no `{...}` renders exactly as before, so this is opt-in per block.
+
+`src/markdown.ts` turns the spec into `data-hl` and `wrapCodeLines` rebuilds the colorized block as one element per line. `src/components/Markdown.tsx` does that after Monaco colorizes, and again on every theme change, because colorizing replaces the markup. The band is `.md-line.hl` in `src/styles.css`.
+
 ## Differences from running locally
 
 | Local `go test -race` | In the browser |

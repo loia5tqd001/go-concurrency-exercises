@@ -51,7 +51,7 @@ something upstream is slow or a caller sets a tight deadline.
 
 ## Approach 1: Race the handler against `ctx.Done()` via a buffered result channel
 
-```go
+```go {6,14,16}
 func Serve(ctx context.Context, handler func() (string, error)) (string, error) {
 	type result struct {
 		value string

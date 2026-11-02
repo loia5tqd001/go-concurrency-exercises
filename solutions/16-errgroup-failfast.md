@@ -6,7 +6,7 @@
 
 The starting point is a `Group` that mimics the shape of `golang.org/x/sync/errgroup`'s `Group` (no importing the real package — everything from scratch, stdlib only):
 
-```go
+```go {6}
 type Group struct {
 	firstErr error
 }
@@ -42,7 +42,7 @@ Verified: running the current `check_test.go` against this naive `main.go` in a 
 
 ## Approach 1: `sync.WaitGroup` + `sync.Once`
 
-```go
+```go {17,21,22}
 package main
 
 import (
@@ -91,7 +91,7 @@ Design notes:
 
 A genuinely different synchronization primitive for "capture only the first error": instead of `sync.Once` guarding a plain field, use a `chan error` with capacity 1 and a non-blocking `select`/`default` send — only the first send into the channel's single buffer slot succeeds; every subsequent send hits `default` and is silently dropped.
 
-```go
+```go {33,34,35,44}
 package main
 
 import (

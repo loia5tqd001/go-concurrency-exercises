@@ -16,7 +16,7 @@ round-robin — reserve every `agingPeriod`-th cycle for a waiting
 low-priority job, checked *before* the high-priority branch (checking it
 after would make it just as unreachable as the original bug).
 
-```go
+```go {36,37,41,42,79,81}
 package main
 
 import (

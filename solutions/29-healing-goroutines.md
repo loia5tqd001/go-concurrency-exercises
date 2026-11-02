@@ -6,7 +6,7 @@
 
 The starting point is a `NewSteward` that is supposed to watch a "ward" goroutine's heartbeat and transparently restart it if it ever wedges — hangs or deadlocks, stops pulsing forever, and stops honoring its `done` channel too (see `mockward.go`'s `MockWard`, which simulates exactly that). Instead, it does nothing of the sort:
 
-```go
+```go {3}
 func NewSteward(timeout time.Duration, ward StartGoroutineFn) StartGoroutineFn {
 	return func(done <-chan struct{}, pulseInterval time.Duration) <-chan struct{} {
 		return ward(done, pulseInterval)
@@ -52,7 +52,7 @@ FAIL
 
 ## Approach: one monitoring goroutine, per-generation steward-owned `wardDone`
 
-```go
+```go {32,33,98,99}
 package main
 
 import (

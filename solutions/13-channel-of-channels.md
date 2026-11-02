@@ -21,7 +21,7 @@ its output and abandoning all reads) as soon as `done` is closed.
 
 ## Why the naive version is wrong
 
-```go
+```go {1,12}
 stream, ok := <-chanStream
 if !ok {
 	return
@@ -64,7 +64,7 @@ reach for since `orDone` (from
 [07-or-done-channel](../07-or-done-channel)) is sitting right there ready to
 reuse:
 
-```go
+```go {7,8}
 func Bridge(chanStream <-chan (<-chan string), done <-chan struct{}) <-chan string {
 	valStream := make(chan string)
 
@@ -117,7 +117,7 @@ both the dispatcher's loop and each per-shard forwarder, so closing it stops
 everything promptly regardless of which channel a goroutine happens to be
 blocked on.
 
-```go
+```go {25,30,56}
 package main
 
 import (
@@ -206,7 +206,7 @@ lets you wait on a slice of cases built at runtime, so a single goroutine can
 directly watch `done`, `chanStream`, and every currently-open shard channel
 at once, growing and shrinking that case list as shards arrive and finish.
 
-```go
+```go {46,59}
 package main
 
 import (

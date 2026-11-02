@@ -82,7 +82,7 @@ itself, not to hope the scheduler is gentle.
 
 ## Approach 1: A hand-rolled counting semaphore (buffered channel), one goroutine per request
 
-```go
+```go {7,14,15}
 const maxInFlight = 2
 
 func FetchAll(api *FlakyAPI, reqs []string) []string {

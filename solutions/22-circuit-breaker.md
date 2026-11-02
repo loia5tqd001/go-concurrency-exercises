@@ -55,7 +55,7 @@ FAIL
 
 ## Approach 1: mutex-protected state machine
 
-```go
+```go {53,54,79,80}
 package main
 
 import (
@@ -208,7 +208,7 @@ Design notes:
 
 A genuinely different primitive choice: represent `state` as an `int32`, the failure counter as an `int32`, the cooldown deadline as an `int64` (UnixNano), and the half-open trial guard as an `int32` flag — all independent atomics, no `sync.Mutex` anywhere.
 
-```go
+```go {71,74,102,103,104,118,119}
 package main
 
 import (

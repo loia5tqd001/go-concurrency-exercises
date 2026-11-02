@@ -8,7 +8,7 @@ happens first is the *only* one that ever reports an outcome —
 the race is. Right now both guard `notify` with a plain `bool` and no
 synchronization at all:
 
-```go
+```go {2,5}
 func (r *Responder) Complete(result string) bool {
 	if r.settled {
 		return false

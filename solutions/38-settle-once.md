@@ -57,7 +57,7 @@ catch without `-race` at all.
 
 ## The fix: a single CompareAndSwap, no retry loop needed
 
-```go
+```go {7,15}
 type Responder struct {
 	notify  func(outcome string)
 	settled int32

@@ -8,7 +8,7 @@
 
 The naive implementation is:
 
-```go
+```go {2}
 func Tee(done <-chan struct{}, in <-chan int) (<-chan int, <-chan int) {
 	return in, in
 }
@@ -38,7 +38,7 @@ There's really one idiomatic pattern for `Tee`, so this is the only approach shi
 
 For each value read from `in`, use two local variables that alias `out1`/`out2` and get **nilled out once that output has received the value** — sending on a nil channel blocks forever, so once an output's variable is nil it simply drops out of the `select` and can never be chosen again for this value. The inner loop keeps going until both variables are nil (both outputs have gotten the value) or `done` fires.
 
-```go
+```go {38,42,44}
 package main
 
 import (

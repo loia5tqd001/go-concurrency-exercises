@@ -42,7 +42,7 @@ Verified: running the current `check_test.go` against this stub fails `TestHandl
 
 ## Approach 1: `context.WithTimeout` racing `process` in a goroutine, one mutex per user
 
-```go
+```go {14,16,35,42,57,61}
 package main
 
 import (

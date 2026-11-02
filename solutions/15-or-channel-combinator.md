@@ -8,7 +8,7 @@ A service often needs to shut down as soon as ANY of several independent trigger
 
 The naive implementation only ever watches `channels[0]`:
 
-```go
+```go {8}
 func or(channels ...<-chan struct{}) <-chan struct{} {
 	orDone := make(chan struct{})
 	if len(channels) == 0 {
@@ -41,7 +41,7 @@ Both failures are clean timeouts (the tests guard their blocking receive with `s
 
 The simplest design that satisfies every requirement without any recursion: spawn one goroutine per input channel, each racing the shared output channel against its own input, and let `sync.Once` decide who gets to close it.
 
-```go
+```go {17,18,19,20}
 package main
 
 import (
@@ -102,7 +102,7 @@ Why it's correct, including the two base cases the other approaches special-case
 
 A genuinely different design for the "more than one channel" case: instead of spawning a goroutine per input channel, construct one `[]reflect.SelectCase` covering *all* N channels up front, and let a single goroutine block on all of them at once via `reflect.Select`.
 
-```go
+```go {25,35}
 package main
 
 import (
@@ -178,7 +178,7 @@ Both are correct; which one to reach for is a call between "no reflection, compi
 
 The idiom most commonly cited for this problem (e.g. Katherine Cox-Buday's *Concurrency in Go*), and the one this exercise's own README walks through: watch `channels[0]` and `channels[1]` directly in a `select`, and fold everything else into a single recursive third branch. It's included here for that reason, and because its leak trap is a genuinely instructive lesson about channel/goroutine lifetime — not because it outperforms Approaches 1 or 2. See the caveats at the end of this section before reaching for it in real code.
 
-```go
+```go {22,35,36,37,42}
 package main
 
 import (

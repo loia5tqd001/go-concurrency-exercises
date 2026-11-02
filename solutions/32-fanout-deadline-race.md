@@ -61,7 +61,7 @@ still silently burning time no one is waiting for anymore.
 
 ## Approach 1: Race `wg.Wait()` against `ctx.Done()`, and don't touch `result` on the losing branch
 
-```go
+```go {11,13,14,21}
 func Construct(ctx context.Context, basic, shipping, refund, history Component) (*Result, error) {
 	var result Result
 	var wg sync.WaitGroup
@@ -127,7 +127,7 @@ needs a dedicated helper goroutine just to turn it into something
 each component its own completion signal on one shared channel, and
 race four receives against `ctx.Done()` instead of racing one:
 
-```go
+```go {3,10,12,13,14}
 func Construct(ctx context.Context, basic, shipping, refund, history Component) (*Result, error) {
 	var result Result
 	done := make(chan struct{}, 4)

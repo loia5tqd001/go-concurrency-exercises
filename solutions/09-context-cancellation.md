@@ -89,7 +89,7 @@ existing error checks do the rest for free (see Approach 1 below).
 
 ## Approach 1: Propagate `ctx`, check for done/failure between each layer
 
-```go
+```go {6,15,24}
 func HandleRequest(ctx context.Context) (string, error) {
 	if err := ctx.Err(); err != nil {
 		return "", err

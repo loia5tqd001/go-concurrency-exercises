@@ -83,7 +83,7 @@ check_test.go:39: Too much db uses 1500
 
 The simplest correct fix: one `sync.Mutex` guarding the entire body of `Get`, held for the full duration — including the call to `k.load(key)`. Holding the lock through the load is what prevents two goroutines from both missing on the same key and double-loading it (the `db.Calls` requirement above), at the cost of fully serializing all cache access.
 
-```go
+```go {22,38,39}
 package main
 
 import (
@@ -150,7 +150,7 @@ Cost model: because the lock is held across `k.load`, every cache *miss* is full
 
 A meaningfully different design: keep the mutex narrow (only around map/list bookkeeping) and release it while the actual DB load runs, so misses on *different* keys can be loaded concurrently. To still satisfy the "at most one DB call per key" requirement, track in-flight loads per key: if a goroutine misses on a key that's already being loaded by someone else, it waits on that load instead of starting a redundant one (the same idea as `golang.org/x/sync/singleflight`, written out by hand here).
 
-```go
+```go {34,55,59,63,64,68,82}
 package main
 
 import (

@@ -6,7 +6,7 @@ asked for — it drains both `work` and `b.done` in the same `select`,
 and keeps the pool ordered with `heap.Fix`, exactly as 33's own fix
 does:
 
-```go
+```go {6}
 func (b *Balancer) Balance(work <-chan Request) {
 	for {
 		select {

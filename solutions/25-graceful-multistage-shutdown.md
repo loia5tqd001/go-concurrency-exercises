@@ -6,7 +6,7 @@
 
 The starting point is `Start`, which launches a small, fixed-size pool of worker goroutines:
 
-```go
+```go {12,13}
 const numWorkers = 4
 
 func Start(jobs <-chan int, process func(item int)) <-chan struct{} {
@@ -52,7 +52,7 @@ FAIL
 
 ## Approach 1: `sync.WaitGroup` + a small closer goroutine
 
-```go
+```go {19,21,30,31}
 package main
 
 import (
@@ -103,7 +103,7 @@ Design notes:
 
 A genuinely different composition, worth knowing if you've just come from [exercise 16](../16-errgroup-failfast) (`16-errgroup-failfast/`): that exercise builds a tiny hand-rolled `errgroup.Group` — `Go(f func() error)` launches a task in its own goroutine without blocking, and `Wait() error` blocks until every launched task returns, then returns the first error encountered (via `sync.WaitGroup` + `sync.Once`). That `Group` is a natural fit here too: instead of managing a bare `sync.WaitGroup` by hand in `Start`, launch each worker via `g.Go(...)` and let the coordinator goroutine call `g.Wait()` before closing `done`.
 
-```go
+```go {48,58}
 package main
 
 import (

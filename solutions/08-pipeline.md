@@ -102,7 +102,7 @@ nothing left to send. Every blocking channel operation — both
 `select` alongside `<-done`, so a stage can never be stuck forever on
 an operation nobody will complete.
 
-```go
+```go {12,38,41,71,74}
 func generator(done <-chan struct{}, nums ...int) <-chan int {
 	out := make(chan int)
 
@@ -235,7 +235,7 @@ A variant worth knowing, even though it isn't strictly required by
 `square` and `keepEven` first drain whatever is left on their input
 channel before returning.
 
-```go
+```go {19,23,54,58}
 func square(done <-chan struct{}, in <-chan int) <-chan int {
 	out := make(chan int)
 

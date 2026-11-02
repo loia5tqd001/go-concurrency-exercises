@@ -53,7 +53,7 @@ A note on the test file itself: `TestCacheDifferentKeysDontBlockEachOther` delib
 
 ## Approach 1: fixed sharding by first byte
 
-```go
+```go {50,59,61}
 package main
 
 import (
@@ -165,7 +165,7 @@ Design notes:
 
 A genuinely different structure: instead of pre-splitting into a fixed number of shards, hand out one `*sync.Mutex` **per distinct key**, created lazily and atomically via `sync.Map.LoadOrStore`.
 
-```go
+```go {37,40}
 package main
 
 import (

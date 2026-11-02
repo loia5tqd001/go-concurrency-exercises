@@ -36,7 +36,7 @@ vacuously true when nothing is ever remembered.)
 
 ## The fix: mutex-guarded map, `sync.WaitGroup` as the join point
 
-```go
+```go {18,20,33}
 type call struct {
 	wg  sync.WaitGroup
 	v   int

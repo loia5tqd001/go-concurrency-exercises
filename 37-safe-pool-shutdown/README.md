@@ -9,7 +9,7 @@ and calls `Close`.
 
 Right now there's zero coordination between the two:
 
-```go
+```go {2,7}
 func (p *Pool) Submit(job func()) (accepted bool) {
 	p.jobs <- job
 	return true

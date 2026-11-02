@@ -70,7 +70,7 @@ gets its own goroutine that tokenizes into its *own* local
 phase. Only after every goroutine has finished does a single,
 sequential reduce step fold the partials together.
 
-```go
+```go {13,17}
 func WordCount(chunks []string) map[string]int {
 	partials := make([]map[string]int, len(chunks))
 
@@ -135,7 +135,7 @@ dedicated goroutine whose only job is to close that channel once every
 map-phase goroutine has finished, so the reduce loop's `range` knows
 when to stop.
 
-```go
+```go {13,18}
 func WordCount(chunks []string) map[string]int {
 	var wg sync.WaitGroup
 	resultCh := make(chan map[string]int)
@@ -186,7 +186,7 @@ A very natural-looking "fix" is to spawn one goroutine per chunk (so
 entirely, having every goroutine increment the *same* shared `result`
 map directly:
 
-```go
+```go {13}
 func WordCount(chunks []string) map[string]int {
 	result := make(map[string]int)
 
@@ -281,7 +281,7 @@ per se.** A shared map is safe exactly when every access to a given
 key is properly serialized against every other access to that same
 key — which is what sharding buys you.
 
-```go
+```go {23,28}
 const numShards = 16
 
 type shard struct {
