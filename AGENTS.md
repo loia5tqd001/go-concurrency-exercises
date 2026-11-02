@@ -70,6 +70,13 @@ Commit only the scaffold, then copy the backup back.
 - Review a solution: follow the `judge` skill.
 - Change a title, a difficulty, or a topic: edit only that row of the
   overview table in `README.md`, then run `make gen`.
+- Write or edit a solution doc: band the lines the prose is about, with a
+  ` ```go {6,12,23} ` fence spec, so the site shows which lines carry the
+  idea. Numbers are 1-based from the first line of the block. Band only
+  what a reader skimming the block would otherwise miss — the lines that
+  differ from the scaffold, or the one to three lines that implement the
+  trick. Most fences stay plain, and a block where every line is equally
+  the point gets no bands at all. See `web/README.md`.
 
 ## When you learn a lesson
 
