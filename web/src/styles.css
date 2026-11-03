@@ -233,6 +233,36 @@ a:focus-visible {
   color: var(--fg);
 }
 
+/* The repository link is the one control in the topbar that says what it
+   does, so it takes the pill shape the common GitHub-stars buttons use. It
+   fills with --bg rather than --bg-elev because the topbar is already
+   --bg-elev. The count is set in the sans face because the mono one slashes
+   its zero, which reads as a broken glyph at a single digit. */
+.repo-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  height: 30px;
+  padding: 0 11px 0 10px;
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  background: var(--bg);
+  color: var(--fg-muted);
+  font: 500 12.5px var(--sans);
+  text-decoration: none;
+  transition:
+    background-color 0.15s ease,
+    color 0.15s ease;
+}
+.repo-btn .count {
+  color: var(--fg);
+  font-variant-numeric: tabular-nums;
+}
+.repo-btn:hover {
+  background: var(--bg-hover);
+  color: var(--fg);
+}
+
 /* ---------- frame ---------- */
 
 .app {
@@ -944,6 +974,14 @@ a:focus-visible {
 }
 
 /* ---------- small screens: stack everything and let the page scroll ---------- */
+
+/* Only a 320px phone is this narrow. The count is the point of the button, so
+   it is the last thing to go, after the wordmark has already dropped. */
+@media (max-width: 420px) {
+  .repo-btn .count {
+    display: none;
+  }
+}
 
 @media (max-width: 900px) {
   .app {

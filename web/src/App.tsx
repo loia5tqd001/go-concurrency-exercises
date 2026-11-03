@@ -6,6 +6,7 @@ import { Sidebar } from "./components/Sidebar.tsx";
 import { exerciseById, site } from "./data.ts";
 import { useToolchain, type ToolchainState } from "./runner/client.ts";
 import { onLinkClick, useRoute } from "./router.ts";
+import { compact, useStars } from "./stars.ts";
 import { loadPref, loadStatus, savePref, saveStatus, type Status } from "./storage.ts";
 import { useTheme } from "./theme.ts";
 
@@ -13,6 +14,7 @@ export function App() {
   const route = useRoute();
   const theme = useTheme();
   const toolchain = useToolchain();
+  const stars = useStars();
   // navOpen drives the drawer below 901px; navCollapsed is the remembered
   // desktop preference. Each toggle button is hidden at the other width.
   const [navOpen, setNavOpen] = useState(false);
@@ -61,8 +63,16 @@ export function App() {
         <button className="icon-btn" onClick={theme.cycle} title={`Theme: ${theme.pref} (click to change)`} aria-label={`Theme: ${theme.pref}`}>
           <ThemeIcon />
         </button>
-        <a className="icon-btn" href={site.repoUrl} target="_blank" rel="noopener noreferrer" aria-label="GitHub repository" title="GitHub repository">
+        <a
+          className="repo-btn"
+          href={site.repoUrl}
+          target="_blank"
+          rel="noopener noreferrer"
+          aria-label={stars === null ? "GitHub repository" : `GitHub repository, ${stars} stars`}
+          title={stars === null ? "Star this project on GitHub" : `Star this project on GitHub — ${stars} so far`}
+        >
           <GitHubIcon />
+          {stars !== null && <span className="count">{compact(stars)}</span>}
         </a>
       </header>
       <div className={`body${navCollapsed ? " nav-collapsed" : ""}`}>
