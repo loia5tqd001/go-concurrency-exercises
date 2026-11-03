@@ -6,7 +6,7 @@
   "outputDirectory": "web/dist",
   "rewrites": [
     {
-      "source": "/((?!go/|data/|assets/).*)",
+      "source": "/((?!og\\.png$|go/|data/|assets/).*)",
       "destination": "/index.html"
     }
   ],

@@ -1,0 +1,431 @@
+<!doctype html>
+<!--
+  Source for public/og.png, the link-preview card. `npm run og` fills the
+  {{...}} tokens from src/generated/exercises.json and screenshots this page
+  at 1200x630 with headless Chrome. Edit here, never the PNG.
+-->
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <title>Go Concurrency Exercises — link preview</title>
+    <style>
+      :root {
+        --bg: #f5f6f8;
+        --bg-elev: #ffffff;
+        --bg-sunken: #eff1f4;
+        --fg: #1f2328;
+        --fg-muted: #5c6670;
+        --border: #d9dee4;
+        --accent: #007d9c;
+        --accent-soft: #e0f3f8;
+        --pass: #1a7f37;
+        --diff-warm-up: #6e7781;
+        --diff-easy: #1a7f37;
+        --diff-medium: #0969da;
+        --diff-hard: #bc4c00;
+        --diff-extreme: #cf222e;
+        --mono: ui-monospace, "SF Mono", SFMono-Regular, Menlo, Consolas, "Liberation Mono", monospace;
+        --sans: system-ui, -apple-system, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
+        /* Monaco's own "vs" token colours, so the mock reads as the real editor. */
+        --syn-kw: #0000ff;
+        --syn-type: #267f99;
+        --syn-fn: #795e26;
+        --syn-var: #001080;
+      }
+      * {
+        margin: 0;
+        padding: 0;
+        box-sizing: border-box;
+      }
+      html,
+      body {
+        width: 1200px;
+        height: 630px;
+        overflow: hidden;
+      }
+      body {
+        font-family: var(--sans);
+        -webkit-font-smoothing: antialiased;
+      }
+
+      .card {
+        position: relative;
+        width: 1200px;
+        height: 630px;
+        overflow: hidden;
+        background: linear-gradient(163deg, #ffffff 0%, #f4f9fb 46%, #e6eff4 100%);
+      }
+      /* One soft accent wash behind the headline, so the top-left corner is not
+         flat white against a white feed. */
+      .glow {
+        position: absolute;
+        top: -420px;
+        right: -240px;
+        width: 900px;
+        height: 900px;
+        border-radius: 50%;
+        background: radial-gradient(closest-side, rgb(0 173 216 / 0.18), rgb(0 173 216 / 0));
+      }
+
+      header {
+        position: absolute;
+        top: 46px;
+        left: 64px;
+        right: 64px;
+        display: flex;
+        align-items: center;
+        gap: 13px;
+      }
+      .mark {
+        display: flex;
+        width: 40px;
+        height: 40px;
+      }
+      .mark svg {
+        width: 40px;
+        height: 40px;
+      }
+      .brand {
+        color: #2c333a;
+        font-size: 21px;
+        font-weight: 650;
+        letter-spacing: 0.005em;
+      }
+      .spacer {
+        flex: 1;
+      }
+      /* The app's own toolchain readout: a green dot and the Go version. */
+      .tc {
+        display: inline-flex;
+        align-items: center;
+        gap: 8px;
+        padding: 8px 16px;
+        border: 1px solid var(--border);
+        border-radius: 999px;
+        background: rgb(255 255 255 / 0.75);
+        color: var(--fg-muted);
+        font: 16px var(--mono);
+      }
+      .tc .dot {
+        width: 9px;
+        height: 9px;
+        border-radius: 50%;
+        background: var(--pass);
+      }
+
+      h1 {
+        position: absolute;
+        top: 104px;
+        left: 64px;
+        color: #11161b;
+        font-size: 66px;
+        font-weight: 800;
+        line-height: 1.06;
+        letter-spacing: -0.021em;
+      }
+
+      .lede {
+        position: absolute;
+        left: 64px;
+        color: var(--fg-muted);
+        font-size: 25px;
+        line-height: 1.44;
+      }
+      .lede.first {
+        top: 266px;
+      }
+      .lede.second {
+        top: 302px;
+      }
+      .lede b {
+        color: #2c333a;
+        font-weight: 650;
+      }
+      .lede code {
+        padding: 2px 8px;
+        border: 1px solid var(--border);
+        border-radius: 6px;
+        background: var(--bg-sunken);
+        color: #0b5d70;
+        font-family: var(--mono);
+        font-size: 0.86em;
+      }
+
+      /* The app, cropped at the card's bottom edge. */
+      .window {
+        position: absolute;
+        top: 374px;
+        left: 0;
+        right: 0;
+        bottom: 0;
+        overflow: hidden;
+        border-top: 1px solid var(--border);
+        border-radius: 18px 18px 0 0;
+        background: var(--bg-elev);
+        box-shadow: 0 -20px 46px rgb(15 23 42 / 0.09);
+      }
+      .chrome {
+        display: flex;
+        align-items: center;
+        gap: 14px;
+        height: 42px;
+        padding: 0 18px;
+        border-bottom: 1px solid var(--border);
+        background: #f7f9fa;
+      }
+      .dots {
+        display: flex;
+        gap: 7px;
+      }
+      .dots i {
+        width: 11px;
+        height: 11px;
+        border-radius: 50%;
+        background: #d3d9df;
+      }
+      .url {
+        padding: 4px 14px;
+        border: 1px solid var(--border);
+        border-radius: 999px;
+        background: #fff;
+        color: var(--fg-muted);
+        font: 14px var(--mono);
+      }
+
+      .body {
+        display: flex;
+        height: calc(100% - 42px);
+      }
+      .side {
+        width: 268px;
+        border-right: 1px solid var(--border);
+        background: var(--bg-elev);
+      }
+      .search {
+        margin: 10px;
+        padding: 8px 10px;
+        border: 1px solid var(--border);
+        border-radius: 7px;
+        background: var(--bg);
+        color: #9aa4ae;
+        font-size: 13px;
+      }
+      .rows {
+        list-style: none;
+        padding: 0 6px;
+      }
+      .rows li {
+        display: grid;
+        grid-template-columns: 34px minmax(0, 1fr) 14px;
+        align-items: center;
+        gap: 6px;
+        height: 26px;
+        padding: 0 8px;
+        border-radius: 7px;
+        color: var(--fg);
+        font-size: 13px;
+      }
+      .rows li.active {
+        background: var(--accent-soft);
+      }
+      .num {
+        display: flex;
+        flex-direction: column;
+        align-items: flex-end;
+        gap: 3px;
+        color: var(--fg-muted);
+        font: 12px var(--mono);
+      }
+      .diff {
+        display: flex;
+        gap: 2px;
+      }
+      .diff i {
+        width: 5px;
+        height: 5px;
+        border-radius: 1px;
+        background: var(--d);
+      }
+      .diff-warm-up {
+        --d: var(--diff-warm-up);
+      }
+      .diff-easy {
+        --d: var(--diff-easy);
+      }
+      .diff-medium {
+        --d: var(--diff-medium);
+      }
+      .diff-hard {
+        --d: var(--diff-hard);
+      }
+      .diff-extreme {
+        --d: var(--diff-extreme);
+      }
+      .title {
+        overflow: hidden;
+        white-space: nowrap;
+        text-overflow: ellipsis;
+      }
+      .check {
+        display: flex;
+        color: var(--pass);
+      }
+
+      .pane {
+        display: flex;
+        flex: 1;
+        flex-direction: column;
+        min-width: 0;
+      }
+      .toolbar {
+        display: flex;
+        align-items: center;
+        gap: 8px;
+        height: 41px;
+        padding: 0 12px;
+        border-bottom: 1px solid var(--border);
+      }
+      .tab {
+        padding: 10px 10px 9px;
+        border-bottom: 2px solid var(--accent);
+        color: var(--fg);
+        font: 14px var(--mono);
+      }
+      .grow {
+        flex: 1;
+      }
+      .btn {
+        display: inline-flex;
+        align-items: center;
+        height: 28px;
+        padding: 0 13px;
+        border: 1px solid var(--border);
+        border-radius: 7px;
+        background: var(--bg-elev);
+        color: var(--fg);
+        font-size: 13px;
+        font-weight: 550;
+      }
+      .btn.primary {
+        border-color: var(--accent);
+        background: var(--accent);
+        color: #fff;
+      }
+
+      .code {
+        flex: 1;
+        min-height: 0;
+        overflow: hidden;
+        padding: 6px 0;
+        font: 15px/20px var(--mono);
+      }
+      .cl {
+        display: flex;
+        padding: 0 14px 0 0;
+        white-space: pre;
+      }
+      .cl .n {
+        width: 50px;
+        padding-right: 14px;
+        color: #b3bcc5;
+        text-align: right;
+      }
+      .k {
+        color: var(--syn-kw);
+      }
+      .t {
+        color: var(--syn-type);
+      }
+      .f {
+        color: var(--syn-fn);
+      }
+      .v {
+        color: var(--syn-var);
+      }
+
+      .console {
+        height: 58px;
+        padding: 6px 14px;
+        border-top: 1px solid var(--border);
+        background: var(--bg-sunken);
+        font: 15px/1.5 var(--mono);
+      }
+      .ln.cmd {
+        color: var(--accent);
+        font-weight: 600;
+      }
+      .ln.pass {
+        color: var(--pass);
+      }
+    </style>
+  </head>
+  <body>
+    <div class="card">
+      <div class="glow"></div>
+
+      <header>
+        <span class="mark">
+          <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 32 32">
+            <rect width="32" height="32" rx="7" fill="#007d9c" />
+            <g transform="translate(1.604 1.604) scale(0.22494)">
+              <g fill="none" stroke="#fff" stroke-width="10" stroke-linecap="round" stroke-linejoin="round">
+                <path d="M3 56c15 0 27 14.5 44 14.5" />
+                <path d="M3 70.5h44" />
+                <path d="M3 85c15 0 27-14.5 44-14.5" />
+              </g>
+              <g fill="#fff" fill-rule="evenodd">
+                <path d="M79.58 53.738c-3.819.97-6.425 1.697-10.182 2.666-.91.243-.97.303-1.758-.606-.909-1.03-1.576-1.697-2.848-2.303-3.819-1.878-7.516-1.333-10.97.91-4.121 2.666-6.242 6.605-6.182 11.514.06 4.849 3.394 8.849 8.182 9.516 4.121.545 7.576-.91 10.303-4 .545-.667 1.03-1.394 1.636-2.243H56.064c-1.272 0-1.575-.788-1.151-1.818.788-1.879 2.242-5.03 3.09-6.606.183-.364.607-.97 1.516-.97h22.06c-.12 1.637-.12 3.273-.363 4.91-.667 4.363-2.303 8.363-4.97 11.878-4.364 5.758-10.06 9.333-17.273 10.303-5.939.788-11.454-.364-16.302-4-4.485-3.394-7.03-7.879-7.697-13.454-.788-6.606 1.151-12.546 5.151-17.758 4.303-5.636 10-9.212 16.97-10.485 5.697-1.03 11.151-.363 16.06 2.97 3.212 2.121 5.515 5.03 7.03 8.545.364.546.122.849-.606 1.03z" />
+                <path d="M99.64 87.253c-5.515-.122-10.546-1.697-14.788-5.334-3.576-3.09-5.818-7.03-6.545-11.697-1.091-6.848.787-12.909 4.909-18.302 4.424-5.819 9.757-8.849 16.97-10.122 6.181-1.09 12-.484 17.272 3.091 4.788 3.273 7.757 7.697 8.545 13.515 1.03 8.182-1.333 14.849-6.97 20.546-4 4.06-8.909 6.606-14.545 7.757-1.636.303-3.273.364-4.848.546zm14.424-24.485c-.06-.788-.06-1.394-.182-2-1.09-6-6.606-9.394-12.363-8.06-5.637 1.272-9.273 4.848-10.606 10.545-1.091 4.727 1.212 9.515 5.575 11.454 3.334 1.455 6.667 1.273 9.879-.363 4.788-2.485 7.394-6.364 7.697-11.576z" />
+              </g>
+            </g>
+          </svg>
+        </span>
+        <span class="brand">Go Concurrency Exercises</span>
+        <span class="spacer"></span>
+        <span class="tc"><span class="dot"></span>Go {{GO_VERSION}}</span>
+      </header>
+
+      <h1>Practice Go concurrency<br />in your browser</h1>
+
+      <p class="lede first">
+        <b>{{COUNT}} exercises</b> on goroutines, channels, <code>select</code> and <code>context</code>.
+      </p>
+      <p class="lede second">The real Go compiler runs in your tab as WebAssembly — nothing to install.</p>
+
+      <div class="window">
+        <div class="chrome">
+          <span class="dots"><i></i><i></i><i></i></span>
+          <span class="url">go-ce.vercel.app</span>
+        </div>
+        <div class="body">
+          <nav class="side">
+            <div class="search">Filter by title, topic, difficulty</div>
+            <ol class="rows">
+              {{ROWS}}
+            </ol>
+          </nav>
+          <main class="pane">
+            <div class="toolbar">
+              <span class="tab">main.go</span>
+              <span class="grow"></span>
+              <span class="btn">Reset</span>
+              <span class="btn">Format</span>
+              <span class="btn primary">Run tests</span>
+            </div>
+            <div class="code">
+              <div class="cl"><span class="n">1</span><span><span class="k">func</span> <span class="f">worker</span>(<span class="v">jobs</span> <span class="k">&lt;-chan</span> <span class="t">Job</span>, <span class="v">out</span> <span class="k">chan&lt;-</span> <span class="t">Result</span>) {</span></div>
+              <div class="cl"><span class="n">2</span><span>	<span class="k">for</span> <span class="v">j</span> := <span class="k">range</span> <span class="v">jobs</span> {</span></div>
+              <div class="cl"><span class="n">3</span><span>		<span class="v">out</span> &lt;- <span class="f">run</span>(<span class="v">j</span>)</span></div>
+              <div class="cl"><span class="n">4</span><span>	}</span></div>
+              <div class="cl"><span class="n">5</span><span>}</span></div>
+            </div>
+            <div class="console">
+              <div class="ln cmd">$ go test -v</div>
+              <div class="ln pass">--- PASS: TestProcessJobsIsBounded (0.31s)</div>
+            </div>
+          </main>
+        </div>
+      </div>
+    </div>
+  </body>
+</html>

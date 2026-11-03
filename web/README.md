@@ -21,6 +21,7 @@ _testmain.go (generated at build time) ─compile.wasm─▶ _testmain.a ──l
 | The compile and link pipeline, and running a binary | `src/runner/toolchain.ts`, `src/runner/go.ts` |
 | Toolchain worker (builds) and runner worker (one per run, so Stop always works) | `src/runner/*.worker.ts` |
 | UI: React + Monaco | `src/components/` |
+| The star count beside the repository link, one API call a day per visitor | `src/stars.ts` |
 
 ## Banding the lines that matter
 
@@ -42,6 +43,28 @@ Numbers are 1-based from the first line of the block, and `{6,12-14}` and `{6 12
 | `GOMAXPROCS` = number of cores | 1. Goroutines switch only when one blocks, so `runtime.GOMAXPROCS(0)`-sized pools get one worker. |
 | `os/exec`, `os/signal`, `os.Pipe` | Not available. The generator marks exercises that import `os/exec` or `os/signal` as unsupported (today: 04), and those exercises get a **Build** button instead of **Run tests**. |
 
+## Link previews
+
+Slack, LinkedIn and X read the tags in the head of `index.html`. They do not
+run JavaScript, so those tags are static: every route previews as the same
+card, and only the root URL's own copy is what a crawler sees.
+
+The card image is built rather than drawn by hand. `og/card.html` holds the
+layout, and `scripts/og.ts` fills in the exercise count, the Go version and
+the exercise list from `src/generated/exercises.json` — the same file the site
+builds from — then screenshots the page at 1200x630 with headless Chrome.
+
+```sh
+npm run og        # after adding, renaming or reordering an exercise
+```
+
+`public/og.png` is committed. Crawlers fetch it from the deployed site, and
+the Vercel build image has no Chrome, so regenerate it on a machine that does.
+Vercel serves it from the filesystem before the SPA rewrite, like
+`favicon.svg`. `og:image` must be an absolute URL, so both the tags and the
+card's own address are pinned to the production domain; a preview deployment
+therefore advertises the production image.
+
 ## Commands
 
 ```sh
@@ -49,6 +72,7 @@ cd web
 npm install
 npm run dev        # prepare data + toolchain, then the Vite dev server
 npm run build      # prepare + type-check + production build into dist/
+npm run og         # rebuild public/og.png, the link-preview card
 npm run smoke      # every scaffold through the runner under Node; each must build and fail its tests
 npm run smoke -- --solutions ..   # your local main.go files instead; each must pass
 ```
