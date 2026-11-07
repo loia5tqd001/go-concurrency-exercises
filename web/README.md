@@ -45,15 +45,17 @@ Every fence gets a Copy button in its top-right corner. It appears on hover or k
 |---|---|
 | Race detector | **Not available.** It needs ThreadSanitizer, which WebAssembly cannot host. The UI tells the learner to run `go test -race` locally. |
 | `GOMAXPROCS` = number of cores | 1. Goroutines switch only when one blocks, so `runtime.GOMAXPROCS(0)`-sized pools get one worker. |
-| `os/exec`, `os/signal`, `os.Pipe` | Not available. The generator marks exercises that import `os/exec` or `os/signal` as unsupported (today: 04). They carry a `local` badge, use **Build only** instead of **Run tests**, and remain listed unless the sidebar's **Browser only** filter is active. |
+| `os/exec`, `os/signal`, `os.Pipe` | Not available. The generator marks exercises that import `os/exec` or `os/signal` as unsupported (today: 04). They carry a `local` badge, use **Build only** instead of **Run tests**, and remain available under **All exercises**. |
 
 ## Visualisations
 
 Some exercises have an animated visualisation. A spec, `src/viz/specs/<id>.ts`, is a small Go program: goroutine nodes with generator programs that yield one operation per Go statement (`send`, `recv`, `select`, `work`, `wait`, `lock`, `condWait`, …), plus the channels, wait groups, mutexes, condition variables, timers, contexts, slices, and facts they share. `src/viz/engine/sim.ts` runs the programs under Go's rules on a virtual clock and records every step; it decides every order (with a seeded random choice where Go promises none) and derives every state, the edges, and the outcome (ok, leak, deadlock, panic). `src/viz/engine/timeline.ts` turns the run into playback beats: the clock moves during work and stands still while values move between nodes. `src/viz/engine/layout.ts` places the nodes on the spec's grid and turns the grid top to bottom on a narrow pane. `src/viz/view/` draws the graph in SVG, with the transport, scrubber, knobs, tests, and a code panel whose gutter marks the line each goroutine is on. The registry, `src/viz/registry.ts`, globs `specs/[0-9]*.ts`, so a new spec needs no registry edit.
 
+The sidebar opens on **Recommended**, a curated browser-runnable, visual-backed path through the system. **All exercises** keeps the complete numbered catalogue. Search always covers all exercises, and opening a non-recommended exercise switches the list to **All exercises**.
+
 The Problem tab mounts the player on the README's own ASCII diagram. The diagram stays the default view; a "▶ Today" or "▶ Goal" chip swaps in the animation at the same top edge, and the Diagram chip swaps the fence back. A spec pins one fence per Problem tier. Inside scenes appear at the top of the Solution tab after the existing reveal. In development, a stale pin shows its scenes below the README with a strip that says why; a production build omits them. The door plays on open; the Solution block starts paused; reduced motion never autoplays and jumps between steps instead of flying values.
 
-`npm run check-visuals` proves each spec's constants and anchors against `git HEAD`, every `diagrams` pin against the working-tree README, code excerpts verbatim against the committed scaffold or the solution doc, no code in a goal scene, the vocabulary and spoiler rules for Problem scenes, the budgets, and a layout with no overlapping nodes at 300 and 640 px. It runs every scene, for every knob setting, under 12 seeds, and each run must end with the outcome, test results, and time the scene expects. `npm run test-visuals` tests the scheduler's Go rules and plants faults the checker must catch. Run both after `prepare-data`.
+`npm run check-visuals` proves each spec's constants and anchors against `git HEAD`, every `diagrams` pin against the working-tree README, code excerpts verbatim against the committed scaffold or the solution doc, no code in a goal scene, the vocabulary and spoiler rules for Problem scenes, the budgets, and a layout with no overlapping nodes at 300 and 640 px. It runs every scene, for every knob setting, under 12 seeds, and each run must end with the outcome, test results, and time the scene expects. `npm run test-web` adds the recommended-path contract, then tests the scheduler's Go rules and plants faults the checker must catch. Run both after `prepare-data`.
 
 `npm run viz -- shots [id ...]` renders every Problem and Solution scene at 300 px and 640 px, in light and dark, checks five points of each run, and saves the last frame under `node_modules/.cache/viz-shots/` (git ignores that path). It fails on horizontal overflow, a truncated label in the graph, or a control under 32 px. The command reuses a Vite server on :5173 and Chrome on :9222 when they are up; otherwise it starts and stops its own.
 
@@ -101,6 +103,7 @@ npm run build      # prepare + type-check + production build into dist/
 npm run og         # rebuild public/og.png, the link-preview card
 npm run smoke      # every scaffold through the runner under Node; each must build and fail its tests
 npm run smoke -- --solutions ..   # your local main.go files instead; each must pass
+npm run test-web   # recommended-path contract and visual-engine tests
 npm run viz -- shots              # pixel check every spec; PNGs under node_modules/.cache/viz-shots
 npm run viz -- shots 06           # pixel check one spec, by id or leading number
 npm run viz -- shots 06 --themes light   # just the light review frames

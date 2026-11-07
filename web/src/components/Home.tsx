@@ -1,7 +1,8 @@
 import { useEffect, useState } from "react";
 import { loadHome, site } from "../data.ts";
+import { recommendedExercises } from "../recommended.ts";
 import { onLinkClick } from "../router.ts";
-import { GitHubIcon, PlayIcon } from "./icons.tsx";
+import { PlayIcon } from "./icons.tsx";
 import { Markdown } from "./Markdown.tsx";
 
 export function Home() {
@@ -13,7 +14,9 @@ export function Home() {
       (err) => setError(String(err)),
     );
   }, []);
-  const first = site.exercises[0];
+  const first = recommendedExercises(site.exercises)[0] ?? site.exercises[0];
+  const basics = site.exercises.find((exercise) => exercise.id === "00-limit-crawler") ?? site.exercises[0];
+  const starterName = first.title.split(":")[0] ?? first.title;
 
   return (
     <div className="home">
@@ -30,10 +33,10 @@ export function Home() {
           </p>
           <div className="hero-actions">
             <a className="btn primary large" href={`/${first.id}`} onClick={onLinkClick}>
-              <PlayIcon /> Start with {first.number}: {first.title}
+              <PlayIcon /> Start with {starterName}
             </a>
-            <a className="btn large" href={site.repoUrl} target="_blank" rel="noopener noreferrer">
-              <GitHubIcon /> Clone it instead
+            <a className="btn large" href={`/${basics.id}`} onClick={onLinkClick}>
+              Start from the basics
             </a>
           </div>
           <p className="muted small">

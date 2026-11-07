@@ -13,6 +13,7 @@
     "og": "node scripts/og.ts",
     "smoke": "node scripts/smoke-test.ts",
     "check-visuals": "node scripts/viz-check.ts",
+    "test-web": "node --test scripts/recommended.test.ts scripts/viz-kit.test.ts scripts/viz-check.test.ts",
     "test-visuals": "node --test scripts/viz-kit.test.ts scripts/viz-check.test.ts",
     "viz": "node scripts/viz.ts"
   },

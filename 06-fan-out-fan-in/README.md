@@ -12,17 +12,17 @@ independent of the others.
 ```
 today: 1 goroutine, 10 images × 150ms each = 1.5s
 
-  img1 ──▶ ProcessImage ──▶ thumb1
-  img2 ──▶ ProcessImage ──▶ thumb2
+  img1  ──▶ ProcessImage ──▶ thumb1
+  img2  ──▶ ProcessImage ──▶ thumb2
   ...
   img10 ──▶ ProcessImage ──▶ thumb10
   (each call waits for the previous one to return)
 
 goal: 10 fan-out goroutines (one per URL), all at once, ~150ms for all 10
 
-  img1 ──▶ ProcessImage ─┐
-  img2 ──▶ ProcessImage ─┤
-  ...                    ├──▶ fan-in ──▶ []Thumbnail × 10
+  img1  ──▶ ProcessImage ─┐
+  img2  ──▶ ProcessImage ─┤
+  ...                     ├──▶ fan-in ──▶ []Thumbnail × 10
   img10 ──▶ ProcessImage ─┘
 ```
 

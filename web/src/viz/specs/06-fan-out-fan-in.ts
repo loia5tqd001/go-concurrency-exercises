@@ -47,7 +47,7 @@ export default defineViz({
   schema: 3,
   exercise: "06-fan-out-fan-in",
   // One README fence draws both states, so both Problem tiers pin it.
-  diagrams: { today: "fnv1a:0bfd898b", goal: "fnv1a:0bfd898b" },
+  diagrams: { today: "fnv1a:82c4d567", goal: "fnv1a:82c4d567" },
   constants: K,
   scenes: [
     {

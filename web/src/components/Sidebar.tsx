@@ -1,5 +1,6 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import { site } from "../data.ts";
+import { defaultScope, isRecommended, recommendedExercises, type ExerciseScope } from "../recommended.ts";
 import { onLinkClick } from "../router.ts";
 import type { Status } from "../storage.ts";
 import { hasViz } from "../viz/registry.ts";
@@ -20,11 +21,14 @@ const LEVELS: Record<string, number> = { "warm-up": 1, easy: 2, medium: 3, hard:
 
 export function Sidebar({ current, statuses, open, modal, onClose }: Props) {
   const [query, setQuery] = useState("");
-  const [browserOnly, setBrowserOnly] = useState(false);
+  const [scope, setScope] = useState<ExerciseScope>(() => defaultScope(current));
   const inputRef = useRef<HTMLInputElement>(null);
   const listRef = useRef<HTMLOListElement>(null);
+  const searching = query.trim() !== "";
   const items = useMemo(() => {
-    const available = browserOnly ? site.exercises.filter((exercise) => !exercise.unsupported) : site.exercises;
+    // Search spans the full catalogue. A query should never miss an exercise
+    // merely because it falls outside the short recommended path.
+    const available = searching || scope === "all" ? site.exercises : recommendedExercises(site.exercises);
     const q = query.trim().toLowerCase();
     if (!q) return available;
     return available.filter((e) =>
@@ -39,9 +43,12 @@ export function Sidebar({ current, statuses, open, modal, onClose }: Props) {
         ...(e.unsupported ? ["local", "browser unsupported"] : ["browser runnable"]),
       ].some((s) => s.toLowerCase().includes(q)),
     );
-  }, [browserOnly, query]);
+  }, [query, scope, searching]);
   const passed = site.exercises.filter((e) => statuses[e.id] === "passed").length;
-  const filtered = query.trim() !== "" || browserOnly;
+
+  useEffect(() => {
+    if (current !== undefined && !isRecommended(current)) setScope("all");
+  }, [current]);
 
   useEffect(() => {
     if (!open) return;
@@ -78,24 +85,24 @@ export function Sidebar({ current, statuses, open, modal, onClose }: Props) {
           onChange={(e) => setQuery(e.target.value)}
         />
         <fieldset className="sidebar-filter">
-          <legend className="sr-only">Exercise availability</legend>
+          <legend className="sr-only">Exercise list</legend>
           <label>
-            <input type="radio" name="exercise-availability" checked={!browserOnly} onChange={() => setBrowserOnly(false)} />
-            <span>All</span>
+            <input type="radio" name="exercise-scope" checked={scope === "recommended"} onChange={() => setScope("recommended")} />
+            <span>Recommended</span>
           </label>
           <label>
-            <input type="radio" name="exercise-availability" checked={browserOnly} onChange={() => setBrowserOnly(true)} />
-            <span>Browser only</span>
+            <input type="radio" name="exercise-scope" checked={scope === "all"} onChange={() => setScope("all")} />
+            <span>All exercises</span>
           </label>
         </fieldset>
       </div>
-      {filtered && (
-        <div className="sidebar-match-count">
-          {query.trim() !== ""
-            ? `${items.length} ${items.length === 1 ? "match" : "matches"}`
-            : `${items.length} browser-runnable`}
-        </div>
-      )}
+      <div className="sidebar-match-count">
+        {searching
+          ? `${items.length} ${items.length === 1 ? "match" : "matches"} across all exercises`
+          : scope === "recommended"
+            ? `${items.length} recommended`
+            : `${items.length} exercises`}
+      </div>
       <ol className="ex-list" id="exercise-list" ref={listRef}>
         {items.map((e) => (
           <li key={e.id}>
@@ -157,10 +164,10 @@ export function Sidebar({ current, statuses, open, modal, onClose }: Props) {
         </span>
       </div>
       <span id="exercise-results" className="sr-only" aria-live="polite">
-        {browserOnly
-          ? `${items.length} browser-runnable exercises shown`
-          : query.trim() !== ""
-            ? `${items.length} exercises match`
+        {searching
+          ? `${items.length} exercises match across all exercises`
+          : scope === "recommended"
+            ? `${items.length} recommended exercises shown`
             : `All ${site.exercises.length} exercises shown`}
       </span>
     </nav>

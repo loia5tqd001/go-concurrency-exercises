@@ -43,8 +43,8 @@ jobs:
       - name: Visualisation specs match the index and HEAD
         run: npm run check-visuals
         working-directory: web
-      - name: Visualisation frames reach their declared states
-        run: npm run test-visuals
+      - name: Web tests
+        run: npm run test-web
         working-directory: web
       - name: Build the site
         run: npx vite build
