@@ -45,7 +45,7 @@ Every fence gets a Copy button in its top-right corner. It appears on hover or k
 |---|---|
 | Race detector | **Not available.** It needs ThreadSanitizer, which WebAssembly cannot host. The UI tells the learner to run `go test -race` locally. |
 | `GOMAXPROCS` = number of cores | 1. Goroutines switch only when one blocks, so `runtime.GOMAXPROCS(0)`-sized pools get one worker. |
-| `os/exec`, `os/signal`, `os.Pipe` | Not available. The generator marks exercises that import `os/exec` or `os/signal` as unsupported (today: 04), and those exercises get a **Build** button instead of **Run tests**. |
+| `os/exec`, `os/signal`, `os.Pipe` | Not available. The generator marks exercises that import `os/exec` or `os/signal` as unsupported (today: 04). They carry a `local` badge, use **Build only** instead of **Run tests**, and remain listed unless the sidebar's **Browser only** filter is active. |
 
 ## Visualisations
 

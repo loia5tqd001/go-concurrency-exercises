@@ -6,13 +6,14 @@ worker, daemon, or CLI needs closed before it's production-ready, the
 same way `net/http.Server` needs `Shutdown` instead of a bare Ctrl-C:
 
 ```
-today:                                goal:
-Ctrl-C ──▶ OS kills the process       1st Ctrl-C ──▶ proc.Stop() (graceful)
-           immediately, mid-work            │              │
-           proc.Stop() never runs           │        still running?
-                                            │              │
-                                      2nd Ctrl-C ──▶ kill immediately
-                                                       (last resort)
+today:
+  Ctrl-C ──▶ OS kills immediately
+             proc.Stop() never runs
+
+goal:
+  1st Ctrl-C ──▶ proc.Stop()
+                 keep running
+  2nd Ctrl-C ──▶ kill now
 ```
 
 Right now `main` just calls `proc.Run()` directly - there is no signal

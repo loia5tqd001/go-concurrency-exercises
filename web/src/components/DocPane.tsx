@@ -1,10 +1,11 @@
-import { useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { site, type Exercise, type ExerciseSummary } from "../data.ts";
 import { onLinkClick, routePath } from "../router.ts";
 import type { Status } from "../storage.ts";
 import { VizSolution } from "../viz/VizDoor.tsx";
+import { hasViz } from "../viz/registry.ts";
 import { useVizSpec } from "../viz/useVizSpec.ts";
-import { CheckIcon } from "./icons.tsx";
+import { CheckIcon, VisualisationIcon } from "./icons.tsx";
 import { Markdown } from "./Markdown.tsx";
 
 interface Props {
@@ -17,6 +18,7 @@ interface Props {
 
 export function DocPane({ summary, exercise, tab, status, onOpenFile }: Props) {
   const [revealed, setRevealed] = useState(false);
+  const bodyRef = useRef<HTMLDivElement>(null);
   const id = summary.id;
   const spec = useVizSpec(id);
   const files = exercise.files.map((f) => f.name);
@@ -24,25 +26,39 @@ export function DocPane({ summary, exercise, tab, status, onOpenFile }: Props) {
   const prev = site.exercises[index - 1];
   const next = site.exercises[index + 1];
 
+  useEffect(() => {
+    bodyRef.current?.scrollTo(0, 0);
+  }, [id, tab]);
+
   return (
     <section className="doc-pane" aria-label="Exercise">
-      <div className="doc-tabs" role="tablist">
-        <a role="tab" aria-selected={tab === "problem"} href={routePath({ id, tab: "problem" })} onClick={onLinkClick}>
+      <nav className="doc-tabs" aria-label="Exercise content">
+        <a aria-current={tab === "problem" ? "page" : undefined} href={routePath({ id, tab: "problem" })} onClick={onLinkClick}>
           Problem
         </a>
-        <a role="tab" aria-selected={tab === "solution"} href={routePath({ id, tab: "solution" })} onClick={onLinkClick}>
+        <a aria-current={tab === "solution" ? "page" : undefined} href={routePath({ id, tab: "solution" })} onClick={onLinkClick}>
           Solution
         </a>
         <span className="spacer" />
+        {summary.unsupported && (
+          <span className="badge local" title="Tests require local Go">
+            local
+          </span>
+        )}
+        {hasViz(id) && (
+          <span className="badge visualisation" title="Animated visualisation">
+            <VisualisationIcon width={11} height={11} /> visual
+          </span>
+        )}
         <span className={`badge diff-${summary.difficulty}`}>{summary.difficulty}</span>
         {status === "passed" && (
           <span className="badge pass">
             <CheckIcon width={11} height={11} /> passed
           </span>
         )}
-      </div>
+      </nav>
 
-      <div className="doc-body">
+      <div className="doc-body" ref={bodyRef}>
         {summary.topics && summary.topics.length > 0 && (
           <div className="topics">
             {summary.topics.map((t) => (

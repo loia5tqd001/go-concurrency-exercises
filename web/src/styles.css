@@ -316,6 +316,11 @@ a:focus-visible {
   border-bottom: 1px solid var(--border);
   background: var(--bg-elev);
 }
+.topbar-actions {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
 
 /* The wordmark already reads "Go", so the title drops it and takes the
    wordmark's colour instead. */
@@ -432,6 +437,53 @@ a:focus-visible {
   outline: 2px solid var(--accent);
   outline-offset: -1px;
 }
+.sidebar-filter {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 2px;
+  min-width: 0;
+  min-inline-size: 0;
+  margin: 8px 0 0;
+  padding: 2px;
+  border: 0;
+  border-radius: 7px;
+  background: var(--bg-sunken);
+}
+.sidebar-filter label {
+  position: relative;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  min-height: 26px;
+  padding: 0 8px;
+  border-radius: 5px;
+  color: var(--fg-muted);
+  font: 600 11.5px var(--sans);
+  cursor: pointer;
+}
+.sidebar-filter label:hover {
+  color: var(--fg);
+}
+.sidebar-filter input {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  opacity: 0;
+}
+.sidebar-filter label:has(input:checked) {
+  background: var(--bg-elev);
+  color: var(--fg);
+  box-shadow: 0 0 0 1px var(--border);
+}
+.sidebar-filter input:focus-visible + span {
+  outline: 2px solid var(--accent);
+  outline-offset: 1px;
+}
+.sidebar-match-count {
+  padding: 0 16px 8px;
+  color: var(--fg-muted);
+  font-size: 12px;
+}
 
 .ex-list {
   flex: 1;
@@ -483,6 +535,17 @@ a:focus-visible {
 .ex-status.pass {
   color: var(--pass);
   display: inline-flex;
+}
+.ex-status.fail {
+  color: var(--fail);
+  display: inline-flex;
+}
+.ex-local {
+  padding: 1px 4px;
+  border: 1px solid color-mix(in srgb, var(--viz-wait) 50%, transparent);
+  border-radius: 4px;
+  color: var(--viz-wait);
+  font: 700 9.5px/1.2 var(--sans);
 }
 /* The marks sit in a fixed-height column so a title never shifts when one
    appears; the row keeps a 14px slot even with no mark. */
@@ -540,20 +603,33 @@ a:focus-visible {
   font-size: 12px;
 }
 .progress {
+  appearance: none;
+  display: block;
+  width: 100%;
   height: 4px;
   margin-bottom: 7px;
+  border: 0;
   border-radius: 2px;
   background: var(--bg-sunken);
-  overflow: hidden;
+  overflow: clip;
 }
-.progress span {
-  display: block;
-  height: 100%;
+.progress::-webkit-progress-bar {
+  background: transparent;
+}
+.progress::-webkit-progress-value {
+  border-radius: 2px;
+  background: var(--pass);
+}
+.progress::-moz-progress-bar {
+  border-radius: 2px;
   background: var(--pass);
 }
 
 .scrim {
   display: none;
+  padding: 0;
+  border: 0;
+  cursor: pointer;
 }
 
 /* ---------- workspace ---------- */
@@ -609,7 +685,7 @@ a:focus-visible {
   font-weight: 550;
   text-decoration: none;
 }
-.doc-tabs a[aria-selected="true"] {
+.doc-tabs a[aria-current="page"] {
   border-color: var(--accent);
   color: var(--fg);
 }
@@ -624,6 +700,12 @@ a:focus-visible {
   color: var(--diff, var(--pass));
   font-size: 11.5px;
   font-weight: 600;
+}
+.badge.local {
+  --diff: var(--viz-wait);
+}
+.badge.visualisation {
+  --diff: var(--accent);
 }
 
 .doc-body {
@@ -898,6 +980,17 @@ a:focus-visible {
   background: var(--banner-bg);
   font-size: 13px;
 }
+.local-banner {
+  align-items: flex-start;
+  border-left: 3px solid var(--viz-wait);
+  background: color-mix(in srgb, var(--banner-bg) 78%, var(--bg-elev));
+  line-height: 1.4;
+}
+.local-banner svg {
+  flex: none;
+  margin-top: 2px;
+  color: var(--viz-wait);
+}
 
 .split-y {
   display: grid;
@@ -1137,6 +1230,12 @@ a:focus-visible {
     inset: 48px 0 0;
     z-index: 20;
     background: rgb(0 0 0 / 0.35);
+  }
+  .doc-tabs {
+    position: sticky;
+    top: 48px;
+    z-index: 10;
+    background: var(--bg-elev);
   }
   .main {
     display: block;

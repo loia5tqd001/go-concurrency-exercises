@@ -21,13 +21,12 @@ export const PlayIcon = (p: P) => (
   </svg>
 );
 
-// Three nodes and two edges: the shape of an exercise's visualisation.
-export const GraphIcon = (p: P) => (
-  <svg {...base(p)} strokeWidth={2.2}>
-    <circle cx="5.5" cy="12" r="2.6" />
-    <circle cx="18.5" cy="5.5" r="2.6" />
-    <circle cx="18.5" cy="18.5" r="2.6" />
-    <path d="M8 10.7 16 6.8M8 13.3l8 3.9" />
+// Two connected nodes: a visualisation of a flow, rather than a share graph.
+export const VisualisationIcon = (p: P) => (
+  <svg {...base(p)}>
+    <rect x="2" y="7" width="6" height="10" rx="1" />
+    <rect x="16" y="7" width="6" height="10" rx="1" />
+    <path d="M8 12h8m-3-3 3 3-3 3" />
   </svg>
 );
 

@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { ExerciseView } from "./components/ExerciseView.tsx";
 import { Home } from "./components/Home.tsx";
 import { GitHubIcon, Logo, MenuIcon, MonitorIcon, MoonIcon, PanelIcon, SunIcon } from "./components/icons.tsx";
@@ -22,11 +22,33 @@ export function App() {
   const [statuses, setStatuses] = useState<Record<string, Status | null>>(() =>
     Object.fromEntries(site.exercises.map((e) => [e.id, loadStatus(e.id)])),
   );
+  const menuRef = useRef<HTMLButtonElement>(null);
+  const mobile = useMediaQuery("(max-width: 900px)");
+  const drawerOpen = mobile && navOpen;
+  const wasDrawerOpen = useRef(false);
   const summary = route.id ? exerciseById.get(route.id) : undefined;
+  const closeNav = useCallback(() => setNavOpen(false), []);
 
   useEffect(() => {
     savePref("nav-collapsed", navCollapsed ? "1" : "0");
   }, [navCollapsed]);
+
+  useEffect(() => {
+    if (!mobile) setNavOpen(false);
+  }, [mobile]);
+
+  useEffect(() => {
+    if (drawerOpen) {
+      wasDrawerOpen.current = true;
+    } else if (wasDrawerOpen.current) {
+      wasDrawerOpen.current = false;
+      menuRef.current?.focus();
+    }
+  }, [drawerOpen]);
+
+  useEffect(() => {
+    scrollTo(0, 0);
+  }, [route.id, route.tab]);
 
   useEffect(() => {
     document.title = summary ? `${summary.number}. ${summary.title} · Go Concurrency Exercises` : "Go Concurrency Exercises";
@@ -42,7 +64,14 @@ export function App() {
   return (
     <div className="app">
       <header className="topbar">
-        <button className="icon-btn nav-toggle" aria-label="Exercises" aria-expanded={navOpen} onClick={() => setNavOpen((o) => !o)}>
+        <button
+          ref={menuRef}
+          className="icon-btn nav-toggle"
+          aria-label="Exercises"
+          aria-expanded={drawerOpen}
+          aria-controls="exercise-nav"
+          onClick={() => setNavOpen((o) => !o)}
+        >
           <MenuIcon />
         </button>
         <button
@@ -55,30 +84,32 @@ export function App() {
         >
           <PanelIcon />
         </button>
-        <a className="brand" href="/" onClick={onLinkClick}>
+        <a className="brand" href="/" onClick={onLinkClick} inert={drawerOpen || undefined}>
           <Logo /> <span>Concurrency Exercises</span>
         </a>
         <span className="spacer" />
-        <ToolchainStatus state={toolchain} />
-        <button className="icon-btn" onClick={theme.cycle} title={`Theme: ${theme.pref} (click to change)`} aria-label={`Theme: ${theme.pref}`}>
-          <ThemeIcon />
-        </button>
-        <a
-          className="repo-btn"
-          href={site.repoUrl}
-          target="_blank"
-          rel="noopener noreferrer"
-          aria-label={stars === null ? "GitHub repository" : `GitHub repository, ${stars} stars`}
-          title={stars === null ? "Star this project on GitHub" : `Star this project on GitHub — ${stars} so far`}
-        >
-          <GitHubIcon />
-          {stars !== null && <span className="count">{compact(stars)}</span>}
-        </a>
+        <div className="topbar-actions" inert={drawerOpen || undefined}>
+          <ToolchainStatus state={toolchain} />
+          <button className="icon-btn" onClick={theme.cycle} title={`Theme: ${theme.pref} (click to change)`} aria-label={`Theme: ${theme.pref}`}>
+            <ThemeIcon />
+          </button>
+          <a
+            className="repo-btn"
+            href={site.repoUrl}
+            target="_blank"
+            rel="noopener noreferrer"
+            aria-label={stars === null ? "GitHub repository" : `GitHub repository, ${stars} stars`}
+            title={stars === null ? "Star this project on GitHub" : `Star this project on GitHub — ${stars} so far`}
+          >
+            <GitHubIcon />
+            {stars !== null && <span className="count">{compact(stars)}</span>}
+          </a>
+        </div>
       </header>
       <div className={`body${navCollapsed ? " nav-collapsed" : ""}`}>
-        <Sidebar current={route.id} statuses={statuses} open={navOpen} onClose={() => setNavOpen(false)} />
-        {navOpen && <div className="scrim" onClick={() => setNavOpen(false)} />}
-        <main className="main">
+        <Sidebar current={route.id} statuses={statuses} open={drawerOpen} modal={mobile} onClose={closeNav} />
+        {drawerOpen && <button className="scrim" aria-label="Close exercise list" tabIndex={-1} onClick={closeNav} />}
+        <main className="main" inert={drawerOpen || undefined}>
           {summary ? (
             <ExerciseView
               key={summary.id}
@@ -94,6 +125,20 @@ export function App() {
       </div>
     </div>
   );
+}
+
+function useMediaQuery(query: string): boolean {
+  const [matches, setMatches] = useState(() => matchMedia(query).matches);
+
+  useEffect(() => {
+    const list = matchMedia(query);
+    const update = () => setMatches(list.matches);
+    update();
+    list.addEventListener("change", update);
+    return () => list.removeEventListener("change", update);
+  }, [query]);
+
+  return matches;
 }
 
 function ToolchainStatus({ state }: { state: ToolchainState }) {

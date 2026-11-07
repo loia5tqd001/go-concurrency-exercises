@@ -19,6 +19,7 @@ export type OpenFile = (name: string, line?: number, col?: number) => void;
 interface Props {
   summary: ExerciseSummary;
   exercise: Exercise;
+  status: Status | null;
   onStatus: (status: Status | null) => void;
   // openFile is filled in by CodePane so the docs beside it can open files.
   openFile: RefObject<OpenFile>;
@@ -27,7 +28,7 @@ interface Props {
 // One compiler diagnostic: "./main.go:12:5: undefined: x".
 const diagnosticRe = /^(?:\.\/)?([\w.-]+\.go):(\d+):(\d+): (.*)$/;
 
-export function CodePane({ summary, exercise, onStatus, openFile }: Props) {
+export function CodePane({ summary, exercise, status, onStatus, openFile }: Props) {
   const id = summary.id;
   const dir = packageDir(id);
   const files = exercise.files;
@@ -43,6 +44,10 @@ export function CodePane({ summary, exercise, onStatus, openFile }: Props) {
   const runRef = useRef<RunHandle | null>(null);
   const busyRef = useRef<Busy>(null);
   const consoleModel = useMemo(() => new ConsoleModel(), []);
+  const statusRef = useRef(status);
+  const onStatusRef = useRef(onStatus);
+  statusRef.current = status;
+  onStatusRef.current = onStatus;
 
   // The console shows a door link only when the spec names the failing test
   // and draws a Today scene (decision 5). The spec loads lazily, as it does
@@ -343,6 +348,10 @@ export function CodePane({ summary, exercise, onStatus, openFile }: Props) {
     const main = models.get("main.go")!;
     let saveTimer: ReturnType<typeof setTimeout> | undefined;
     const sub = main.onDidChangeContent(() => {
+      if (statusRef.current !== null) {
+        statusRef.current = null;
+        onStatusRef.current(null);
+      }
       clearTimeout(saveTimer);
       saveTimer = setTimeout(() => {
         saveTimer = undefined;
@@ -437,11 +446,29 @@ export function CodePane({ summary, exercise, onStatus, openFile }: Props) {
           {files.map((f) => (
             <button
               key={f.name}
+              id={`file-tab-${f.name}`}
               role="tab"
               aria-selected={active === f.name}
+              aria-controls="code-editor"
+              tabIndex={active === f.name ? 0 : -1}
               className={`file-tab${active === f.name ? " active" : ""}`}
               title={f.editable ? "Your solution goes here" : "Part of the exercise (read-only)"}
               onClick={() => switchTo(f.name)}
+              onKeyDown={(event) => {
+                const keys = ["ArrowLeft", "ArrowRight", "Home", "End"];
+                if (!keys.includes(event.key)) return;
+                event.preventDefault();
+                const currentIndex = files.findIndex((file) => file.name === f.name);
+                const nextIndex =
+                  event.key === "Home"
+                    ? 0
+                    : event.key === "End"
+                      ? files.length - 1
+                      : (currentIndex + (event.key === "ArrowRight" ? 1 : -1) + files.length) % files.length;
+                const nextName = files[nextIndex].name;
+                switchTo(nextName);
+                document.getElementById(`file-tab-${nextName}`)?.focus();
+              }}
             >
               {f.name}
               {!f.editable && <LockIcon className="muted" />}
@@ -450,14 +477,29 @@ export function CodePane({ summary, exercise, onStatus, openFile }: Props) {
           ))}
         </div>
         <div className="toolbar-actions">
-          <button className="btn ghost" onClick={format} disabled={!ready} title={`Format main.go with gofmt (${modKey}+S)`}>
+          <button
+            className="btn ghost"
+            onClick={format}
+            disabled={!ready}
+            aria-label="Format main.go"
+            title={`Format main.go with gofmt (${modKey}+S)`}
+          >
             <FormatIcon /> <span className="label">Format</span>
           </button>
-          <button className="btn ghost" onClick={reset} title="Reset main.go to the original exercise">
+          <button className="btn ghost" onClick={reset} aria-label="Reset main.go" title="Reset main.go to the original exercise">
             <ResetIcon /> <span className="label">Reset</span>
           </button>
         </div>
       </div>
+
+      {summary.unsupported && (
+        <div className="banner local-banner" role="status">
+          <InfoIcon />
+          <span>
+            <strong>Local tests required.</strong> This page can compile the exercise, but it cannot run its tests: {summary.unsupported}.
+          </span>
+        </div>
+      )}
 
       {stale && (
         <div className="banner" role="status">
@@ -472,7 +514,13 @@ export function CodePane({ summary, exercise, onStatus, openFile }: Props) {
       )}
 
       <div className="split-y" ref={splitRef} style={{ "--editor-frac": `${paneFraction("editor-frac", 0.62) * 100}%` } as CSSProperties}>
-        <div className="editor-host" ref={hostRef} />
+        <div
+          className="editor-host"
+          id="code-editor"
+          role="tabpanel"
+          aria-labelledby={`file-tab-${active}`}
+          ref={hostRef}
+        />
         <Splitter axis="y" target={splitRef} cssVar="--editor-frac" prefKey="editor-frac" min={0.15} max={0.85} />
         <div className="console">
           <div className="console-toolbar">
@@ -485,18 +533,25 @@ export function CodePane({ summary, exercise, onStatus, openFile }: Props) {
                 className="btn primary"
                 onClick={() => runTests()}
                 disabled={!ready || !!busy}
+                aria-label={summary.unsupported ? "Build only, tests require local Go" : undefined}
                 title={summary.unsupported ? "Compile main.go and the tests" : `go test -v (${modKey}+Enter)`}
               >
-                <PlayIcon /> {loadingLabel ?? (summary.unsupported ? "Build" : "Run tests")}
+                <PlayIcon /> {loadingLabel ?? (summary.unsupported ? "Build only" : "Run tests")}
                 {!loadingLabel && <kbd>{modKey}↵</kbd>}
               </button>
             )}
-            <button className="btn" onClick={runMain} disabled={!ready || !!busy} title={`go run (${modKey}+Shift+Enter)`}>
+            <button
+              className="btn"
+              onClick={runMain}
+              disabled={!ready || !!busy}
+              aria-label="Run main"
+              title={`go run (${modKey}+Shift+Enter)`}
+            >
               <TerminalIcon /> <span className="label">Run main</span>
             </button>
             <span className="spacer" />
             <details className="runtime-info">
-              <summary className="btn ghost">
+              <summary className="btn ghost" aria-label="Browser runtime">
                 <InfoIcon /> <span className="label">Browser runtime</span>
               </summary>
               <div className="popover">

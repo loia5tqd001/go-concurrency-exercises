@@ -40,7 +40,7 @@ export function ExerciseView({ summary, tab, status, onStatus }: Props) {
     >
       <DocPane summary={summary} exercise={exercise} tab={tab} status={status} onOpenFile={(name) => openFile.current(name)} />
       <Splitter axis="x" target={workspaceRef} cssVar="--doc-frac" prefKey="doc-frac" />
-      <CodePane summary={summary} exercise={exercise} onStatus={onStatus} openFile={openFile} />
+      <CodePane summary={summary} exercise={exercise} status={status} onStatus={onStatus} openFile={openFile} />
     </div>
   );
 }

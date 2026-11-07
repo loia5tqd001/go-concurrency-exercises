@@ -82,7 +82,7 @@ export default defineViz({
   schema: 3,
   exercise: "04-graceful-sigint",
   // One README fence draws both states, so both Problem tiers pin it.
-  diagrams: { today: "fnv1a:9b13f66f", goal: "fnv1a:9b13f66f" },
+  diagrams: { today: "fnv1a:87b55269", goal: "fnv1a:87b55269" },
   constants: K,
   scenes: [
     {
