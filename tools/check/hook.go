@@ -47,6 +47,36 @@ func runPrecommit(args []string) error {
 		fmt.Fprintln(os.Stderr)
 	}
 
+	// The deployed site and the clone read git HEAD, while the local dev
+	// server reads the working tree. A commit that touches an exercise but
+	// leaves its README unstaged ships a page whose prose and diagram differ
+	// from the one the author saw. Refuse only for the exercises this commit
+	// touches: a global rule would block every unrelated commit while any
+	// exercise README is in progress in the owner's checkout.
+	touchedEx := map[string]bool{}
+	for _, f := range staged {
+		if ex := stagedExercise(f); ex != "" {
+			touchedEx[ex] = true
+		}
+	}
+	var readmeGaps []string
+	for _, f := range unstaged {
+		ex := exerciseOf(f)
+		if ex != "" && strings.HasSuffix(f, "/README.md") && touchedEx[ex] {
+			readmeGaps = append(readmeGaps, f)
+		}
+	}
+	sort.Strings(readmeGaps)
+	if len(readmeGaps) > 0 {
+		ok = false
+		fmt.Fprintln(os.Stderr, "This commit touches an exercise whose README has unstaged changes, so the deployed site and the clone would miss them:")
+		for _, f := range readmeGaps {
+			fmt.Fprintln(os.Stderr, "    "+f)
+		}
+		fmt.Fprintln(os.Stderr, "Run `git add <file>` for each one, so the README reaches the commit and the deployed site.")
+		fmt.Fprintln(os.Stderr)
+	}
+
 	t, err := openTree("index")
 	if err != nil {
 		return err
@@ -75,6 +105,29 @@ func runPrecommit(args []string) error {
 		return failed{}
 	}
 	return nil
+}
+
+// stagedExercise returns the exercise id a staged path can change: a file
+// under <id>/, the solution doc solutions/<id>.md, or the spec
+// web/src/viz/specs/<id>.ts. Any other path belongs to no exercise.
+func stagedExercise(f string) string {
+	if ex := exerciseOf(f); ex != "" {
+		return ex
+	}
+	for _, p := range []struct{ prefix, suffix string }{
+		{"solutions/", ".md"},
+		{"web/src/viz/specs/", ".ts"},
+	} {
+		id, ok := strings.CutPrefix(f, p.prefix)
+		if !ok {
+			continue
+		}
+		id, ok = strings.CutSuffix(id, p.suffix)
+		if ok && exerciseDir.MatchString(id) {
+			return id
+		}
+	}
+	return ""
 }
 
 // hookInput is the JSON Claude Code sends to a hook on stdin.

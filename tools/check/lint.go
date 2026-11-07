@@ -32,22 +32,6 @@ var exceptions = map[string]string{
 	"test-header 05-session-cleaner":           "check_test.go predates the header; it has uncommitted edits in the owner's checkout",
 	"readme-test-section 01-producer-consumer": "README uses an \"Expected results\" section instead",
 	"browser 04-graceful-sigint":               "the lesson is OS signals; web/ marks it unsupported",
-	"browser 01-producer-consumer":             "check_test.go uses os.Pipe at HEAD; the temp-file fix is uncommitted in the owner's checkout",
-
-	// Backlog for mission point 1 ("visual"): these READMEs have no
-	// diagram yet. Draw one, then delete the line.
-	"readme-diagram 06-fan-out-fan-in":          "backlog",
-	"readme-diagram 08-pipeline":                "backlog",
-	"readme-diagram 09-context-cancellation":    "backlog",
-	"readme-diagram 12-pub-sub":                 "backlog",
-	"readme-diagram 13-channel-of-channels":     "backlog",
-	"readme-diagram 14-tee-channel":             "backlog",
-	"readme-diagram 16-errgroup-failfast":       "backlog",
-	"readme-diagram 17-future-promise":          "backlog",
-	"readme-diagram 20-concurrent-map-reduce":   "backlog",
-	"readme-diagram 26-pipeline-error-handling": "backlog",
-	"readme-diagram 29-healing-goroutines":      "backlog",
-	"readme-diagram 30-livelock-starvation":     "backlog",
 }
 
 // docTestName matches a test function named in prose, like TestFoo or TestFoo_Bar.
@@ -277,6 +261,67 @@ func lint(t *tree) []problem {
 		}
 	}
 
+	// viz-diagram: every numbered spec pins a plain fence in its exercise
+	// README, so a diagram edit cannot leave the scenes telling the old story.
+	// The pin is compared with the README this run checks. An index tree holds
+	// the staged blobs (git checkout-index), so in the commit gate this is the
+	// same bytes as `git show :<id>/README.md`; a pin that matches only an
+	// unstaged README edit cannot reach the commit.
+	for _, f := range t.files {
+		name, ok := strings.CutPrefix(f, "web/src/viz/specs/")
+		if !ok || strings.Contains(name, "/") || !strings.HasSuffix(name, ".ts") {
+			continue
+		}
+		id := strings.TrimSuffix(name, ".ts")
+		if id == "" || id[0] < '0' || id[0] > '9' {
+			continue // _template.ts and shared modules carry no pin
+		}
+		ex, known := byID[id]
+		if !known {
+			add("viz-diagram", f, id, "spec for %q, which is not an exercise folder; name the spec after its exercise", id)
+			continue
+		}
+		src, err := t.read(f)
+		if err != nil {
+			add("viz-diagram", f, id, "%v", err)
+			continue
+		}
+		pins := specDiagramPins(string(src))
+		if _, ok := pins["today"]; !ok {
+			add("viz-diagram", f, id, "diagrams.today is missing; every Problem tier pins its README fence")
+		}
+		readme, err := t.read(id + "/README.md")
+		if err != nil {
+			add("viz-diagram", id+"/README.md", id, "no README to pin; every spec pairs with %s/README.md", id)
+			continue
+		}
+		plain := plainFences(string(readme))
+		var hashes []string
+		for _, p := range plain {
+			hashes = append(hashes, p.hash)
+		}
+		found := "none"
+		if len(hashes) > 0 {
+			found = strings.Join(hashes, ", ")
+		}
+		for _, tier := range []string{"today", "goal"} {
+			pin, ok := pins[tier]
+			if !ok {
+				continue
+			}
+			if !diagramPinForm.MatchString(pin) {
+				add("viz-diagram", f, id, "diagrams.%s %q is not an fnv1a pin (want fnv1a: and 8 lowercase hex digits)", tier, pin)
+				continue
+			}
+			if slices.Contains(hashes, pin) {
+				continue
+			}
+			add("viz-diagram", id+"/README.md", id,
+				"no plain fence hashes to diagrams.%s %s; the plain fences hash to %s. The diagram changed, or the pin is stale: re-read the diagram, update the scenes if the story changed, then run `npm run viz -- pin %s`",
+				tier, pin, found, ex.prefix)
+		}
+	}
+
 	// overview: one well-formed row per exercise, in folder order.
 	readme, err := t.read("README.md")
 	if err != nil {
@@ -405,24 +450,10 @@ func hasHeading(md, text string) bool {
 }
 
 func hasDiagram(md string) bool {
-	in, plain := false, false
-	var block strings.Builder
-	for _, l := range strings.Split(md, "\n") {
-		if !strings.HasPrefix(l, "```") {
-			if in {
-				block.WriteString(l + "\n")
-			}
-			continue
+	for _, f := range plainFences(md) {
+		if diagramChars.MatchString(f.body) {
+			return true
 		}
-		if in {
-			if plain && diagramChars.MatchString(block.String()) {
-				return true
-			}
-			in = false
-			continue
-		}
-		in, plain = true, l == "```" || l == "```text"
-		block.Reset()
 	}
 	return false
 }

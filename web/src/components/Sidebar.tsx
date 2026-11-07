@@ -2,7 +2,8 @@ import { useMemo, useState } from "react";
 import { site } from "../data.ts";
 import { onLinkClick } from "../router.ts";
 import type { Status } from "../storage.ts";
-import { CheckIcon } from "./icons.tsx";
+import { hasViz } from "../viz/registry.ts";
+import { CheckIcon, GraphIcon } from "./icons.tsx";
 
 interface Props {
   current?: string;
@@ -22,7 +23,10 @@ export function Sidebar({ current, statuses, open, onClose }: Props) {
     const q = query.trim().toLowerCase();
     if (!q) return site.exercises;
     return site.exercises.filter((e) =>
-      [e.number, e.id, e.title, e.difficulty, ...(e.topics ?? [])].some((s) => s.toLowerCase().includes(q)),
+      // Typing "visual" lists the exercises that have an animation.
+      [e.number, e.id, e.title, e.difficulty, ...(e.topics ?? []), ...(hasViz(e.id) ? ["visualisation", "animation"] : [])].some((s) =>
+        s.toLowerCase().includes(q),
+      ),
     );
   }, [query]);
   const passed = site.exercises.filter((e) => statuses[e.id] === "passed").length;
@@ -45,7 +49,7 @@ export function Sidebar({ current, statuses, open, onClose }: Props) {
               href={`/${e.id}`}
               className={e.id === current ? "active" : undefined}
               aria-current={e.id === current ? "page" : undefined}
-              title={`${e.title}\n${e.difficulty} · ${(e.topics ?? []).join(", ")}`}
+              title={`${e.title}\n${e.difficulty} · ${(e.topics ?? []).join(", ")}${hasViz(e.id) ? "\nHas an animated visualisation" : ""}`}
               onClick={(ev) => {
                 onLinkClick(ev);
                 onClose();
@@ -60,11 +64,18 @@ export function Sidebar({ current, statuses, open, onClose }: Props) {
                 </span>
               </span>
               <span className="ex-title">{e.title}</span>
-              {statuses[e.id] === "passed" && (
-                <span className="ex-status pass" aria-label="passed">
-                  <CheckIcon width={13} height={13} />
-                </span>
-              )}
+              <span className="ex-marks">
+                {hasViz(e.id) && (
+                  <span className="ex-viz" role="img" aria-label="has a visualisation">
+                    <GraphIcon width={12} height={12} />
+                  </span>
+                )}
+                {statuses[e.id] === "passed" && (
+                  <span className="ex-status pass" aria-label="passed">
+                    <CheckIcon width={13} height={13} />
+                  </span>
+                )}
+              </span>
             </a>
           </li>
         ))}

@@ -10,6 +10,19 @@
   --accent-hover: #00697f;
   --accent-fg: #ffffff;
   --accent-soft: #e0f3f8;
+  /* Parked goroutines and their rails. Shapes only, never text. */
+  --viz-wait: #8a5a00;
+  --viz-wait-fill: #fff3bf;
+  --viz-run-fill: #dff3f9;
+  --viz-bad-fill: #fde4e6;
+  --viz-done: #7d8791;
+  --viz-edge: #7d8892;
+  --viz-tok-0: #00add8;
+  --viz-tok-0-fg: #00151b;
+  --viz-tok-1: #ce3262;
+  --viz-tok-1-fg: #ffffff;
+  --viz-tok-2: #00a29c;
+  --viz-tok-2-fg: #00151b;
   --pass: #1a7f37;
   --fail: #c9252d;
   --fail-hover: #ad1f26;
@@ -41,6 +54,18 @@
     --accent-hover: #2bc1e6;
     --accent-fg: #00141a;
     --accent-soft: #0b2d36;
+    --viz-wait: #d29922;
+    --viz-wait-fill: #3a3210;
+    --viz-run-fill: #0b3542;
+    --viz-bad-fill: #401522;
+    --viz-done: #6b7882;
+    --viz-edge: #5f6c75;
+    --viz-tok-0: #00add8;
+    --viz-tok-0-fg: #00151b;
+    --viz-tok-1: #ea5a84;
+    --viz-tok-1-fg: #1b0610;
+    --viz-tok-2: #2ec4b6;
+    --viz-tok-2-fg: #00151b;
     --pass: #3fb950;
     --fail: #f85149;
     --fail-hover: #ff6f68;
@@ -70,6 +95,18 @@
   --accent-hover: #2bc1e6;
   --accent-fg: #00141a;
   --accent-soft: #0b2d36;
+  --viz-wait: #d29922;
+  --viz-wait-fill: #3a3210;
+  --viz-run-fill: #0b3542;
+  --viz-bad-fill: #401522;
+  --viz-done: #6b7882;
+  --viz-edge: #5f6c75;
+  --viz-tok-0: #00add8;
+  --viz-tok-0-fg: #00151b;
+  --viz-tok-1: #ea5a84;
+  --viz-tok-1-fg: #1b0610;
+  --viz-tok-2: #2ec4b6;
+  --viz-tok-2-fg: #00151b;
   --pass: #3fb950;
   --fail: #f85149;
   --fail-hover: #ff6f68;
@@ -407,7 +444,7 @@ a:focus-visible {
   display: grid;
   /* 34px fits the longest bar (five boxes, 33px) and the longest number
      ("16b", 22px), so the bar never spills past the row's padding. */
-  grid-template-columns: 34px minmax(0, 1fr) 14px;
+  grid-template-columns: 34px minmax(0, 1fr) auto;
   align-items: center;
   gap: 6px;
   padding: 6px 8px;
@@ -446,6 +483,26 @@ a:focus-visible {
 .ex-status.pass {
   color: var(--pass);
   display: inline-flex;
+}
+/* The marks sit in a fixed-height column so a title never shifts when one
+   appears; the row keeps a 14px slot even with no mark. */
+.ex-marks {
+  display: inline-flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 5px;
+  min-width: 14px;
+}
+/* Quiet on purpose: it answers "is there an animation?" for the learner who
+   looks, and stays out of the way for the one who does not. */
+.ex-viz {
+  display: inline-flex;
+  color: var(--fg-muted);
+  opacity: 0.55;
+}
+.ex-list a:hover .ex-viz,
+.ex-list a.active .ex-viz {
+  opacity: 0.9;
 }
 
 /* Difficulty reads as a bar of one to five boxes plus its colour, so a glance
@@ -663,6 +720,61 @@ a:focus-visible {
   font-size: 12.5px;
   line-height: 1.55;
   overflow-x: auto;
+}
+/* The wrapper is the copy button's positioning frame. The pre scrolls
+   sideways, so a button inside it would slide out of view with the code. A
+   wrapper with no margin keeps the pre's own margins, which collapse
+   through it unchanged. */
+.md-code-wrap {
+  position: relative;
+}
+/* Copy is a quiet control: hidden until the pointer or the keyboard reaches
+   the block, and always shown on a touch screen, which has no hover. */
+.md-copy {
+  position: absolute;
+  top: 7px;
+  right: 7px;
+  height: 22px;
+  padding: 0 8px;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  background: var(--bg-elev);
+  color: var(--fg-muted);
+  font: 500 11px var(--sans);
+  white-space: nowrap;
+  cursor: pointer;
+  opacity: 0;
+  pointer-events: none;
+  transition:
+    opacity 0.12s ease,
+    background-color 0.12s ease,
+    color 0.12s ease;
+}
+.md-code-wrap:hover .md-copy,
+.md-code-wrap:focus-within .md-copy {
+  opacity: 1;
+  pointer-events: auto;
+}
+.md-copy:hover {
+  background: var(--bg-hover);
+  color: var(--fg);
+}
+.md-copy.is-copied {
+  color: var(--pass);
+}
+.md-copy:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+}
+/* A door's scene view hides the fence, so its copy button hides with it. */
+.markdown pre.md-code.is-door-hidden + .md-copy {
+  display: none;
+}
+@media (hover: none) {
+  .md-copy {
+    opacity: 1;
+    pointer-events: auto;
+  }
 }
 /* A fence that names lines (```go {6,12,23}) is rebuilt as one block per line,
    so the named lines can be banded and the rest can step back. The min-height
@@ -1071,5 +1183,903 @@ a:focus-visible {
   }
   .chip.running .chip-dot {
     animation: none;
+  }
+}
+
+/* ---------- visualisation door ---------- */
+
+/* The README's own ASCII fence is the default view. The door bar is the top
+   of the door in both views; opening a chip hides the fence and puts the
+   transport and stage below the same bar, so no chip moves. The bar is first
+   in the DOM and first on screen, so the chips come before the transport. */
+.markdown pre.md-code.is-door {
+  margin-top: 0;
+}
+.markdown pre.md-code.is-door:not(.is-door-hidden) {
+  margin-bottom: 0;
+}
+.markdown pre.md-code.is-door-hidden {
+  display: none;
+}
+.viz-door {
+  display: flex;
+  flex-direction: column;
+  margin: 0;
+}
+.viz-door-bar {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  order: 0;
+  min-width: 0;
+  min-height: 28px;
+  padding: 0 0 4px;
+  /* The bar is one row: the chips and the step counter. Nothing wraps or
+     truncates; a chip that would not fit is a budget failure. */
+  flex-wrap: nowrap;
+}
+.viz-door-bar .viz-chips-group {
+  /* Keep the chips at their content width. A shrinking group would let the
+     counter overlap the last chip instead of reporting an overflow. */
+  flex: 0 0 auto;
+}
+
+/* A stale pin is a shape warning, not an error: the scene may still be right,
+   only its anchor moved. */
+.viz-stale {
+  margin: 0 0 14px;
+}
+.viz-stale-strip {
+  margin: 0 0 8px;
+  padding: 8px 10px;
+  border-left: 3px solid var(--viz-wait);
+  border-radius: 4px;
+  background: var(--bg-elev);
+  color: var(--fg);
+  font: 12px/1.4 var(--sans);
+  overflow-wrap: anywhere;
+}
+.viz-stale-strip code {
+  padding: 1px 5px;
+  border-radius: 5px;
+  background: var(--bg-sunken);
+  font: 12px var(--mono);
+}
+
+.viz-solution {
+  margin-top: 18px;
+}
+
+/* ---------- visualisation door chips ---------- */
+
+.viz-chips-group {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  min-width: 0;
+}
+
+.viz-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  /* Every control in the door is at least 32 px tall, a tap target on a
+     phone. */
+  height: 32px;
+  padding: 0 10px;
+  border: 1px solid transparent;
+  border-radius: 8px;
+  background: transparent;
+  color: var(--fg-muted);
+  font: 600 13px var(--sans);
+  white-space: nowrap;
+  cursor: pointer;
+}
+
+.viz-chip.is-on {
+  border-color: var(--accent);
+  background: var(--accent-soft);
+  color: var(--fg);
+}
+
+.viz-chip:hover {
+  color: var(--fg);
+}
+
+.viz-chip:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 1px;
+}
+
+/* ==========================================================================
+   Visualisation player (web/src/viz/view). Goroutines and channels as a
+   graph; every colour is a token above, so both themes work.
+   ========================================================================== */
+
+.sim {
+  margin: 0.75rem 0 1.25rem;
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  background: var(--bg-elev);
+  padding: 10px 12px 12px;
+  display: grid;
+  gap: 8px;
+  min-width: 0;
+}
+/* The large view floats over the page at its content's height, and scrolls
+   when that is taller than the window. */
+.sim.is-expanded {
+  position: fixed;
+  top: 16px;
+  left: 16px;
+  right: 16px;
+  z-index: 61;
+  margin: 0 auto;
+  max-width: 1180px;
+  max-height: calc(100dvh - 32px);
+  overflow: auto;
+  align-content: start;
+  box-shadow: var(--shadow);
+}
+.sim-backdrop {
+  position: fixed;
+  inset: 0;
+  z-index: 60;
+  background: rgb(0 0 0 / 0.45);
+  cursor: zoom-out;
+}
+body.sim-lock {
+  overflow: hidden;
+}
+
+.sim-chips {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px;
+}
+.sim-chip {
+  appearance: none;
+  border: 1px solid var(--border);
+  background: transparent;
+  color: var(--fg);
+  font: 600 13px var(--sans);
+  min-height: 32px;
+  padding: 0 12px;
+  border-radius: 999px;
+  cursor: pointer;
+}
+.sim-chip.is-on {
+  background: var(--fg);
+  color: var(--bg-elev);
+  border-color: var(--fg);
+}
+
+.sim-bar {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px 10px;
+}
+.sim-transport,
+.sim-tools {
+  display: flex;
+  gap: 4px;
+}
+.sim-btn {
+  appearance: none;
+  border: 0;
+  background: var(--bg-sunken);
+  color: var(--fg);
+  min-width: 32px;
+  height: 32px;
+  padding: 0 9px;
+  border-radius: 8px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  font: 600 13px var(--sans);
+  cursor: pointer;
+}
+.sim-btn:hover {
+  background: var(--bg-hover);
+}
+.sim-btn[aria-disabled="true"] {
+  opacity: 0.45;
+}
+.sim-btn.sim-play {
+  background: var(--accent);
+  color: var(--accent-fg);
+  min-width: 96px;
+}
+.sim-btn.sim-play:hover {
+  background: var(--accent-hover);
+}
+.sim-btn[aria-pressed="true"] {
+  box-shadow: inset 0 0 0 1.5px var(--fg);
+}
+.sim-icon {
+  flex: none;
+}
+.sim-seg {
+  display: inline-flex;
+  background: var(--bg-sunken);
+  border-radius: 8px;
+  padding: 2px;
+}
+.sim-seg button {
+  appearance: none;
+  border: 0;
+  background: transparent;
+  color: var(--fg-muted);
+  font: 600 12px var(--mono);
+  min-width: 34px;
+  height: 32px;
+  padding: 0 8px;
+  border-radius: 6px;
+  cursor: pointer;
+}
+.sim-seg button[aria-pressed="true"] {
+  background: var(--bg-elev);
+  color: var(--fg);
+  box-shadow: inset 0 0 0 1.5px var(--fg);
+}
+.sim-clock {
+  margin-left: auto;
+  display: flex;
+  gap: 8px;
+  align-items: baseline;
+  font: 12px var(--mono);
+  color: var(--fg-muted);
+  font-variant-numeric: tabular-nums;
+}
+.sim-clock-t {
+  color: var(--fg);
+  font-weight: 700;
+}
+.sim-clock.is-over .sim-clock-budget {
+  color: var(--fail);
+  font-weight: 700;
+}
+
+.sim-scrub {
+  position: relative;
+  padding-top: 2px;
+}
+.sim-scrub input[type="range"] {
+  width: 100%;
+  margin: 0;
+  height: 22px;
+  accent-color: var(--accent);
+  cursor: pointer;
+}
+/* The budget on the scrubber: the clock beside the transport names it. */
+.sim-mark {
+  position: absolute;
+  top: 3px;
+  bottom: 1px;
+  width: 0;
+  border-left: 2px solid var(--fail);
+  pointer-events: none;
+}
+
+.sim-knobs {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px 16px;
+  font-size: 13px;
+  color: var(--fg-muted);
+  margin-top: 6px;
+}
+.sim-knob {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.sim-stage {
+  min-width: 0;
+  margin-top: 4px;
+}
+.sim-graph {
+  display: block;
+  overflow: visible;
+  font-family: var(--mono);
+}
+
+/* Nodes */
+.sim-node {
+  cursor: pointer;
+  outline: none;
+}
+.sim-shape {
+  fill: var(--bg-sunken);
+  stroke: var(--fg);
+  stroke-width: 1.5;
+  transition: fill 120ms, stroke 120ms;
+}
+.sim-node:focus-visible .sim-shape,
+.sim-node.is-focus .sim-shape {
+  stroke-width: 3;
+  stroke: var(--fg);
+}
+.sim-name {
+  fill: var(--fg);
+  font-size: 12.5px;
+  font-weight: 700;
+}
+.sim-why,
+.sim-note {
+  fill: var(--fg-muted);
+  font-size: 11px;
+}
+.sim-label {
+  fill: var(--fg);
+  font-size: 12px;
+  font-weight: 700;
+}
+.sim-cap,
+.sim-count {
+  fill: var(--fg-muted);
+  font-weight: 400;
+  font-size: 11px;
+}
+.sim-go.is-run .sim-shape,
+.sim-group.is-run .sim-shape {
+  fill: var(--viz-run-fill);
+  stroke: var(--accent);
+}
+.sim-go.is-wait .sim-shape,
+.sim-group.is-wait .sim-shape {
+  fill: var(--viz-wait-fill);
+  stroke: var(--viz-wait);
+}
+.sim-go.is-bad .sim-shape,
+.sim-group.is-bad .sim-shape {
+  fill: var(--viz-bad-fill);
+  stroke: var(--fail);
+}
+.sim-go.is-bad .sim-why {
+  fill: var(--fail);
+}
+.sim-go.is-done .sim-shape,
+.sim-group.is-done .sim-shape,
+.sim-go.is-idle .sim-shape,
+.sim-group.is-idle .sim-shape {
+  fill: transparent;
+  stroke: var(--viz-done);
+  stroke-dasharray: 5 4;
+}
+.sim-go.is-idle .sim-shape,
+.sim-group.is-idle .sim-shape {
+  stroke-dasharray: 2 3;
+}
+.sim-go.is-done .sim-name,
+.sim-go.is-idle .sim-name,
+.sim-group.is-done .sim-name,
+.sim-group.is-idle .sim-name {
+  fill: var(--fg-muted);
+}
+.sim-node.is-focus.is-done .sim-shape,
+.sim-node.is-focus.is-idle .sim-shape {
+  stroke: var(--fg);
+}
+.sim-progress rect {
+  fill: var(--accent);
+}
+.sim-progress rect.is-endless {
+  opacity: 0.55;
+}
+
+.sim-member rect {
+  fill: transparent;
+  stroke: var(--viz-done);
+  stroke-width: 1.2;
+}
+.sim-member.is-idle rect {
+  stroke-dasharray: 1.5 2;
+}
+.sim-member.is-run rect {
+  fill: var(--viz-run-fill);
+  stroke: var(--accent);
+}
+.sim-member.is-run .sim-member-fill {
+  fill: var(--accent);
+  stroke: none;
+}
+.sim-member.is-wait rect {
+  fill: var(--viz-wait-fill);
+  stroke: var(--viz-wait);
+}
+.sim-member.is-bad rect {
+  fill: var(--viz-bad-fill);
+  stroke: var(--fail);
+}
+
+.sim-ch .sim-shape {
+  fill: var(--bg-sunken);
+}
+.sim-ch.is-closed .sim-shape {
+  stroke: var(--viz-done);
+  stroke-dasharray: 4 4;
+}
+.sim-slot {
+  fill: none;
+  stroke: var(--viz-done);
+  stroke-width: 1;
+}
+.sim-slot.is-handoff {
+  stroke-dasharray: 2 3;
+}
+.sim-more {
+  fill: var(--fg-muted);
+  font-size: 11px;
+  font-weight: 700;
+}
+.sim-closed {
+  fill: var(--fail);
+  font-size: 11px;
+  font-weight: 700;
+}
+.sim-slice .sim-shape {
+  fill: var(--bg-sunken);
+  stroke-width: 1.2;
+}
+.sim-cellslot {
+  fill: var(--bg-elev);
+  stroke: var(--viz-done);
+  stroke-width: 1;
+}
+.sim-pill .sim-shape {
+  fill: var(--bg-elev);
+  stroke: var(--fg-muted);
+  stroke-dasharray: 4 3;
+}
+.sim-pill.is-mu .sim-shape,
+.sim-pill.is-timer .sim-shape,
+.sim-pill.is-ctx .sim-shape {
+  stroke-dasharray: none;
+}
+.sim-pill.is-ctx.is-done-ctx .sim-shape {
+  stroke: var(--fail);
+}
+.sim-pill.is-timer.is-fired .sim-shape {
+  stroke: var(--accent);
+  stroke-width: 2;
+}
+.sim-bar-track {
+  fill: var(--bg-sunken);
+  stroke: var(--border);
+  stroke-width: 0.8;
+}
+.sim-bar {
+  fill: var(--accent);
+}
+.sim-bar.is-over {
+  fill: var(--fail);
+}
+.sim-limit {
+  stroke: var(--fg-muted);
+  stroke-width: 1.5;
+}
+.sim-fact .sim-shape {
+  fill: var(--bg-elev);
+  stroke: var(--fg-muted);
+}
+.sim-fact.is-over .sim-shape {
+  stroke: var(--fail);
+}
+.sim-state rect {
+  fill: transparent;
+  stroke: var(--border);
+}
+.sim-state text {
+  fill: var(--fg-muted);
+  font-size: 10.5px;
+}
+.sim-state.is-on rect {
+  fill: var(--fg);
+  stroke: var(--fg);
+}
+.sim-state.is-on text {
+  fill: var(--bg-elev);
+  font-weight: 700;
+}
+
+/* Edges */
+.sim-edge path {
+  fill: none;
+  stroke: var(--viz-edge);
+  stroke-width: 1.6;
+}
+.sim-edge.is-close path,
+.sim-edge.is-cancel path {
+  stroke: var(--fail);
+  stroke-width: 1.3;
+  stroke-dasharray: 5 5;
+}
+.sim-edge.is-sync path {
+  stroke: var(--fg-muted);
+  stroke-width: 1.3;
+  stroke-dasharray: 5 5;
+}
+.sim-edge.is-spawn path {
+  stroke: var(--fg-muted);
+  stroke-width: 1.3;
+  stroke-dasharray: 1.5 4;
+  stroke-linecap: round;
+}
+.sim-arrow path {
+  fill: var(--viz-edge);
+}
+.sim-arrow.is-close path,
+.sim-arrow.is-cancel path {
+  fill: var(--fail);
+}
+.sim-arrow.is-sync path,
+.sim-arrow.is-spawn path {
+  fill: var(--fg-muted);
+}
+.sim-edge-label {
+  font-size: 10.5px;
+  fill: var(--fg-muted);
+  paint-order: stroke;
+  stroke: var(--bg-elev);
+  stroke-width: 4px;
+}
+.sim-edge.is-close .sim-edge-label,
+.sim-edge.is-cancel .sim-edge-label {
+  fill: var(--fail);
+}
+
+/* Tokens */
+.sim-tok {
+  pointer-events: none;
+}
+.sim-tok circle {
+  stroke: var(--bg-elev);
+  stroke-width: 1.5;
+}
+.sim-tok text {
+  font-weight: 700;
+  font-family: var(--mono);
+}
+.sim-tok.tone-0 circle {
+  fill: var(--viz-tok-0);
+}
+.sim-tok.tone-0 text {
+  fill: var(--viz-tok-0-fg);
+}
+.sim-tok.tone-0 .sim-glyph {
+  stroke: var(--viz-tok-0-fg);
+}
+.sim-tok.tone-1 circle {
+  fill: var(--viz-tok-1);
+}
+.sim-tok.tone-1 text {
+  fill: var(--viz-tok-1-fg);
+}
+.sim-tok.tone-1 .sim-glyph {
+  stroke: var(--viz-tok-1-fg);
+}
+.sim-tok.tone-2 circle {
+  fill: var(--viz-tok-2);
+}
+.sim-tok.tone-2 text {
+  fill: var(--viz-tok-2-fg);
+}
+.sim-tok.tone-2 .sim-glyph {
+  stroke: var(--viz-tok-2-fg);
+}
+.sim-glyph {
+  fill: none !important;
+  stroke-width: 1.6;
+  stroke-linecap: round;
+}
+
+/* Under the graph */
+.sim-below {
+  display: grid;
+  gap: 8px;
+}
+.sim-stdout {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 5px;
+  font: 12px var(--mono);
+}
+.sim-muted {
+  color: var(--fg-muted);
+  font-weight: 400;
+  margin-right: 4px;
+}
+.sim-chipval {
+  display: inline-flex;
+  align-items: center;
+  height: 22px;
+  padding: 0 8px;
+  border-radius: 11px;
+  font-weight: 700;
+}
+.sim-chipval.tone-0 {
+  background: var(--viz-tok-0);
+  color: var(--viz-tok-0-fg);
+}
+.sim-chipval.tone-1 {
+  background: var(--viz-tok-1);
+  color: var(--viz-tok-1-fg);
+}
+.sim-chipval.tone-2 {
+  background: var(--viz-tok-2);
+  color: var(--viz-tok-2-fg);
+}
+.sim-now {
+  margin: 0;
+  min-height: 2.8em;
+  font-size: 14px;
+  line-height: 1.4;
+  color: var(--fg-muted);
+}
+.sim-now.is-caption {
+  color: var(--fg);
+  font-weight: 600;
+}
+.sim-verdict.is-ok {
+  color: var(--pass);
+  font-weight: 700;
+}
+.sim-verdict.is-bad {
+  color: var(--fail);
+  font-weight: 700;
+}
+.sim-tests {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px 12px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+  font-size: 13px;
+}
+.sim-tests li {
+  display: inline-flex;
+  gap: 5px;
+  align-items: baseline;
+}
+.sim-test-mark {
+  font-weight: 700;
+}
+.sim-tests .is-pending {
+  color: var(--fg-muted);
+}
+.sim-tests .is-pass .sim-test-mark {
+  color: var(--pass);
+}
+.sim-tests .is-fail .sim-test-mark {
+  color: var(--fail);
+}
+.sim-insight {
+  margin: 0;
+  font-size: 14px;
+  line-height: 1.5;
+}
+.sim-legend {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px 14px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+  font-size: 12px;
+  color: var(--fg-muted);
+}
+.sim-legend i {
+  display: inline-block;
+  width: 12px;
+  height: 12px;
+  border-radius: 4px;
+  border: 2px solid;
+  margin-right: 5px;
+  vertical-align: -2px;
+}
+.sim-legend .is-run {
+  background: var(--viz-run-fill);
+  border-color: var(--accent);
+}
+.sim-legend .is-wait {
+  background: var(--viz-wait-fill);
+  border-color: var(--viz-wait);
+}
+.sim-legend .is-done {
+  border-color: var(--viz-done);
+  border-style: dashed;
+}
+.sim-legend .is-idle {
+  border-color: var(--viz-done);
+  border-style: dotted;
+}
+.sim-legend .is-bad {
+  background: var(--viz-bad-fill);
+  border-color: var(--fail);
+}
+
+/* Code */
+.sim-code {
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  background: var(--bg-sunken);
+  overflow: hidden;
+}
+.sim-code summary {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px 10px;
+  align-items: baseline;
+  min-height: 32px;
+  padding: 7px 12px;
+  cursor: pointer;
+  font-size: 12.5px;
+}
+.sim-code-file {
+  font: 700 12.5px var(--mono);
+}
+.sim-code-hint {
+  color: var(--fg-muted);
+}
+.sim-code-body {
+  margin: 0;
+  padding: 4px 0 10px;
+  overflow-x: auto;
+  font: 12.5px/1.6 var(--mono);
+  tab-size: 4;
+}
+.sim-line {
+  display: flex;
+  white-space: pre;
+  border-left: 3px solid transparent;
+  padding-right: 12px;
+}
+.sim-line code {
+  font: inherit;
+  background: none;
+  padding: 0;
+}
+.sim-line.is-owned {
+  background: var(--accent-soft);
+}
+.sim-line.is-current {
+  border-left-color: var(--fg);
+}
+.sim-line.is-gap {
+  color: var(--fg-muted);
+}
+.sim-gutter {
+  flex: none;
+  width: 30px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+}
+.sim-marker {
+  display: inline-flex;
+  align-items: center;
+  gap: 1px;
+}
+.sim-marker-dot {
+  width: 9px;
+  height: 9px;
+  border-radius: 50%;
+  border: 2px solid;
+}
+.sim-marker.is-run .sim-marker-dot {
+  background: var(--viz-run-fill);
+  border-color: var(--accent);
+}
+.sim-marker.is-wait .sim-marker-dot {
+  background: var(--viz-wait-fill);
+  border-color: var(--viz-wait);
+}
+.sim-marker.is-bad .sim-marker-dot {
+  background: var(--viz-bad-fill);
+  border-color: var(--fail);
+}
+.sim-marker-n {
+  font-size: 9.5px;
+  color: var(--fg-muted);
+}
+.hl-k,
+.hl-kc {
+  font-weight: 700;
+}
+.hl-kc,
+.hl-op {
+  color: var(--accent-hover);
+  font-weight: 700;
+}
+.hl-b,
+.hl-n {
+  color: var(--pass);
+}
+.hl-s {
+  color: var(--fail);
+}
+.hl-c {
+  color: var(--fg-muted);
+}
+
+/* Every step */
+.sim-log summary {
+  min-height: 32px;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  cursor: pointer;
+  font-size: 13px;
+  color: var(--fg-muted);
+}
+.sim-log ol {
+  margin: 4px 0 0;
+  padding: 0;
+  list-style: none;
+  max-height: 260px;
+  overflow: auto;
+  font-size: 12.5px;
+}
+.sim-log button {
+  appearance: none;
+  border: 0;
+  background: none;
+  color: var(--fg);
+  text-align: left;
+  width: 100%;
+  padding: 3px 6px;
+  border-radius: 6px;
+  cursor: pointer;
+  font: inherit;
+  display: flex;
+  gap: 8px;
+}
+.sim-log button:hover {
+  background: var(--bg-hover);
+}
+.sim-log button.is-now {
+  background: var(--accent-soft);
+}
+.sim-log .sim-muted {
+  flex: none;
+  min-width: 52px;
+  font-family: var(--mono);
+  font-variant-numeric: tabular-nums;
+}
+
+.sr-only {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  padding: 0;
+  margin: -1px;
+  overflow: hidden;
+  clip: rect(0, 0, 0, 0);
+  white-space: nowrap;
+  border: 0;
+}
+
+/* Focus comes last, so it beats the state rules above at equal specificity:
+   a focused node keeps a heavy outline in the text colour whatever its state. */
+.sim-node:focus-visible .sim-shape,
+.sim-node.is-focus .sim-shape {
+  stroke: var(--fg);
+  stroke-width: 3;
+}
+
+/* Holds the large view's place in the page while it floats. */
+.sim-hold {
+  margin: 0.75rem 0 1.25rem;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .sim-shape {
+    transition: none;
   }
 }

@@ -13,6 +13,26 @@ finished squaring every item - and there is no way to stop early: even
 a caller that only wants the first result still pays for every item to
 be pushed through every stage.
 
+```
+TODAY - batch per stage: every stage finishes before the next starts
+
+  generator                square                    keepEven
+  20 nums  ───all 20───▶   20 x work  ───all 20───▶   20 x work  ──▶ evens
+  returns a slice          squares every item        filters every item
+  (no work, never blocks)  (200ms for 20 items)      (200ms for 20 items)
+
+  400ms in total, and done is never read
+
+GOAL - 3 goroutines, unbuffered channels, one item at a time
+
+  generator ──▶ square ──▶ keepEven ──▶ Pipeline
+  1 goroutine   1 goroutine   1 goroutine   drains the channel
+  emits nums    squares       drops odds    into a slice
+
+  item 2 is generated while item 1 is squared: ~200ms for 20 items
+  closing done unblocks each stage on its next send or receive
+```
+
 Your task is to turn `generator`, `square`, and `keepEven` into true
 pipeline stages that operate on channels instead of slices, each
 running in its own goroutine, so that a downstream stage can start

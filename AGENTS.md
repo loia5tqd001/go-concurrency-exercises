@@ -28,12 +28,15 @@ exists. So:
 | `make try EX=36 MAIN=/tmp/ref.go` | A candidate solution passes 20 runs with `-race`, in a temp copy | To prove the tests accept a correct solution |
 | `make check` | Everything the commit gate checks | Before you commit |
 | `cd web && npm run smoke` | Every scaffold builds and fails in the browser runner | After you change `web/` or a test |
+| `make web-data` | Rebuilds the site's exercise data from committed files | After you commit an exercise README or a diagram |
+| `make web-check` | Rebuilds the data, then checks the visualisation specs and kit tests | Before you rely on the web version |
+| `make web-shots EX="08 22 28"` | The 300/640 px pixel checks and last-frame review shots | Before a visualisation review |
 
 ## Guardrails
 
 | Guard | Where | What it stops |
 | --- | --- | --- |
-| Commit gate | `.githooks/pre-commit` → `tools/check precommit` | Lint failures; a staged exercise whose scaffold passes its own tests (a solution), does not build, or hangs; a staged file with newer unstaged edits (the `git mv` + edit trap) |
+| Commit gate | `.githooks/pre-commit` → `tools/check precommit` | Lint failures; a staged exercise whose scaffold passes its own tests (a solution), does not build, or hangs; a staged file with newer unstaged edits (the `git mv` + edit trap); a commit that touches `<id>/`, `solutions/<id>.md`, or `web/src/viz/specs/<id>.ts` while `<id>/README.md` has unstaged changes |
 | Edit guard | Claude Code hook → `tools/check hook edit` | An edit to an exercise file that has local changes this session did not make |
 | Git guard | Claude Code hook → `tools/check hook bash` | `git add -A`/`.`/`-u`, `commit -a`, `--no-verify`, `reset --hard`, `clean -f`, `checkout`/`restore` over local changes, plain force push, changes to `core.hooksPath` |
 | Stop guard | Claude Code hook → `tools/check hook stop` | Finishing a session that edited files while `make lint` fails (blocks once) |
@@ -56,6 +59,7 @@ Commit only the scaffold, then copy the backup back.
 | `browser` | No `os/exec`, `os/signal`, `os.Pipe`, `runtime.NumCPU`, or `runtime.GOMAXPROCS`; the browser runner cannot support them |
 | `test-header` | `check_test.go` has the `DO NOT EDIT THIS PART` header |
 | `readme-title`, `readme-test-section`, `readme-diagram` | The README has a title, a "Test your solution" section, and an ASCII diagram |
+| `viz-diagram` | Every visualisation spec's `diagrams` pins name plain fences in its exercise README; the commit gate compares the staged README, so a diagram edit and its spec land together |
 | `doc-tests` | Every `TestXxx` that a README or solution doc names exists in that exercise's tests |
 | `solution-doc` | The solution doc has the spoiler banner |
 | `overview` | One well-formed row per exercise in the root README table, in folder order |
@@ -67,9 +71,21 @@ Commit only the scaffold, then copy the backup back.
 
 - Add or redesign an exercise: follow the `new-exercise` skill
   (`.claude/skills/new-exercise/SKILL.md`).
+- Add a visualisation: run `cd web && npm run viz -- new <id>`, then follow
+  the `new-visualisation` skill and its `REFERENCE.md`
+  (`.claude/skills/new-visualisation/`). They are the whole contract;
+  `docs/visualiser-design.md` is the rationale record. A spec is a small Go
+  program that a scheduler runs; `npm run check-visuals` runs every scene
+  under 12 schedules. `new` and `pin` write both README diagram pins; when
+  the README has several diagram fences, pass `--today N` and `--goal N`.
+  `make lint`'s `viz-diagram` rule checks the pins against the staged README.
+- Before a visualisation review, run `make web-shots EX="<ids>"`; it checks
+  the 300 and 640 px figures and writes the last frames under
+  `web/node_modules/.cache/viz-shots/`.
 - Review a solution: follow the `judge` skill.
 - Change a title, a difficulty, or a topic: edit only that row of the
   overview table in `README.md`, then run `make gen`.
+- Change an exercise README: the local dev server reads docs from the working tree and regenerates on save. Commit it before you deploy or push, because the deployed site and the clone read `git HEAD`.
 - Write or edit a solution doc: band the lines the prose is about, with a
   ` ```go {6,12,23} ` fence spec, so the site shows which lines carry the
   idea. Numbers are 1-based from the first line of the block. Band only

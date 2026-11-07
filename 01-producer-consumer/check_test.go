@@ -7,9 +7,8 @@
 package main
 
 import (
-	"bytes"
-	"io"
 	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 	"time"
@@ -76,23 +75,20 @@ func TestMainRunsProducerAndConsumerConcurrently(t *testing.T) {
 // If fn truly deadlocks, its goroutine is left running - there's no
 // way to force it to exit - but the test still fails within timeout
 // instead of hanging. Its writes (if any ever happen) land on the now
-// -closed pipe and are silently dropped, which is harmless.
+// -closed file and are silently dropped, which is harmless.
+//
+// Output goes to a temp file rather than an os.Pipe because GOOS=js
+// (the in-browser runner) has no pipes; a file behaves the same here,
+// since nothing reads the output until fn has returned.
 func captureStdout(t *testing.T, fn func(), timeout time.Duration) string {
 	t.Helper()
 
 	orig := os.Stdout
-	r, w, err := os.Pipe()
+	f, err := os.Create(filepath.Join(t.TempDir(), "stdout"))
 	if err != nil {
-		t.Fatalf("os.Pipe: %v", err)
+		t.Fatalf("create stdout capture file: %v", err)
 	}
-	os.Stdout = w
-
-	doneCopy := make(chan struct{})
-	var buf bytes.Buffer
-	go func() {
-		io.Copy(&buf, r)
-		close(doneCopy)
-	}()
+	os.Stdout = f
 
 	doneFn := make(chan struct{})
 	go func() {
@@ -104,15 +100,17 @@ func captureStdout(t *testing.T, fn func(), timeout time.Duration) string {
 	case <-doneFn:
 	case <-time.After(timeout):
 		os.Stdout = orig
-		w.Close()
-		r.Close()
+		f.Close()
 		t.Fatalf("main() did not return within %s - producer and consumer are likely deadlocked", timeout)
 		return ""
 	}
 
-	w.Close()
 	os.Stdout = orig
-	<-doneCopy
+	f.Close()
 
-	return buf.String()
+	out, err := os.ReadFile(f.Name())
+	if err != nil {
+		t.Fatalf("read captured stdout: %v", err)
+	}
+	return string(out)
 }

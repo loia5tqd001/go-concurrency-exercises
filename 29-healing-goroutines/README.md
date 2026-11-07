@@ -19,6 +19,30 @@ pulsing forever, without ever exiting and without honoring `done`
 being closed. Right now, if the one ward a steward is watching wedges,
 the steward's own heartbeat goes silent right along with it, forever.
 
+```
+TODAY (scaffold): 1 ward generation, no monitor goroutine, no timer
+
+  caller ──done──▶ steward ──same done──▶ ward gen 1
+                     ◀──── heartbeat ──────┘  (handed back as-is)
+
+  pulses: 1 2 3 4 ── wedge ──▶ silent forever, steward included
+
+
+GOAL (fixed): 1 steward monitor goroutine, fresh done per generation
+              e.g. timeout 350ms, pulseInterval 100ms, wedge after 5
+
+  caller ──done──▶ steward ──fresh done──▶ ward gen 1
+                     ◀──── heartbeat ──────┘
+                                   │
+                     350ms with no pulse since the last forwarded one
+                                   ▼
+                close gen 1's done (no wait), start gen 2
+                                   │
+                                   ▼  gen 2's first pulse, 100ms later
+  pulses: 1 2 3 4 5 ─ wedge ─▶ 450ms of silence ─▶ 1 2 3 4 5 ─▶ ... and on
+  steward keeps pulsing across every restart; caller's done ends it
+```
+
 Your task is to implement `NewSteward` so it actually monitors and
 heals the ward it wraps:
 

@@ -3,11 +3,21 @@
 
 export type LineKind = "cmd" | "pass" | "fail" | "dim" | "info" | "plain" | "err";
 
+// A link the console draws beside a line. The link is a real anchor, so
+// mouse and keyboard (Tab, Enter) reach it without extra keys.
+export interface ConsoleAction {
+  label: string;
+  run: () => void;
+}
+
 export interface ConsoleHooks {
   // onLocation fires when a file:line reference in the output is clicked.
   onLocation?: (file: string, line: number, col: number) => void;
   // onLine fires for every complete line of program output.
   onLine?: (text: string) => void;
+  // seeWhy returns the action for a failing test the spec names, or null.
+  // Decision 5: the console then shows "See why ▸" beside that line.
+  seeWhy?: (test: string) => (() => void) | null;
 }
 
 // Matches "main.go:12", "./main.go:12:5" and the absolute paths in panics.
@@ -36,13 +46,20 @@ export class ConsoleModel {
     this.partial = null;
   }
 
+  // empty lets the caller write a greeting only while no run has printed.
+  get empty(): boolean {
+    return this.el === null || this.el.childElementCount === 0;
+  }
+
   command(text: string): void {
     this.note(`$ ${text}`, "cmd");
   }
 
-  note(text: string, kind: LineKind = "info"): void {
+  note(text: string, kind: LineKind = "info", action?: ConsoleAction): void {
     this.endPartial();
-    this.append(this.render(document.createElement("div"), text, kind));
+    const node = this.render(document.createElement("div"), text, kind);
+    if (action) node.append(" ", this.actionLink(action.label, action.run));
+    this.append(node);
   }
 
   write(text: string, fd: 1 | 2): void {
@@ -59,8 +76,10 @@ export class ConsoleModel {
 
   handleClick(target: EventTarget | null): void {
     const a = (target as HTMLElement | null)?.closest<HTMLAnchorElement>("a.loc");
-    if (!a) return;
-    this.hooks.onLocation?.(a.dataset.file!, Number(a.dataset.line), Number(a.dataset.col || 1));
+    // The See why link also wears .loc for the console's link styling, but it
+    // has no file to open.
+    if (!a || a.dataset.file === undefined) return;
+    this.hooks.onLocation?.(a.dataset.file, Number(a.dataset.line), Number(a.dataset.col || 1));
   }
 
   private extendPartial(chunk: string, fd: 1 | 2): void {
@@ -77,8 +96,26 @@ export class ConsoleModel {
     const p = this.partial;
     if (!p) return;
     this.partial = null;
-    this.render(p.node, p.text, classify(p.text, p.fd));
+    const kind = classify(p.text, p.fd);
+    const node = this.render(p.node, p.text, kind);
+    // A failing test line carries the full Go test name between "--- FAIL:"
+    // and the duration. The spec decides whether that name earns a link.
+    const test = kind === "fail" ? /^\s*--- FAIL: (\S+)/.exec(p.text)?.[1] : undefined;
+    const run = test === undefined ? null : (this.hooks.seeWhy?.(test) ?? null);
+    if (run !== null) node.append(" ", this.actionLink("See why ▸", run));
     this.hooks.onLine?.(p.text);
+  }
+
+  private actionLink(label: string, run: () => void): HTMLAnchorElement {
+    const a = document.createElement("a");
+    a.className = "loc see-why";
+    a.href = "#";
+    a.textContent = label;
+    a.addEventListener("click", (event) => {
+      event.preventDefault();
+      run();
+    });
+    return a;
   }
 
   private render(node: HTMLElement, text: string, kind: LineKind): HTMLElement {

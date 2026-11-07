@@ -1,16 +1,16 @@
 {
-  "go.gopath": "~/go",
-  "go.toolsGopath": "~/go",
-
   "go.useLanguageServer": true,
+  "go.lintTool": "staticcheck",
   "go.lintOnSave": "package",
   "go.vetOnSave": "package",
   "go.testFlags": ["-race"],
   "go.testTimeout": "60s",
+  "go.coverOnSingleTest": true,
 
-  "gopls": {
-    "ui.diagnostic.staticcheck": true
+  "go.toolsEnvVars": {
+    "GOTOOLCHAIN": "go1.25.6+auto"
   },
+
   "[go]": {
     "editor.formatOnSave": true,
     "editor.defaultFormatter": "golang.go"

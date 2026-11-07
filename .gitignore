@@ -8,6 +8,8 @@ log/*
 *.out
 *.prof
 /[0-9][0-9]*-*/[0-9][0-9]*
+# `go build ./tools/check` writes this binary at the repo root.
+/check
 
 # Copies of the owner's uncommitted files, made before an agent edits them
 # (the edit guard in .claude/settings.json asks for this).

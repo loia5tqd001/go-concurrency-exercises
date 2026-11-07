@@ -15,6 +15,21 @@ consumer happens to read a given value first gets it, and the other
 consumer never sees that value at all. Values get split between the
 two consumers instead of duplicated to both.
 
+```
+TODAY - both outputs are the same channel; Tee starts no goroutine
+
+  StartSensor(10) --5ms--> in == same channel ==+--> out1: reader 1 races
+                                                +--> out2: reader 2 races
+  each value reaches ONE racing reader only; neither is guaranteed all 10
+
+GOAL - one tee goroutine reads in and sends each value to BOTH outputs
+
+  StartSensor(10) --5ms--> in --> tee goroutine --+--> out1 --> reader 1: 0..9
+                                                  +--> out2 --> reader 2: 0..9
+  each value is held for BOTH outputs; a slow reader still gets all 10
+  done closed --> both outputs close at once
+```
+
 Your task is to implement `Tee` properly: every value received from
 `in` must be sent to BOTH output channels, so each output ends up with
 the full, identical sequence of values `in` produced, in order. For

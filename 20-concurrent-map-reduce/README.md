@@ -13,6 +13,17 @@ chunk-level parallelism on the table, since chunk 2 can't even start
 being tokenized until chunk 1's tokenizing (simulated by
 `time.Sleep(ProcessDelay)` per chunk) has fully finished.
 
+```
+today: 1 goroutine, 10 chunks x 30ms each            ~300ms wall clock
+  chunk0 ─30ms─▶ chunk1 ─30ms─▶ ... ─▶ chunk9 ─30ms─▶ result map
+
+goal: 10 map goroutines, then 1 reduce goroutine       ~30ms wall clock
+  chunk0 ─30ms─▶ local map0 ─┐
+  chunk1 ─30ms─▶ local map1 ─┤
+     ...                     ├─▶ reduce (1 goroutine) ──▶ result map
+  chunk9 ─30ms─▶ local map9 ─┘
+```
+
 Your task is to reimplement `WordCount` as true map-reduce: spawn one
 goroutine per chunk (the "map" phase) that tokenizes its own chunk
 into its own local `map[string]int` (after `time.Sleep(ProcessDelay)`,

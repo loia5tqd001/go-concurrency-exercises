@@ -15,7 +15,7 @@ _testmain.go (generated at build time) ─compile.wasm─▶ _testmain.a ──l
 
 | Piece | File |
 |---|---|
-| Exercise data, read from `git HEAD` only (never your local `main.go`) | `tools/gen/main.go` |
+| Exercise code from `git HEAD`; docs from the working tree | `tools/gen/main.go` |
 | Compiler, linker, stdlib archives, and gofmt, built as WebAssembly | `tools/goassets/main.go` |
 | In-memory filesystem behind Go's `syscall/fs_js.go` | `src/runner/memfs.ts` |
 | The compile and link pipeline, and running a binary | `src/runner/toolchain.ts`, `src/runner/go.ts` |
@@ -35,6 +35,10 @@ Numbers are 1-based from the first line of the block, and `{6,12-14}` and `{6 12
 
 `src/markdown.ts` turns the spec into `data-hl` and `wrapCodeLines` rebuilds the colorized block as one element per line. `src/components/Markdown.tsx` does that after Monaco colorizes, and again on every theme change, because colorizing replaces the markup. The band is `.md-line.hl` in `src/styles.css`.
 
+## Copying a block
+
+Every fence gets a Copy button in its top-right corner. It appears on hover or keyboard focus, and stays visible on a touch screen, which has no hover. `src/markdown.ts` wraps the fence in `.md-code-wrap`, which holds the button out of the scrolling `pre`, so the button stays in view when a long line is scrolled sideways. The click copies `data-src`, the fence's original text, because the colorized and banded markup does not round-trip to the source.
+
 ## Differences from running locally
 
 | Local `go test -race` | In the browser |
@@ -42,6 +46,26 @@ Numbers are 1-based from the first line of the block, and `{6,12-14}` and `{6 12
 | Race detector | **Not available.** It needs ThreadSanitizer, which WebAssembly cannot host. The UI tells the learner to run `go test -race` locally. |
 | `GOMAXPROCS` = number of cores | 1. Goroutines switch only when one blocks, so `runtime.GOMAXPROCS(0)`-sized pools get one worker. |
 | `os/exec`, `os/signal`, `os.Pipe` | Not available. The generator marks exercises that import `os/exec` or `os/signal` as unsupported (today: 04), and those exercises get a **Build** button instead of **Run tests**. |
+
+## Visualisations
+
+Some exercises have an animated visualisation. A spec, `src/viz/specs/<id>.ts`, is a small Go program: goroutine nodes with generator programs that yield one operation per Go statement (`send`, `recv`, `select`, `work`, `wait`, `lock`, …), plus the channels, wait groups, mutexes, timers, contexts, slices, and facts they share. `src/viz/engine/sim.ts` runs the programs under Go's rules on a virtual clock and records every step; it decides every order (with a seeded random choice where Go promises none) and derives every state, the edges, and the outcome (ok, leak, deadlock, panic). `src/viz/engine/timeline.ts` turns the run into playback beats: the clock moves during work and stands still while values move between nodes. `src/viz/engine/layout.ts` places the nodes on the spec's grid and turns the grid top to bottom on a narrow pane. `src/viz/view/` draws the graph in SVG, with the transport, scrubber, knobs, tests, and a code panel whose gutter marks the line each goroutine is on. The registry, `src/viz/registry.ts`, globs `specs/[0-9]*.ts`, so a new spec needs no registry edit.
+
+The Problem tab mounts the player on the README's own ASCII diagram. The diagram stays the default view; a "▶ Today" or "▶ Goal" chip swaps in the animation at the same top edge, and the Diagram chip swaps the fence back. A spec pins one fence per Problem tier. Inside scenes appear at the top of the Solution tab after the existing reveal. In development, a stale pin shows its scenes below the README with a strip that says why; a production build omits them. The door plays on open; the Solution block starts paused; reduced motion never autoplays and jumps between steps instead of flying values.
+
+`npm run check-visuals` proves each spec's constants and anchors against `git HEAD`, every `diagrams` pin against the working-tree README, code excerpts verbatim against the committed scaffold or the solution doc, no code in a goal scene, the vocabulary and spoiler rules for Problem scenes, the budgets, and a layout with no overlapping nodes at 300 and 640 px. It runs every scene, for every knob setting, under 12 seeds, and each run must end with the outcome, test results, and time the scene expects. `npm run test-visuals` tests the scheduler's Go rules and plants faults the checker must catch. Run both after `prepare-data`.
+
+`npm run viz -- shots [id ...]` renders every Problem and Solution scene at 300 px and 640 px, in light and dark, checks five points of each run, and saves the last frame under `node_modules/.cache/viz-shots/` (git ignores that path). It fails on horizontal overflow, a truncated label in the graph, or a control under 32 px. The command reuses a Vite server on :5173 and Chrome on :9222 when they are up; otherwise it starts and stops its own.
+
+To add one, follow the `new-visualisation` skill and its `REFERENCE.md` (`.claude/skills/new-visualisation/`); they are the whole contract. `docs/visualiser-design.md` records why the engine is shaped this way.
+
+The README ASCII diagram remains the clone-mode artifact. Do not replace it with the player.
+
+## Exercise code comes from HEAD; docs come from the working tree
+
+`scripts/prepare.sh` reads `.go` files from `git archive HEAD` and `.md` files (the root README, exercise READMEs, and solution docs) from the working tree. A README edit appears without a commit after the data regenerates. In `npm run dev`, the `go-concurrency-docs` Vite plugin regenerates on save and reloads the page; `make web-data` does the same on demand.
+
+Code stays from HEAD because the owner keeps solved `main.go` files uncommitted, and the site must never publish them. The pre-commit gate refuses a commit that leaves an exercise README with unstaged changes, so the deployed site and the clone still receive the doc when you commit.
 
 ## Link previews
 
@@ -67,6 +91,8 @@ therefore advertises the production image.
 
 ## Commands
 
+Node 22 or newer is required; the scripts run TypeScript directly.
+
 ```sh
 cd web
 npm install
@@ -75,6 +101,9 @@ npm run build      # prepare + type-check + production build into dist/
 npm run og         # rebuild public/og.png, the link-preview card
 npm run smoke      # every scaffold through the runner under Node; each must build and fail its tests
 npm run smoke -- --solutions ..   # your local main.go files instead; each must pass
+npm run viz -- shots              # pixel check every spec; PNGs under node_modules/.cache/viz-shots
+npm run viz -- shots 06           # pixel check one spec, by id or leading number
+npm run viz -- shots 06 --themes light   # just the light review frames
 ```
 
 `scripts/prepare.sh` runs before `dev` and `build`. It needs Go at the version in the root `go.mod`. If `go` is not on `PATH` (as on Vercel), the script downloads that version itself.

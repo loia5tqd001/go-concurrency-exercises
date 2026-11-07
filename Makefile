@@ -1,7 +1,7 @@
 # Entry points for people and agents. AGENTS.md says when to run each one.
 # All of them call tools/check, which holds the rules.
 
-.PHONY: setup lint gen check verify try
+.PHONY: setup lint gen check verify try web-data web-check web-shots
 
 # Install the commit gate (.githooks/pre-commit). Run once per clone.
 setup:
@@ -28,3 +28,15 @@ verify:
 # in a temp copy. No main.go in the repo is touched.
 try:
 	go run ./tools/check try $(EX) $(MAIN)
+
+# The web app reads git HEAD, so commit README changes before rebuilding.
+web-data:
+	cd web && npm run prepare-data
+
+web-check: web-data
+	cd web && npm run check-visuals && npm run test-visuals
+
+# EX="08 22 28": the 300/640 px pixel checks and last-frame review shots.
+# Needs Chrome; the script starts or reuses Vite and headless Chrome.
+web-shots:
+	cd web && npm run viz -- shots $(EX)

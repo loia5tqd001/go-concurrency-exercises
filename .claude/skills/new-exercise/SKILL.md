@@ -129,6 +129,15 @@ just the ones that are convenient this time:
    same checks and refuses the commit if any fails; never bypass it
    with `--no-verify`. Commit with explicit paths, never `git add -A`.
 
+10. **Offer a visualisation.** When the lesson depends on *when*
+    something blocks, *which* goroutine waits, or *what* keeps running,
+    an animation on the README diagram helps. Follow the
+    `new-visualisation` skill. If the exercise already has a spec
+    (`web/src/viz/specs/<folder>.ts`) and you changed the README diagram,
+    the scaffold, or a test constant, run `cd web && npm run
+    check-visuals -- <NN>`: it fails on a stale pin, a stale constant, or
+    a code excerpt that no longer matches.
+
 ## Redesigning an existing exercise in place
 
 Same steps, but also: check `git diff`/`git status` for any uncommitted

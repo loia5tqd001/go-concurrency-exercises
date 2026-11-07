@@ -2,13 +2,19 @@
   "name": "go-concurrency-exercises-web",
   "private": true,
   "type": "module",
+  "engines": {
+    "node": ">=22"
+  },
   "scripts": {
     "prepare-data": "bash scripts/prepare.sh",
     "dev": "bash scripts/prepare.sh && vite",
     "build": "bash scripts/prepare.sh && tsc --noEmit && vite build",
     "preview": "vite preview",
     "og": "node scripts/og.ts",
-    "smoke": "node scripts/smoke-test.ts"
+    "smoke": "node scripts/smoke-test.ts",
+    "check-visuals": "node scripts/viz-check.ts",
+    "test-visuals": "node --test scripts/viz-kit.test.ts scripts/viz-check.test.ts",
+    "viz": "node scripts/viz.ts"
   },
   "dependencies": {
     "marked": "18.1.1",

@@ -13,6 +13,19 @@ another instead of concurrently, and the shared "first error" field is
 read and written without any synchronization even though real usage
 always calls `Go` from multiple goroutines racing against `Wait`.
 
+```
+TODAY (1 goroutine)
+  caller  Go(t1)--100ms-->Go(t2)--100ms--> ... -->Go(t10)--100ms-->
+          Wait() returns firstErr at once; 10 x 100ms = 1s
+
+GOAL (11 goroutines: 1 caller + 10 workers)
+                    +--> t1  100ms --+
+                    |                |
+  caller  Go(t1..10)+--> t2  100ms --+--> Wait() joins all 10: ~100ms
+                    |      ...       |    sync.Once keeps the first error
+                    +--> t10 100ms --+
+```
+
 Your task is to fix `Group` so that:
 
 - `Go(f func() error)` launches `f` in its own goroutine immediately

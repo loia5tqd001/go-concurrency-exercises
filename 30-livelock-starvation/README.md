@@ -65,6 +65,29 @@ forever, even though the dispatcher is always doing useful work.
 - When both queues stay busy, high-priority work must still take **at least
   two-thirds** of completed cycles.
 
+```
+PART 1 - LIVELOCK  (2 goroutines, probeWindow 1ms, twice per round)
+
+  today (broken)                        goal (per-worker seeded RNG)
+  A ──▶ read=2 ──▶ sleep 10ms           A ──▶ read=2 ──▶ sleep 10ms+randA
+  B ──▶ read=2 ──▶ sleep 10ms           B ──▶ read=2 ──▶ sleep 10ms+randB
+                 │                                     │
+                 ▼                                     ▼
+      wake together, collide again      wakes drift apart,
+      forever: a=0  b=0  (still busy)   progress: a=5  b=5  (5 attempts)
+
+PART 2 - STARVATION  (20 high queued, 1 low, 10 cycles)
+
+  today (broken)                        goal (aging every 5th cycle)
+  high non-empty ──▶ take high          cycle 5      ──▶ take low
+  high empty     ──▶ take low           other cycles ──▶ take high
+                   │                                   │
+                   ▼                                   ▼
+      high=10  low=0  (low starved)     high=9  low=1  (low waited 5 cycles)
+      backlog 1000: low never runs      backlog 1000: low within 10 cycles
+                                        both busy: high 4/5 = 80% >= 2/3
+```
+
 ## Test your solution
 
 ```

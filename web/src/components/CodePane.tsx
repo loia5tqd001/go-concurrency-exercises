@@ -5,6 +5,10 @@ import { monaco, monoFont } from "../monaco.ts";
 import { goClient, runBinary, useToolchain, type RunHandle } from "../runner/client.ts";
 import type { BuildMode, BuildRequest, SourceFile } from "../runner/toolchain.ts";
 import { clearCode, hash, loadCode, saveCode, type Status } from "../storage.ts";
+import { navigate, routePath } from "../router.ts";
+import { openDoor, specTestNames, todaySceneId } from "../viz/doorIntent.ts";
+import { hasViz } from "../viz/registry.ts";
+import { useVizSpec } from "../viz/useVizSpec.ts";
 import { CheckIcon, CrossIcon, FormatIcon, InfoIcon, LockIcon, PlayIcon, ResetIcon, StopIcon, TerminalIcon } from "./icons.tsx";
 import { paneFraction, Splitter } from "./Splitter.tsx";
 
@@ -39,6 +43,30 @@ export function CodePane({ summary, exercise, onStatus, openFile }: Props) {
   const runRef = useRef<RunHandle | null>(null);
   const busyRef = useRef<Busy>(null);
   const consoleModel = useMemo(() => new ConsoleModel(), []);
+
+  // The console shows a door link only when the spec names the failing test
+  // and draws a Today scene (decision 5). The spec loads lazily, as it does
+  // for the door itself.
+  const spec = useVizSpec(id);
+  const vizLink = useMemo(() => {
+    if (spec === null) return null;
+    const scene = todaySceneId(spec);
+    return scene === undefined ? null : { names: specTestNames(spec), scene };
+  }, [spec]);
+  // The console hooks are installed once, so they read the latest link
+  // through a ref instead of a stale closure.
+  const vizLinkRef = useRef(vizLink);
+  vizLinkRef.current = vizLink;
+
+  const openToday = () => {
+    const link = vizLinkRef.current;
+    if (link === null) return;
+    // The door lives in the Problem tab. Navigating there first also covers
+    // the Solution tab, where no door is mounted; the intent then waits for
+    // the next door (doorIntent.ts).
+    navigate(routePath({ id, tab: "problem" }));
+    openDoor({ exercise: id, scene: link.scene, step: 0 });
+  };
 
   const [active, setActive] = useState("main.go");
   const [busy, setBusyState] = useState<Busy>(null);
@@ -367,15 +395,32 @@ export function CodePane({ summary, exercise, onStatus, openFile }: Props) {
         const done = /^--- (PASS|FAIL): ([^/\s]+) /.exec(text);
         if (done) setTests((prev) => ({ ...prev, [done[2]]: done[1] === "PASS" ? "pass" : "fail" }));
       },
+      // A failing test earns a link only when its full name is in a tests row
+      // of the spec. The door is a sibling, so the click announces the intent
+      // rather than reaching into the doc pane.
+      seeWhy: (test) => {
+        const link = vizLinkRef.current;
+        if (link === null || !link.names.has(test)) return null;
+        return openToday;
+      },
     };
     consoleModel.clear();
+  }, []);
+
+  // The greeting waits for the lazy spec: 04's note only earns its "Watch it
+  // instead ▸" link once the spec proves it has a Today scene. Writing only
+  // into an empty console makes the effect safe to re-run.
+  useEffect(() => {
+    if (hasViz(id) && spec === null) return;
+    if (!consoleModel.empty) return;
     if (summary.unsupported) {
-      consoleModel.note(`This exercise's tests cannot run in a browser: ${summary.unsupported}.`, "err");
+      const action = vizLink === null ? undefined : { label: "Watch it instead ▸", run: openToday };
+      consoleModel.note(`This exercise's tests cannot run in a browser: ${summary.unsupported}.`, "err", action);
       consoleModel.note(`Edit main.go here and press ${modKey}+Enter to compile it, then run the tests locally: go test -race ./${id}`, "dim");
     } else {
       consoleModel.note(`Press ${modKey}+Enter to run the tests (go test -v), or ${modKey}+Shift+Enter to run main().`, "dim");
     }
-  }, []);
+  }, [spec]);
 
   const loadingLabel =
     toolchain.phase === "loading"

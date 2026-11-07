@@ -18,6 +18,23 @@ entire point of a future (you can't do other work while it's
 computing). It also recomputes from scratch on every single call, even
 for a key it has already computed before.
 
+```
+Today: Future computes inline on the caller's goroutine, every call
+  caller 1 ──▶ Future(key) ──▶ ComputeExpensive 150ms ──▶ ch
+  caller 2 ──▶ Future(key) ──▶ ComputeExpensive 150ms ──▶ ch
+  caller 3 ──▶ Future(key) ──▶ ComputeExpensive 150ms ──▶ ch
+  each caller blocks 150ms before its channel arrives; 3 computations
+
+Goal: Future returns each channel at once; one computation per key
+  caller 1 ─┐                      ┌─▶ ch1 (cap 1, one int)
+  caller 2 ─┼─▶ Future(key) ───────┼─▶ ch2 (cap 1, one int)
+  caller 3 ─┘  (returns at once)   └─▶ ch3 (cap 1, one int)
+                    │
+                    ▼
+   one ComputeExpensive run (150ms), cached for later calls; all
+   three channels deliver the same int
+```
+
 Your task is to fix `Future` so that:
 
 - `Future(key string) <-chan int` kicks off `ComputeExpensive(key)` in

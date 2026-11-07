@@ -24,13 +24,13 @@ func StartLogHub(numShards, linesPerShard int) <-chan (<-chan string) {
 	go func() {
 		defer close(shardStream)
 
-		for shardIdx := 0; shardIdx < numShards; shardIdx++ {
+		for shardIdx := range numShards {
 			lines := make(chan string)
 
 			go func(shardIdx int) {
 				defer close(lines)
 
-				for i := 0; i < linesPerShard; i++ {
+				for i := range linesPerShard {
 					time.Sleep(10 * time.Millisecond)
 					lines <- fmt.Sprintf("shard-%d-line-%d", shardIdx, i)
 				}

@@ -3,6 +3,7 @@
 // of the open exercise open in the editor, and anything else goes to GitHub.
 import { Marked } from "marked";
 import { exerciseById, site } from "./data.ts";
+import { diagramHash } from "./viz/engine/diagramHash.ts";
 
 export interface DocContext {
   // dir is the document's folder in the repository, e.g. "/" for the root
@@ -80,7 +81,14 @@ export function renderMarkdown(src: string, ctx: DocContext): string {
         const [l = "", ...rest] = (lang ?? "").trim().split(/\s+/);
         const hl = fenceLines(rest.join(" "));
         const attr = hl.length ? ` data-hl="${hl.join(",")}"` : "";
-        return `<pre class="md-code"><code data-lang="${escapeHTML(l)}"${attr}>${escapeHTML(text)}</code></pre>\n`;
+        // A plain fence is the hand-drawn diagram, not a code sample. Its
+        // normalized hash lets the visualisation door mount on the exact
+        // fence a spec pinned (artist review section 2.6).
+        const diagram = l === "" || l === "text" ? ` data-diagram="${diagramHash(text)}"` : "";
+        // The wrapper is the copy button's positioning frame: the pre itself
+        // scrolls sideways, so a button inside it would leave the view with
+        // the code.
+        return `<div class="md-code-wrap"><pre class="md-code"${diagram}><code data-lang="${escapeHTML(l)}"${attr}>${escapeHTML(text)}</code></pre><button class="md-copy" type="button">Copy</button></div>\n`;
       },
     },
   });

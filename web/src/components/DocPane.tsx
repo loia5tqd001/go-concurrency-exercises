@@ -2,6 +2,8 @@ import { useState } from "react";
 import { site, type Exercise, type ExerciseSummary } from "../data.ts";
 import { onLinkClick, routePath } from "../router.ts";
 import type { Status } from "../storage.ts";
+import { VizSolution } from "../viz/VizDoor.tsx";
+import { useVizSpec } from "../viz/useVizSpec.ts";
 import { CheckIcon } from "./icons.tsx";
 import { Markdown } from "./Markdown.tsx";
 
@@ -16,6 +18,7 @@ interface Props {
 export function DocPane({ summary, exercise, tab, status, onOpenFile }: Props) {
   const [revealed, setRevealed] = useState(false);
   const id = summary.id;
+  const spec = useVizSpec(id);
   const files = exercise.files.map((f) => f.name);
   const index = site.exercises.findIndex((e) => e.id === id);
   const prev = site.exercises[index - 1];
@@ -51,11 +54,19 @@ export function DocPane({ summary, exercise, tab, status, onOpenFile }: Props) {
         )}
 
         {tab === "problem" ? (
-          <Markdown src={exercise.readme} ctx={{ dir: `/${id}/`, exerciseId: id, files }} onOpenFile={onOpenFile} />
+          <Markdown
+            src={exercise.readme}
+            ctx={{ dir: `/${id}/`, exerciseId: id, files }}
+            onOpenFile={onOpenFile}
+            spec={spec}
+          />
         ) : !exercise.solution ? (
           <p className="muted">There is no write-up for this exercise yet.</p>
         ) : revealed ? (
-          <Markdown src={exercise.solution} ctx={{ dir: "/solutions/", exerciseId: id, files }} onOpenFile={onOpenFile} />
+          <>
+            <VizSolution spec={spec} />
+            <Markdown src={exercise.solution} ctx={{ dir: "/solutions/", exerciseId: id, files }} onOpenFile={onOpenFile} />
+          </>
         ) : (
           <div className="spoiler">
             <p>

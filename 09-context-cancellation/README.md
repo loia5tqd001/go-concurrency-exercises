@@ -14,6 +14,20 @@ a caller's timeout or cancellation is never actually propagated
 anywhere - each layer always runs its full 300ms regardless, even if
 the caller has already given up.
 
+```
+today (broken):                      goal (fixed):
+layers get Background(), 200ms       layers get ctx, 200ms deadline
+deadline ignored                     reaches every layer call
+  │                                    │
+  ├─ A: full 300ms                     ├─ A: ctx.Done() fires at 200ms
+  ├─ B: full 300ms                     ├─ B: skipped, chain stopped
+  └─ C: full 300ms                     └─ C: skipped, chain stopped
+  ▼                                    ▼
+900ms, "ABC", no error               ~200ms, returns DeadlineExceeded
+                                      (a 350ms cancel mid-B gives
+                                      Canceled instead, C still skipped)
+```
+
 Your task is to fix `HandleRequest` so that it passes `ctx` (not
 `context.Background()`) into each layer call, so the caller's
 deadline/cancellation actually reaches them and a layer can return

@@ -1,8 +1,12 @@
 #!/usr/bin/env bash
-# Prepares everything Vite needs: a Go toolchain, the exercise data (read
-# from git HEAD), and the Go toolchain that runs inside the browser.
+# Prepares everything Vite needs: a Go toolchain, the exercise code from
+# git HEAD plus the docs from the working tree, and the Go toolchain that
+# runs inside the browser.
 set -euo pipefail
 cd "$(dirname "$0")/.."
+
+# Docs are read from the working tree; Go code from HEAD. This script
+# regenerates the site data from the current docs on every dev/build run.
 
 go_version=$(awk '$1 == "go" { print $2; exit }' ../go.mod)
 

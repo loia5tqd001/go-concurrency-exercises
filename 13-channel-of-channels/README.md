@@ -15,6 +15,25 @@ simply range over. It doesn't: it only ever looks at the very first
 inner channel it receives, forwards its lines, and then stops -
 silently dropping every log line produced by every other shard.
 
+```
+Today - naive Bridge: 1 goroutine, reads only shard-0
+
+  chanStream ──▶ shard-0 ──▶ [Bridge] ──▶ out   (4 of 20 lines)
+                 shard-1..4  ✗ never read, 16 lines dropped;
+                             hub goroutines block forever
+
+Goal - fan-in: shards arrive every 5 ms, a line every 10 ms
+
+  chanStream ──┬─▶ shard-0 ──▶ fwd-0 ─┐
+               ├─▶ shard-1 ──▶ fwd-1 ─┤   1 dispatcher +
+               ├─▶ shard-2 ──▶ fwd-2 ─┼──▶ out ──▶ main (20 lines)
+               ├─▶ shard-3 ──▶ fwd-3 ─┤   one goroutine
+               └─▶ shard-4 ──▶ fwd-4 ─┘   per shard
+                             out closes once chanStream is closed
+                             AND all 5 forwarders finish, or on done
+                             a stuck shard stalls only its own fwd
+```
+
 Your task is to fix `Bridge` so that it flattens **every** inner
 channel it ever receives from `chanStream` into the single output
 stream - a fan-in over a dynamically arriving, unbounded set of

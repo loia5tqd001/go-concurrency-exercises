@@ -15,6 +15,35 @@ say, 500 currently means every reading after it silently vanishes -
 the caller has no way to tell "reading #2 was garbage" apart from
 "the pipeline never even looked at readings #3 through #500".
 
+```
+TODAY - 8 readings in, 1 result out
+
+readings []string: "10" "abc" "5" "0" "-3" "xyz" "0" "7"
+     │
+     ▼
+parse (1 goroutine): index 1 "abc" fails Atoi -> return, close(out)
+     │               indices 2..7 are never parsed
+     ▼  unbuffered chan Result (parse -> reciprocal)
+reciprocal (1 goroutine): sees index 0 only, then its input closes
+     │
+     ▼
+ProcessReadings: 1 result for 8 readings
+
+GOAL - 8 readings in, 8 results out, same order
+
+readings []string: "10" "abc" "5" "0" "-3" "xyz" "0" "7"
+     │
+     ▼
+parse (1 goroutine): one Result per reading, never aborts
+     │               ok -> Value n, Err nil   bad -> Value 0, Err set
+     ▼  unbuffered chan Result (parse -> reciprocal)
+reciprocal (1 goroutine): Err != nil -> pass through unchanged
+     │                    otherwise Value == 0 -> set ErrDivideByZero
+     │                    then keep going on the next Result
+     ▼
+ProcessReadings: 8 results, in input order
+```
+
 Your task is to make `parse` and `reciprocal` let errors flow
 downstream *alongside* values, as a `Result{Value, Err}` pair, instead
 of aborting the whole batch or panicking on the first bad item - so

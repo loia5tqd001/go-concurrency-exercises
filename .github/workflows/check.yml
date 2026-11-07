@@ -37,6 +37,18 @@ jobs:
       # Builds the in-browser Go toolchain and the exercise data from HEAD.
       - run: npm run prepare-data
         working-directory: web
+      - name: Type-check the web app
+        run: npx tsc --noEmit
+        working-directory: web
+      - name: Visualisation specs match the index and HEAD
+        run: npm run check-visuals
+        working-directory: web
+      - name: Visualisation frames reach their declared states
+        run: npm run test-visuals
+        working-directory: web
+      - name: Build the site
+        run: npx vite build
+        working-directory: web
       - name: Every scaffold builds and fails in the browser runner
         run: npm run smoke
         working-directory: web

@@ -2,9 +2,10 @@
 // app (src/generated/exercises.json) and one lazily fetched JSON file per
 // exercise (public/data/).
 //
-// It reads the repository's committed HEAD through `git archive`, never the
-// working tree: a maintainer's checkout keeps solved main.go files locally,
-// and those must not end up on the public site.
+// It reads Go code from the repository's committed HEAD through `git
+// archive`, and Markdown documentation from the working tree. A maintainer's
+// checkout keeps solved main.go files locally; those must not end up on the
+// public site, but README edits should appear immediately.
 package main
 
 import (
@@ -120,6 +121,18 @@ func run(repo, indexOut, dataDir string) error {
 	tree, err := readHEAD(repo)
 	if err != nil {
 		return err
+	}
+
+	// Documentation is safe to read from the working tree, so a README edit
+	// appears without a commit. Keep every .go file from HEAD: the owner's
+	// checkout keeps solved main.go files uncommitted, and those must not
+	// reach the site.
+	for name := range tree {
+		if strings.HasSuffix(name, ".md") {
+			if b, readErr := os.ReadFile(filepath.Join(repo, name)); readErr == nil {
+				tree[name] = string(b)
+			}
+		}
 	}
 
 	gomod, ok := tree["go.mod"]
@@ -455,7 +468,7 @@ func git(repo string, args ...string) (string, error) {
 }
 
 // readHEAD returns every committed text file we care about, keyed by its
-// repository path.
+// repository path. run replaces the .md entries from the working tree.
 func readHEAD(repo string) (map[string]string, error) {
 	cmd := exec.Command("git", "-C", repo, "archive", "--format=tar", "HEAD")
 	stdout, err := cmd.StdoutPipe()
