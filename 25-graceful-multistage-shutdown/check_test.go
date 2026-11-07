@@ -190,7 +190,12 @@ func TestDoneWaitsForInFlightProcessCall(t *testing.T) {
 		<-proceed
 	})
 
-	jobs <- 0
+	select {
+	case jobs <- 0:
+	case <-time.After(2 * time.Second):
+		close(proceed)
+		t.Fatal("timed out submitting the job - start returned without a worker receiving from jobs")
+	}
 
 	select {
 	case <-started:

@@ -24,16 +24,11 @@ goal: 10 map goroutines, then 1 reduce goroutine       ~30ms wall clock
   chunk9 ─30ms─▶ local map9 ─┘
 ```
 
-Your task is to reimplement `WordCount` as true map-reduce: spawn one
-goroutine per chunk (the "map" phase) that tokenizes its own chunk
-into its own local `map[string]int` (after `time.Sleep(ProcessDelay)`,
-simulating the per-chunk cost), with no shared mutable state touched
-during this phase. Then, once all map-phase goroutines have finished
-(a `sync.WaitGroup`, or fanning the partials in over a channel of
-maps, both work), a single "reduce" step merges every partial map into
-one final result sequentially, on one goroutine, so no concurrent
-writes to the final map are ever needed. The function signature must
-stay the same:
+Your task is to reimplement `WordCount` as true map-reduce. Chunk work
+must overlap, and the map phase must not mutate one shared result map
+concurrently. The reduce phase starts only after every map result is
+available, then merges those results without racing the final map.
+Keep the signature the same:
 
 ```go
 func WordCount(chunks []string) map[string]int

@@ -12,26 +12,23 @@ import (
 	"time"
 )
 
-// numShards mirrors the shard count the reference solution's header
-// comment suggests (const numShards = 16 in main.go). It's only used
-// here, alongside referenceShard below, to pick two keys that are
-// guaranteed to land in different shards under the documented
-// sharding scheme.
-const numShards = 16
+// referenceNumShards mirrors the shard count the exercise documents.
+// The reference prefix avoids colliding with a solver's own numShards.
+const referenceNumShards = 16
 
 // referenceShard reproduces the exact sharding formula documented in
 // main.go's header comment (shard by the key's first byte, mod
-// numShards). It exists purely so this test file can demonstrate, by
-// direct computation, that keyA and keyB below land in different
-// shards under that scheme - it is not used to inspect the solver's
-// actual Cache internals in any way.
+// referenceNumShards). It exists purely so this test file can
+// demonstrate, by direct computation, that keyA and keyB below land
+// in different shards under that scheme - it is not used to inspect
+// the solver's actual Cache internals in any way.
 func referenceShard(key string) int {
-	return int(key[0]) % numShards
+	return int(key[0]) % referenceNumShards
 }
 
 // keyA and keyB are two literal keys chosen so that, under the
-// documented sharding formula (first byte mod numShards), they land
-// in different shards:
+// documented sharding formula (first byte mod referenceNumShards),
+// they land in different shards:
 //
 //	keyA = "apple-key"  -> first byte 'a' (97), 97 % 16 = shard 1
 //	keyB = "banana-key" -> first byte 'b' (98), 98 % 16 = shard 2
@@ -86,6 +83,11 @@ func TestCacheCorrectness(t *testing.T) {
 	if got != want {
 		t.Errorf(`cache.Do("sum", ...) final value = %d, want %d`, got, want)
 	}
+
+	got = cache.Do("", func(cur int) int { return cur + 7 })
+	if got != 7 {
+		t.Errorf(`cache.Do("", ...) = %d, want 7 (empty keys must not panic while choosing a shard)`, got)
+	}
 }
 
 // TestCacheSameKeySerializesCorrectly launches many goroutines that
@@ -132,27 +134,26 @@ func TestCacheSameKeySerializesCorrectly(t *testing.T) {
 // (slowWork is 4x the budget on either side of the pass/fail line),
 // so the assertion is not flaky in practice.
 func TestCacheDifferentKeysDontBlockEachOther(t *testing.T) {
-	const (
-		slowWork = 200 * time.Millisecond
-		startGap = 20 * time.Millisecond
-		budget   = 50 * time.Millisecond
-	)
+	const slowWork = 200 * time.Millisecond
+	const budget = 50 * time.Millisecond
 
 	cache := NewCache()
 
+	entered := make(chan struct{})
 	done := make(chan struct{})
 	go func() {
 		defer close(done)
 		cache.Do(keyA, func(cur int) int {
+			close(entered)
 			time.Sleep(slowWork)
 			return cur + 1
 		})
 	}()
 
-	// Give the keyA goroutine a chance to start (and, on a correct
-	// solution, to actually acquire its shard's lock) before we
-	// measure keyB.
-	time.Sleep(startGap)
+	// Wait until keyA's work is running. Do holds the relevant lock
+	// for the whole callback, so this proves keyB's timing starts
+	// after keyA's lock is held instead of relying on a scheduler sleep.
+	<-entered
 
 	start := time.Now()
 	cache.Do(keyB, func(cur int) int { return cur + 1 })

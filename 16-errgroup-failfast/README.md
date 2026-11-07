@@ -11,7 +11,8 @@ calls the given function immediately, on the calling goroutine,
 blocking until it returns - so tasks registered via `Go` run one after
 another instead of concurrently, and the shared "first error" field is
 read and written without any synchronization even though real usage
-always calls `Go` from multiple goroutines racing against `Wait`.
+may call `Go` from multiple goroutines before `Wait`. Start every task
+before calling `Wait`; a `WaitGroup` must not race a new `Add` from zero.
 
 ```
 TODAY (1 goroutine)

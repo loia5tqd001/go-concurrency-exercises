@@ -80,7 +80,7 @@ The channel's own buffer isn't the only way to answer "is there room
 right now?" A second, genuinely different design tracks admitted-but-
 not-yet-finished jobs with an `atomic.Int64` and a
 `CompareAndSwap`-based admission check — the same idiom
-[38](../38-flash-sale-inventory) teaches for check-then-act races on a
+[38](../38-settle-once) teaches for check-then-act races on a
 plain counter:
 
 ```go {10,13,24}

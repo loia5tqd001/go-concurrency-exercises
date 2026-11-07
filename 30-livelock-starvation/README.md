@@ -60,8 +60,9 @@ forever, even though the dispatcher is always doing useful work.
 
 **The fix — make it fair:**
 
-- A waiting low-priority job must complete within **10 cycles**, no matter how
-  deep the high-priority backlog is (aging).
+- The oldest waiting low-priority job must complete within **10 cycles**, no
+  matter how deep the high-priority backlog is (aging). With several low
+  jobs, they drain in FIFO order on their aging turns.
 - When both queues stay busy, high-priority work must still take **at least
   two-thirds** of completed cycles.
 

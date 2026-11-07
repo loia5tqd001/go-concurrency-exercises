@@ -29,9 +29,8 @@ type problem struct {
 // (lint warns about entries that match nothing); never add one just to make
 // a new violation pass.
 var exceptions = map[string]string{
-	"test-header 05-session-cleaner":           "check_test.go predates the header; it has uncommitted edits in the owner's checkout",
-	"readme-test-section 01-producer-consumer": "README uses an \"Expected results\" section instead",
-	"browser 04-graceful-sigint":               "the lesson is OS signals; web/ marks it unsupported",
+	"test-header 05-session-cleaner": "check_test.go predates the header; it has uncommitted edits in the owner's checkout",
+	"browser 04-graceful-sigint":     "the lesson is OS signals; web/ marks it unsupported",
 }
 
 // docTestName matches a test function named in prose, like TestFoo or TestFoo_Bar.

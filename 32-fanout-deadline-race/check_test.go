@@ -46,6 +46,27 @@ func TestConstructReturnsAllFieldsWithAmpleDeadline(t *testing.T) {
 	})
 }
 
+// TestConstructAlreadyExpiredContextWins checks deadline precedence
+// when all components complete immediately. A correct implementation
+// must not return a Result from an already-expired context.
+func TestConstructAlreadyExpiredContextWins(t *testing.T) {
+	for i := 0; i < 100; i++ {
+		ctx, cancel := context.WithCancel(context.Background())
+		cancel()
+
+		got, err := Construct(
+			ctx,
+			func() string { return "basic" },
+			func() string { return "shipping" },
+			func() string { return "refund" },
+			func() string { return "history" },
+		)
+		if !errors.Is(err, context.Canceled) || got != nil {
+			t.Fatalf("iteration %d: Construct returned (%+v, %v), want (nil, context.Canceled) for an already-cancelled context", i, got, err)
+		}
+	}
+}
+
 // TestConstructRespectsDeadlineWhenAComponentStalls is the key test.
 // Three components are fast; history takes 500ms and, like every
 // component here, has no ctx parameter at all, so it cannot notice

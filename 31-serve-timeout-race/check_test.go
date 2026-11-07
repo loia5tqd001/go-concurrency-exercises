@@ -115,6 +115,24 @@ func TestServeReturnsHandlerErrorWhenItWinsTheRace(t *testing.T) {
 	})
 }
 
+// TestServeAlreadyExpiredContextWinsEvenWhenHandlerIsInstant checks
+// deadline precedence at entry. Both the deadline and a trivial
+// handler are ready immediately, so a bare select between them can
+// return either result unless the implementation checks ctx first.
+func TestServeAlreadyExpiredContextWinsEvenWhenHandlerIsInstant(t *testing.T) {
+	for i := 0; i < 100; i++ {
+		ctx, cancel := context.WithCancel(context.Background())
+		cancel()
+
+		got, err := Serve(ctx, func() (string, error) {
+			return "too late", nil
+		})
+		if !errors.Is(err, context.Canceled) || got != "" {
+			t.Fatalf("iteration %d: Serve returned (%q, %v), want (\"\", context.Canceled) for an already-cancelled context", i, got, err)
+		}
+	}
+}
+
 // TestServeConcurrentSafety hammers Serve with many concurrent calls,
 // each racing a mock handler against its own deadline, to catch data
 // races (run with `go test -race`).

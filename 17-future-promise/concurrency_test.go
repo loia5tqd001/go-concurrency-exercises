@@ -33,11 +33,13 @@ import (
 // another.
 func TestFutureRunsDifferentKeysConcurrently(t *testing.T) {
 	ResetCallCount()
+	key1 := uniqueTestKey("concurrent-key-1")
+	key2 := uniqueTestKey("concurrent-key-2")
 
 	start := time.Now()
 
-	ch1 := Future("concurrent-key-1")
-	ch2 := Future("concurrent-key-2")
+	ch1 := Future(key1)
+	ch2 := Future(key2)
 
 	<-ch1
 	<-ch2

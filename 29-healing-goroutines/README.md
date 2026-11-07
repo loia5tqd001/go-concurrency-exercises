@@ -58,9 +58,10 @@ function is called with `(done, pulseInterval)`, it must:
 - Start a ward generation by calling `ward(wardDone, pulseInterval)`
   with a fresh, **steward-owned** `wardDone` - never the steward's own
   incoming `done` passed straight through.
-- Forward every pulse the current generation's heartbeat sends onto
-  the steward's own returned heartbeat.
-- Track the time elapsed since the last forwarded pulse. If more than
+- Forward the current generation's heartbeats onto the steward's own
+  returned heartbeat without letting a slow caller stall health checks;
+  coalescing pending pulses is allowed.
+- Track the time elapsed since the last observed pulse. If more than
   `timeout` elapses with no pulse from the current generation, close
   that generation's `wardDone` (telling it to stop - even though a
   truly wedged ward may never actually honor that, so the steward must

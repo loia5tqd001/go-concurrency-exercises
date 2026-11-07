@@ -36,3 +36,10 @@ beertocode      tweets about golang
 vampirewalk666  tweets about golang
 Process took 1.977756255s
 ```
+
+## Test your solution
+
+```
+go test
+go test -race
+```

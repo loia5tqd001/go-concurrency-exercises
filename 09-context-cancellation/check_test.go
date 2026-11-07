@@ -108,8 +108,8 @@ func TestHandleRequestCancelledMidway(t *testing.T) {
 		res := <-resCh
 		elapsed := time.Since(start)
 
-		if res.err == nil {
-			t.Errorf("HandleRequest returned no error after cancellation; want an error")
+		if !errors.Is(res.err, context.Canceled) {
+			t.Errorf("HandleRequest error = %v, want context.Canceled", res.err)
 		}
 
 		const budget = 500 * time.Millisecond

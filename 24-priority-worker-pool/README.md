@@ -34,16 +34,12 @@ goal - priority queue, ties broken by arrival order:
 
 ## Your task
 
-Reimplement `Scheduler` so that it keeps waiting jobs in an internal
-priority queue (`container/heap` is the natural tool) guarded by a
-mutex, instead of a plain channel. Whenever the worker finishes a job
-and needs to pick up the next one, it must take the highest-`Priority`
-job currently in the queue; ties are broken by earliest submission
-time, i.e. FIFO among jobs of equal priority. When the queue is empty
-the worker has to block efficiently - a `sync.Cond`, or a small
-signaling channel, either is fine, as long as it's correct and doesn't
-busy-poll in a tight spin loop - until `Submit` adds something and
-wakes it up.
+Reimplement `Scheduler` so waiting work can be reordered instead of
+remaining trapped in channel arrival order. Whenever the worker is
+ready for another job, it must choose the highest-`Priority` job
+currently waiting; ties go to earliest submission time. Design the
+waiting path so an empty scheduler sleeps without busy-polling and
+`Submit` wakes it safely.
 
 The exported API must stay exactly the same, so `Scheduler` remains a
 drop-in replacement for the version above:

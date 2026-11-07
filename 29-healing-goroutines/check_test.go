@@ -143,6 +143,44 @@ func TestStewardUsesFreshPerGenerationDone(t *testing.T) {
 				)
 			}
 		}
+
+		for i, d := range dones {
+			select {
+			case <-d:
+			default:
+				t.Errorf("generation %d's wardDone is still open after the steward stopped; abandoned and stopped generations must be told to exit", i+1)
+			}
+		}
+	})
+}
+
+// TestStewardKeepsMonitoringWithoutAReader catches the tempting fix
+// that forwards every heartbeat with a blocking send. That version lets
+// a slow caller pause the steward's select loop, so it can no longer
+// observe the ward's timeout and restart a wedged generation.
+func TestStewardKeepsMonitoringWithoutAReader(t *testing.T) {
+	synctest.Test(t, func(t *testing.T) {
+		const (
+			pulseInterval     = 100 * time.Millisecond
+			timeout           = 350 * time.Millisecond
+			pulsesBeforeWedge = 1
+		)
+
+		ward := NewMockWard(pulsesBeforeWedge)
+		steward := NewSteward(timeout, ward.Start)
+
+		done := make(chan struct{})
+		_ = steward(done, pulseInterval)
+
+		// Stay intentionally behind the heartbeat stream. Health checks
+		// must continue even though the caller has not received yet.
+		time.Sleep(2 * timeout)
+		if gens := ward.Generations(); gens < 2 {
+			t.Fatalf("steward started %d ward generation(s) with no heartbeat reader, want at least 2 - forwarding a heartbeat appears to block the monitor loop", gens)
+		}
+
+		close(done)
+		synctest.Wait()
 	})
 }
 
@@ -194,6 +232,16 @@ func TestStewardStopsOnDone(t *testing.T) {
 
 		close(done)
 		synctest.Wait()
+
+		dones := ward.Dones()
+		if len(dones) != 1 {
+			t.Fatalf("expected 1 recorded generation, got %d", len(dones))
+		}
+		select {
+		case <-dones[0]:
+		default:
+			t.Error("active generation's wardDone is still open after the steward's own done closed")
+		}
 
 		// No further pulses should ever arrive once done is closed.
 		select {

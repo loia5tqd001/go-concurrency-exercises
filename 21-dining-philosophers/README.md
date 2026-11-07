@@ -36,6 +36,9 @@ The function signature must stay the same:
 func Dine(numPhilosophers, mealsToEat int) (totalMealsEaten int32)
 ```
 
+`numPhilosophers` is at least 2; with one philosopher there is no
+distinct pair of adjacent forks to acquire.
+
 Note: because of the fork-ordering bug, running `go run .` directly
 will, in practice, hang forever essentially every time. That's the bug
 this exercise is about - the graded artifact is the test suite, which

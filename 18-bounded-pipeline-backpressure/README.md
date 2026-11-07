@@ -44,9 +44,8 @@ Goal: a bounded channel makes the producer wait on the consumer
   the next  ch <- produce(i)  blocks until consume() drains one.
 ```
 
-Start a goroutine that produces items and sends them on the channel,
-closing the channel once it's done, while the consumer ranges over the
-channel calling `consume` for each item it receives. The function
+Decide how the producer, consumer, and shutdown signal coordinate so
+no send is left blocked and no work is silently dropped. The function
 signature must stay the same:
 
 ```go

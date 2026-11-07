@@ -34,6 +34,8 @@ the key's first byte:
 shardIndex := int(key[0]) % numShards
 ```
 
+An empty key has no first byte; map it to shard 0 rather than panicking.
+
 The signature must stay the same, so `Cache` remains a drop-in
 replacement:
 

@@ -62,6 +62,13 @@ func (p *Pool) Close() {
 	p.wg.Wait()
 	close(p.jobs)
 }
+
+func (p *Pool) worker() {
+	for job := range p.jobs {
+		job()
+		p.wg.Done()
+	}
+}
 ```
 
 ```
@@ -93,6 +100,9 @@ Close:              Lock() ◀── blocks until EVERY RLock above is released
   but correctness of "returns only once every job has *finished*", not
   merely dequeued. `Add` happens inside the same critical section as
   the send, so it always happens-before any possible `Wait`.
+- **Every accepted job has one matching `wg.Done()` after it finishes.**
+  Without that call in `worker`, the supposedly verified fix blocks in
+  `Close` forever.
 
 **Verified** clean, repeatedly: `go test -count=20 .` and
 `go test -race -count=20 .`, both 20/20.

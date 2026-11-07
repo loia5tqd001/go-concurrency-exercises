@@ -93,6 +93,29 @@ func TestDispatcherLowPriorityBoundedWait(t *testing.T) {
 	t.Fatalf("low-priority job wasn't serviced within %d cycles despite a %d-job high-priority backlog", maxLowWaitCycles, highBacklog)
 }
 
+// TestDispatcherLowPriorityQueueKeepsFIFOOrder makes sure the aging
+// guarantee applies to the oldest low-priority job even when several
+// low-priority jobs are waiting behind the same high-priority backlog.
+func TestDispatcherLowPriorityQueueKeepsFIFOOrder(t *testing.T) {
+	d := NewDispatcher()
+
+	const highBacklog = maxLowWaitCycles * 100
+	for i := 0; i < highBacklog; i++ {
+		d.SubmitHighPriority(i)
+	}
+	for i := 0; i < 5; i++ {
+		d.SubmitLowPriority(i)
+	}
+
+	for cycle := 1; cycle <= maxLowWaitCycles; cycle++ {
+		_, lowCompleted := d.RunDispatchCycles(1)
+		if lowCompleted == 1 {
+			return
+		}
+	}
+	t.Fatalf("none of the queued low-priority jobs was serviced within %d cycles", maxLowWaitCycles)
+}
+
 // TestDispatcherHighPriorityKeepsMajorityShare checks fairness from the
 // other direction: with BOTH queues kept busy for the whole run, high-priority
 // work must still take at least two-thirds of completed cycles. This is what

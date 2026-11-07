@@ -62,29 +62,20 @@ import (
 	"time"
 )
 
-// numShardsRef is deliberately not named numShards: check_test.go
-// (which lives in the same package) already declares its own
-// package-level const numShards = 16, purely so it can compute
-// reference shard indices for keyA/keyB - see its referenceShard
-// helper. Reusing that identifier here would be a redeclared-in-this-
-// block compile error, so the solution's own shard count gets a
-// distinct name instead. The *value* still has to be 16 and the
-// formula still has to be int(key[0]) % N for the test's own
-// pre-computed keyA/keyB shard assignment to line up with this code's.
-const numShardsRef = 16
+const numShards = 16
 
 type shard struct {
 	mu   sync.Mutex
 	data map[string]int
 }
 
-// Cache is a key-value store sharded into numShardsRef independent
+// Cache is a key-value store sharded into numShards independent
 // shards, each guarded by its own mutex, so operations on keys in
 // different shards can proceed with true parallelism while operations
 // on the same key remain correctly serialized through that key's
 // shard lock.
 type Cache struct {
-	shards [numShardsRef]*shard
+	shards [numShards]*shard
 }
 
 // NewCache creates an empty Cache.
@@ -97,13 +88,13 @@ func NewCache() *Cache {
 }
 
 // shardFor picks the shard responsible for key, using the key's first
-// byte mod numShardsRef. Empty keys are not expected by this exercise,
+// byte mod numShards. Empty keys are not expected by this exercise,
 // but are mapped to shard 0 rather than panicking.
 func (c *Cache) shardFor(key string) *shard {
 	if len(key) == 0 {
 		return c.shards[0]
 	}
-	idx := int(key[0]) % numShardsRef
+	idx := int(key[0]) % numShards
 	return c.shards[idx]
 }
 
@@ -153,7 +144,7 @@ func main() {
 
 Design notes:
 
-- **The shard count constant is named `numShardsRef`, not `numShards`.** `check_test.go` (same package) already declares its own package-level `const numShards = 16` purely so it can compute reference shard indices for `keyA`/`keyB` via its `referenceShard` helper. Naming the solution's own constant `numShards` too would be a `numShards redeclared in this block` compile error the moment `main.go` and `check_test.go` are compiled together - so the value (16) and the formula (`int(key[0]) % N`) both have to match the test's assumptions, but the identifier itself has to be different.
+- **The test keeps its own `referenceNumShards` constant.** That avoids a same-package name collision while leaving solvers free to use the natural `numShards` identifier shown in the exercise.
 - **`shardFor` reproduces the exact formula the exercise pins down**, `int(key[0]) % 16`, and `check_test.go` relies on this precisely: it picks `keyA = "apple-key"` (first byte `'a'` = 97, `97 % 16 = 1`) and `keyB = "banana-key"` (first byte `'b'` = 98, `98 % 16 = 2`) specifically because they land in *different* shards under this formula. The test even has its own `init()` that panics at test-setup time if `keyA` and `keyB` ever computed to the same shard, so this isn't an incidental detail — any solution has to shard by first byte mod 16 (or something that happens to agree with it on these two keys) for `TestCacheDifferentKeysDontBlockEachOther` to mean what it's supposed to mean.
 - **Each shard owns both its own mutex and its own sub-map** (`type shard struct { mu sync.Mutex; data map[string]int }`), never a shared map behind per-key locks. That keeps the design simple: locking shard `i` is both necessary and sufficient to safely read/write any key that hashes to shard `i`, with no cross-shard bookkeeping required.
 - **`Do`'s critical section is exactly the same shape as the naive version's** — lock, read, call `work`, write, unlock — just scoped to one shard's lock instead of one global lock. The fix here is purely about **where** the lock boundary is drawn (per-shard vs. global), not about shrinking what's inside it; `work` still runs while holding a lock, which is required for the same-key serialization guarantee.

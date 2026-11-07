@@ -66,19 +66,12 @@ a blocking getter, is the more idiomatic shape, and it's what you'll
 see in real Go code (worker results, fan-in stages, `context.Done()`)
 far more often than a hand-rolled `Future` class.
 
-The other half of this exercise - "many concurrent callers, one
-computation, cached forever" - has a well-known idiomatic Go answer
-too: it's exactly what [`sync.OnceValue`](https://pkg.go.dev/sync#OnceValue)
-is for (compute a value exactly once, safely share it across any
-number of concurrent callers, cache the result forever), combined with
-a small mutex-guarded map to pick the right memoized computation for
-each `key`. If you get stuck, that's the pair of building blocks to
-reach for. The production-grade version of this whole pattern - dedupe
-concurrent identical work by key, without necessarily caching forever
-- already exists in the wild as
-[`golang.org/x/sync/singleflight`](https://pkg.go.dev/golang.org/x/sync/singleflight);
-worth knowing about even though this exercise has you build a tiny
-piece of it by hand.
+The hard part is coordinating two lifetimes at once: the in-flight
+computation is shared while callers overlap, then its result is cached
+for every later caller. Work out how to keep those transitions safe
+without serializing unrelated keys. The worked solution compares the
+standard-library building blocks and the production pattern after you
+have tried your own design.
 
 ## Test your solution
 

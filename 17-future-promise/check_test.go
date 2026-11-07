@@ -7,12 +7,22 @@
 package main
 
 import (
+	"fmt"
 	"hash/fnv"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"testing/synctest"
 	"time"
 )
+
+var testKeySeq atomic.Uint64
+
+// uniqueTestKey keeps -count=N runs isolated even though a correct Future
+// caches values for the life of the test binary.
+func uniqueTestKey(prefix string) string {
+	return fmt.Sprintf("%s-%d", prefix, testKeySeq.Add(1))
+}
 
 // expectedResult mirrors the (deterministic) result-generation logic
 // in ComputeExpensive, without paying for the simulated latency, so
@@ -32,9 +42,10 @@ func expectedResult(key string) int {
 func TestFutureReturnsImmediately(t *testing.T) {
 	synctest.Test(t, func(t *testing.T) {
 		ResetCallCount()
+		key := uniqueTestKey("k1")
 
 		start := time.Now()
-		ch := Future("k1")
+		ch := Future(key)
 		elapsed := time.Since(start)
 
 		if elapsed >= 10*time.Millisecond {
@@ -53,11 +64,12 @@ func TestFutureReturnsImmediately(t *testing.T) {
 // would directly produce for the same key.
 func TestFutureReturnsCorrectResult(t *testing.T) {
 	ResetCallCount()
+	key := uniqueTestKey("k2")
 
-	got := <-Future("k2")
+	got := <-Future(key)
 
-	if want := expectedResult("k2"); got != want {
-		t.Errorf(`Future("k2") delivered %d, want %d`, got, want)
+	if want := expectedResult(key); got != want {
+		t.Errorf("Future(%q) delivered %d, want %d", key, got, want)
 	}
 }
 
@@ -72,6 +84,7 @@ func TestFutureDedupesConcurrentCallers(t *testing.T) {
 	ResetCallCount()
 
 	const callers = 20
+	key := uniqueTestKey("k3")
 
 	results := make([]int, callers)
 
@@ -81,12 +94,12 @@ func TestFutureDedupesConcurrentCallers(t *testing.T) {
 
 		go func() {
 			defer wg.Done()
-			results[i] = <-Future("k3")
+			results[i] = <-Future(key)
 		}()
 	}
 	wg.Wait()
 
-	want := expectedResult("k3")
+	want := expectedResult(key)
 	for i, got := range results {
 		if got != want {
 			t.Errorf("results[%d] = %d, want %d (all callers must observe the same result)", i, got, want)
@@ -94,7 +107,7 @@ func TestFutureDedupesConcurrentCallers(t *testing.T) {
 	}
 
 	if cc := CallCount(); cc != 1 {
-		t.Errorf("ComputeExpensive ran %d times across %d concurrent Future(\"k3\") callers, want exactly 1", cc, callers)
+		t.Errorf("ComputeExpensive ran %d times across %d concurrent Future(%q) callers, want exactly 1", cc, callers, key)
 	}
 }
 
@@ -108,23 +121,24 @@ func TestFutureDedupesConcurrentCallers(t *testing.T) {
 func TestFutureCachesAfterCompletion(t *testing.T) {
 	synctest.Test(t, func(t *testing.T) {
 		ResetCallCount()
+		key := uniqueTestKey("k4")
 
-		<-Future("k4")
+		<-Future(key)
 
 		start := time.Now()
-		got := <-Future("k4")
+		got := <-Future(key)
 		elapsed := time.Since(start)
 
 		if elapsed >= 10*time.Millisecond {
-			t.Errorf(`second Future("k4") call took %s, want near-instant since the result should already be cached`, elapsed)
+			t.Errorf("second Future(%q) call took %s, want near-instant since the result should already be cached", key, elapsed)
 		}
 
-		if want := expectedResult("k4"); got != want {
-			t.Errorf(`second Future("k4") call delivered %d, want %d`, got, want)
+		if want := expectedResult(key); got != want {
+			t.Errorf("second Future(%q) call delivered %d, want %d", key, got, want)
 		}
 
 		if cc := CallCount(); cc != 1 {
-			t.Errorf("ComputeExpensive ran %d times across two sequential Future(\"k4\") calls, want exactly 1", cc)
+			t.Errorf("ComputeExpensive ran %d times across two sequential Future(%q) calls, want exactly 1", cc, key)
 		}
 	})
 }

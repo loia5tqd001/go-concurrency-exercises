@@ -105,37 +105,89 @@ func orDone[T any](done <-chan struct{}, c <-chan T) <-chan T {
 	return out
 }
 
+type outputQueue struct {
+	mu     sync.Mutex
+	cond   *sync.Cond
+	values []int
+	closed bool
+}
+
+func newOutputQueue() *outputQueue {
+	q := &outputQueue{}
+	q.cond = sync.NewCond(&q.mu)
+	return q
+}
+
+func (q *outputQueue) push(value int) {
+	q.mu.Lock()
+	q.values = append(q.values, value)
+	q.cond.Signal()
+	q.mu.Unlock()
+}
+
+func (q *outputQueue) close() {
+	q.mu.Lock()
+	q.closed = true
+	q.cond.Broadcast()
+	q.mu.Unlock()
+}
+
+func (q *outputQueue) next() (int, bool) {
+	q.mu.Lock()
+	defer q.mu.Unlock()
+	for len(q.values) == 0 && !q.closed {
+		q.cond.Wait()
+	}
+	if len(q.values) == 0 {
+		return 0, false
+	}
+	value := q.values[0]
+	q.values[0] = 0
+	q.values = q.values[1:]
+	return value, true
+}
+
+func forwardOutput(done <-chan struct{}, out chan<- int, q *outputQueue) {
+	defer close(out)
+	for {
+		value, ok := q.next()
+		if !ok {
+			return
+		}
+		select {
+		case out <- value:
+		case <-done:
+			return
+		}
+	}
+}
+
 // Tee duplicates every value read from `in` onto two independent
-// output channels. If done fires, both outputs close right away.
-// Otherwise, each output closes on its own the moment every value has
-// reached it, independent of how far behind the other one is.
+// output channels. Each output has its own FIFO queue and forwarder,
+// so either output can close without waiting for the other consumer.
 func Tee(done <-chan struct{}, in <-chan int) (<-chan int, <-chan int) {
 	out := make([]chan int, 2)
-	wgs := make([]sync.WaitGroup, 2)
-
+	queues := make([]*outputQueue, 2)
 	for i := range out {
 		out[i] = make(chan int)
+		queues[i] = newOutputQueue()
+		go forwardOutput(done, out[i], queues[i])
 	}
 
 	go func() {
-		for value := range orDone(done, in) {
-			for i := range out {
-				wgs[i].Go(func() {
-					select {
-					case <-done:
-					case out[i] <- value:
-					}
-				})
+		defer queues[0].close()
+		defer queues[1].close()
+		for {
+			select {
+			case <-done:
+				return
+			case value, ok := <-in:
+				if !ok {
+					return
+				}
+				queues[0].push(value)
+				queues[1].push(value)
 			}
-		}
-		// Runs unconditionally, whether `in` closed or `done` fired.
-		// Each output closes as soon as ITS OWN backlog (wgs[i]) is
-		// done - out[0] doesn't wait on out[1], or vice versa.
-		for i := range out {
-			go func(i int) {
-				wgs[i].Wait()
-				close(out[i])
-			}(i)
 		}
 	}()
 
@@ -145,28 +197,18 @@ func Tee(done <-chan struct{}, in <-chan int) (<-chan int, <-chan int) {
 
 Design notes:
 
-- **One `sync.WaitGroup` per output (`wgs[i]`), not one shared for both.** Every value spawns one fan-out goroutine per output via `wgs[i].Go(...)`, so `wgs[i]` only ever reaches zero once every value has actually been delivered (or abandoned via `done`) to `out[i]` specifically — no dependency on `out[1-i]`'s progress.
-- **A dedicated closer goroutine per output.** Splitting `wgs[i].Wait(); close(out[i])` into two independent goroutines (one per index) is what lets `out[0]` close without waiting on `out[1]`'s closer to also be ready, and vice versa.
-- **`orDone(done, in)` folds `done`-handling into the outer loop**, so the closer-spawning code after the loop runs unconditionally whether `in` was exhausted or `done` fired — no separate code path needed, and no risk of a bare `return` on a `done` case accidentally skipping the closers.
-- **The per-value select still checks `done`** inside each `wgs[i].Go` goroutine, so a value stuck waiting on a stalled consumer doesn't block that goroutine (and thus `wgs[i].Wait()`) forever past shutdown.
-- **One goroutine per value, per output, launched independently** is the piece the given starting code doesn't have: because every value's delivery to `out[i]` runs in its own goroutine rather than sharing one sequential per-value loop, one output's goroutines can all complete — whether or not the other output has been read at all — while the other output's goroutines sit blocked on their own sends. That's what lets `TestTeeClosesEachOutputAsSoonAsItIsFullyDelivered` pass.
+- **One long-lived forwarder per output.** The reader only appends to each output's FIFO; it never waits for either consumer. This keeps delivery to one output independent from a slow or silent consumer on the other.
+- **Ordering is structural.** Every output has one queue and one forwarder, so values reach that output in push order. It does not depend on separate goroutines racing to send to the same channel.
+- **Each output owns its close.** Closing its queue makes its forwarder drain the remaining FIFO and close the output. The other output is unaffected.
+- **`done` has one cleanup path.** The reader's deferred queue closes wake both forwarders even when cancellation happens before `in` is exhausted, and each blocked send also selects on `done`.
 
-**Verified** in a scratch copy of `14b-tee-channel-independent-close/`: the given starting code passes the baseline and no-fixed-order tests but fails `TestTeeClosesEachOutputAsSoonAsItIsFullyDelivered` exactly as described above; this fix passes the full six-test suite consistently under `go test -race -count=20 ./...`, with `go vet ./...` clean.
+The tradeoff is that a silent consumer can make its queue grow without bound. The exercise's bounded test stream makes that acceptable here; a production stream with unbounded producers would need a byte/item limit or backpressure policy.
 
-One caveat that applies regardless of which `Tee` implementation is used: `TestTeeStopsOnDoneRace` runs on the real clock (not wrapped in `synctest`), and its shutdown moment has an inherent, extremely rare timing race — `close(done)` firing and a per-value fan-out goroutine's `select { case <-done: ; case out[i] <- value: }` becoming ready to send can coincide, and Go's `select` breaks that tie arbitrarily. This is inherent to the exercise's real-clock shutdown test, not a defect in this fix.
-
-## Alternative: one long-lived forwarder per output instead of one goroutine per value
-
-The fix above spawns a fresh goroutine per value, per output (`wgs[i].Go(...)`), and never waits between values — `out[0]`'s and `out[1]`'s goroutines for value N and value N+1 are all in flight independently. That buys simplicity at a real cost: for a producer that outpaces its slowest consumer, goroutines and parked values pile up unboundedly (a silent `out2` consumer against `StartSensor(50)` leaves up to 50 goroutines blocked on `out[1] <- value`), and per-value ordering is no longer structural — it holds here only because two goroutines racing for the *same* channel's send queue resolve in launch order in practice, reinforced by `StartSensor`'s 5ms pacing giving each value ample time to be picked up before the next one is spawned. (Verified empirically: `go test -race -count=20` against this fix shows no ordering failures — the hazard is real in principle, not observed in practice at this pacing.)
-
-The alternative is **one long-lived forwarder goroutine per output**, each draining its own explicit FIFO queue (a slice plus a `sync.Cond`, or a channel-based queue) that the reader goroutine appends to. Each forwarder pulls from its own queue in order and closes its own output once the reader has finished *and* its queue has drained — bounded to exactly 2 extra goroutines total instead of one per value, and ordering is structural (a FIFO queue can't reorder) rather than an artifact of scheduling. The cost is real: you now have to write and reason about the queue/signal machinery yourself instead of leaning on one `sync.WaitGroup` per output.
-
-Neither design is wrong; which one to prefer depends on what you know about the workload. This exercise's fix takes the `wgs[i].Go` approach because the sensor here is small and bounded — but a producer with no upper bound on how far ahead of a stalled consumer it can run is exactly the case where the forwarder-queue design's bounded-goroutine, structural-ordering guarantees earn their extra complexity.
+**Verified** in a scratch copy of `14b-tee-channel-independent-close/`: the scaffold fails `TestTeeClosesEachOutputAsSoonAsItIsFullyDelivered`; this FIFO-forwarder version passes the full six-test suite under `go test -race -count=20 ./...`, with `go vet ./...` clean.
 
 ## Key takeaways
 
-- A single goroutine that holds each value until *every* output has received it, one value at a time, is a complete and correct answer to "duplicate to both outputs, in no fixed order" — but it is fundamentally the wrong shape for "let each output close independently, however far apart the consumers are." No amount of rearranging that goroutine's closing logic fixes this; the delivery model itself has to change to one goroutine per value *per output*.
-- Closing is a separate concern from delivery, and it needs its own independence: track completion **per output** (one `sync.WaitGroup` each) and give each output its own closer goroutine.
-- `done` must be checked in the innermost per-value send, not just an outer receive loop — otherwise a value stuck waiting on a stalled consumer can hang that delivery (and its output's closer) forever past shutdown.
-- Folding `done` into the same loop that reads `in` (via `orDone` or equivalent) means "input exhausted" and "cancelled early" reach the same cleanup code, so nothing after the loop gets silently skipped on the `done` path.
-- When a test suite has multiple layers of strictness, expect a partially-correct-but-structurally-limited implementation to pass everything up to the layer its architecture can't support, then fail cleanly (if slowly/hangily) at exactly that layer — that's a precise diagnostic signal, not a sign something else is subtly broken.
+- One goroutine that waits for both consumers before moving to the next value cannot let the outputs close independently.
+- Give each output its own FIFO and forwarder when independent progress and ordering both matter.
+- Keep shutdown in the delivery select and make cleanup close every queue.
+- A passing paced test does not prove ordering if the implementation relies on goroutine scheduling.
