@@ -8,28 +8,22 @@ import (
 	"time"
 )
 
-// CallLatency is how long a single call to Call takes. It stands in
-// for whatever slow backend work a real call would do (a database
-// query, an upstream RPC, a cache-cold lookup, ...).
+// CallLatency is the delay for one backend call.
 const CallLatency = 150 * time.Millisecond
 
-// ErrUnavailable is returned by Call for any key with the "err-"
-// prefix, standing in for a backend that's temporarily failing for a
-// particular request.
+// ErrUnavailable is returned for keys that start with "err-".
 var ErrUnavailable = errors.New("backend unavailable")
 
-// callCounts, protected by callCountsMu, lets tests verify how many
-// times the underlying backend actually ran for a given key.
+// callCounts records how often Call ran for each key.
+// callCountsMu protects the map.
 var (
 	callCountsMu sync.Mutex
 	callCounts   = map[string]int{}
 )
 
-// Call simulates a slow backend call for key: it sleeps for
-// CallLatency, then either returns a deterministic, key-derived
-// result, or - for any key starting with "err-" - returns
-// ErrUnavailable instead. Every invocation increments a per-key call
-// counter, regardless of whether it succeeds or fails.
+// Call simulates slow backend work.
+// It counts every call, including failed calls.
+// Keys that start with "err-" return ErrUnavailable.
 func Call(key string) (int, error) {
 	time.Sleep(CallLatency)
 
@@ -47,8 +41,7 @@ func Call(key string) (int, error) {
 	return int(h.Sum64() % 1_000_000), nil
 }
 
-// CallCount returns how many times Call has actually run for key
-// since the last ResetCallCounts.
+// CallCount returns how often Call ran for key.
 func CallCount(key string) int {
 	callCountsMu.Lock()
 	defer callCountsMu.Unlock()
@@ -56,8 +49,7 @@ func CallCount(key string) int {
 	return callCounts[key]
 }
 
-// ResetCallCounts resets every key's call counter. It is a test-only
-// helper for isolating call counts between test cases.
+// ResetCallCounts clears every key's call count.
 func ResetCallCounts() {
 	callCountsMu.Lock()
 	callCounts = map[string]int{}

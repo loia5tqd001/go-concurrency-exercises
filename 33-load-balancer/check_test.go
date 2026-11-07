@@ -12,12 +12,8 @@ import (
 	"time"
 )
 
-// TestBalancerCompletesABurstNoBiggerThanThePool submits exactly as
-// many requests as there are workers, all at once. Every request gets
-// its own worker on the very first round of dispatch, so this passes
-// against the naive implementation too - the bug in this exercise
-// doesn't show up until more requests arrive than there are workers to
-// immediately absorb them.
+// A burst no larger than the pool must complete.
+// This passes even with the broken Balance.
 func TestBalancerCompletesABurstNoBiggerThanThePool(t *testing.T) {
 	const numWorkers = 4
 
@@ -55,20 +51,8 @@ func TestBalancerCompletesABurstNoBiggerThanThePool(t *testing.T) {
 	}
 }
 
-// TestBalancerSurvivesMoreRequestsThanWorkers is the key test. It
-// submits several times more requests than there are workers, so most
-// requests can only be dispatched once an earlier one finishes and its
-// worker reports back - exactly the feedback loop the naive Balance
-// never wires up. Every request must still complete.
-//
-// Against the naive implementation, Balance never receives from
-// b.done, so a Worker's goroutine blocks forever on `done <- w` right
-// after finishing its very first request - meaning it never goes back
-// to receive a second one. As soon as every Worker in the pool has
-// completed one request, the next dispatch's `w.requests <- req`
-// blocks forever too, freezing Balance's entire loop: every request
-// after the first numWorkers never gets so much as dispatched, and
-// this test times out waiting for them.
+// More requests than workers must all complete.
+// The broken Balance blocks after each worker finishes its first job.
 func TestBalancerSurvivesMoreRequestsThanWorkers(t *testing.T) {
 	const numWorkers = 3
 	const numRequests = numWorkers * 4
@@ -132,9 +116,7 @@ func TestBalancerSurvivesMoreRequestsThanWorkers(t *testing.T) {
 	}
 }
 
-// TestBalancerConcurrentSafety hammers the balancer with many
-// concurrent submitters to catch data races in the pool's heap
-// bookkeeping (run with go test -race).
+// Concurrent submitters must not race on heap bookkeeping.
 func TestBalancerConcurrentSafety(t *testing.T) {
 	const numWorkers = 5
 	const numRequests = 100

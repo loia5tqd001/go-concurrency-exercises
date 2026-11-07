@@ -6,21 +6,17 @@ import (
 	"time"
 )
 
-// ProcessingLatency is how long a single call to ProcessImage takes. It
-// stands in for whatever expensive work a real thumbnail generator would
-// do (downloading the image, decoding it, resizing it, ...).
+// ProcessingLatency is the time one image takes to process.
 const ProcessingLatency = 150 * time.Millisecond
 
-// Thumbnail is the result of processing a single image URL.
+// Thumbnail is the result for one image URL.
 type Thumbnail struct {
 	URL  string
 	Data string
 }
 
-// ProcessImage simulates generating a thumbnail for the image at url. It
-// always takes ProcessingLatency to run, and always returns the same
-// (fake) data for the same url, so tests can check correctness without
-// needing a real image pipeline.
+// ProcessImage returns fixed fake data after ProcessingLatency.
+// The same URL always gets the same data.
 func ProcessImage(url string) Thumbnail {
 	time.Sleep(ProcessingLatency)
 

@@ -13,9 +13,7 @@ import (
 	"time"
 )
 
-// TestAcceptedJobsEventuallyComplete is the baseline: under no
-// particular load, every submitted job must be accepted and must
-// eventually complete with the right result.
+// Under light load, every accepted job must complete correctly.
 func TestAcceptedJobsEventuallyComplete(t *testing.T) {
 	const workers = 3
 	const capacity = 30
@@ -51,17 +49,8 @@ func TestAcceptedJobsEventuallyComplete(t *testing.T) {
 	}
 }
 
-// TestSubmitFailsFastWhenQueueIsFull is the key test. It saturates the
-// Queue - fills every worker plus the entire backlog with jobs that
-// won't complete until the test says so - then keeps calling Submit
-// until it observes ErrOverloaded. Two things must hold: no individual
-// Submit call is ever allowed to block for more than a short deadline,
-// and ErrOverloaded must actually be observed once real capacity is
-// exceeded.
-//
-// Against the naive implementation, Submit blocks on the channel send
-// once jobs is full, so the attempt that would need to wait hangs past
-// this test's deadline instead of returning.
+// Fill the workers and backlog with blocked jobs.
+// Submit must return ErrOverloaded without blocking.
 func TestSubmitFailsFastWhenQueueIsFull(t *testing.T) {
 	const workers = 1
 	const capacity = 2
@@ -70,7 +59,7 @@ func TestSubmitFailsFastWhenQueueIsFull(t *testing.T) {
 	q := NewQueue(workers, capacity)
 
 	block := make(chan struct{})
-	defer close(block) // let every blocked Run finish so no goroutine leaks past the test
+	defer close(block) // Let blocked jobs finish.
 
 	submit := func(job Job) (err error, returnedInTime bool) {
 		done := make(chan error, 1)
@@ -84,9 +73,7 @@ func TestSubmitFailsFastWhenQueueIsFull(t *testing.T) {
 	}
 
 	sawOverloaded := false
-	// Generous margin over the true ceiling (capacity + one job in
-	// flight per worker), so this doesn't depend on pinning that exact
-	// bookkeeping.
+	// Use extra attempts so exact capacity bookkeeping is not required.
 	const attempts = capacity + workers + 5
 	for i := 0; i < attempts; i++ {
 		job := Job{
@@ -112,12 +99,8 @@ func TestSubmitFailsFastWhenQueueIsFull(t *testing.T) {
 	}
 }
 
-// TestQueueConcurrentSafety hammers the Queue with many concurrent
-// submitters to catch data races (run with go test -race). Capacity is
-// sized generously relative to the load, so ErrOverloaded is expected
-// to be rare; a submitter retries a few times before giving up, since
-// a transient rejection under heavy concurrent load isn't itself a
-// bug.
+// Concurrent submitters must not race.
+// A submitter may retry a temporary overload.
 func TestQueueConcurrentSafety(t *testing.T) {
 	const workers = 5
 	const capacity = 200

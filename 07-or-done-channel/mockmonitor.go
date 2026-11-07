@@ -2,17 +2,11 @@ package main
 
 import "time"
 
-// MetricInterval is how often StartMetricStream emits a new reading.
+// MetricInterval is the time between metric readings.
 const MetricInterval = 20 * time.Millisecond
 
-// StartMetricStream simulates a monitoring agent emitting one metric
-// reading every MetricInterval, forever, until the caller stops
-// reading. It spawns a goroutine that loops indefinitely - sleep,
-// then send an incrementing counter value on the returned channel -
-// and it never closes that channel on its own. This is how a real
-// long-lived feed (a metrics websocket, a tailed log, a sensor
-// stream) behaves: it has no way to know the consumer stopped
-// listening, so it's on the consumer to stop reading cleanly.
+// StartMetricStream emits a counter forever and never closes its channel.
+// The consumer must stop reading when it no longer needs values.
 func StartMetricStream() <-chan int {
 	out := make(chan int)
 

@@ -12,8 +12,7 @@ import (
 	"time"
 )
 
-// makeSignalChannels returns n fresh, open <-chan struct{} signal
-// channels, none of which have been closed yet.
+// makeSignalChannels returns n open signal channels.
 func makeSignalChannels(n int) []chan struct{} {
 	chans := make([]chan struct{}, n)
 	for i := range chans {
@@ -23,8 +22,7 @@ func makeSignalChannels(n int) []chan struct{} {
 	return chans
 }
 
-// asReadOnly converts a []chan struct{} into the []<-chan struct{}
-// shape or's variadic parameter expects.
+// asReadOnly makes the slice accept read-only channels.
 func asReadOnly(chans []chan struct{}) []<-chan struct{} {
 	ro := make([]<-chan struct{}, len(chans))
 	for i, c := range chans {
@@ -34,18 +32,8 @@ func asReadOnly(chans []chan struct{}) []<-chan struct{} {
 	return ro
 }
 
-// TestOrFiresOnAnyChannel is the key test: it closes a channel in the
-// MIDDLE of the slice (index 3 of 5, not index 0) and asserts that or
-// still unblocks promptly. The naive implementation only ever watches
-// channels[0], which is never closed here, so <-combined would block
-// forever. This test deliberately runs on the REAL clock (not inside
-// synctest.Test) and guards the blocking receive with a select +
-// time.After: inside a synctest bubble, a goroutine that never
-// unblocks makes every goroutine "durably blocked" with no fake time
-// left to advance, which synctest reports as a fatal deadlock panic
-// that would crash the whole test binary rather than failing this
-// test cleanly. A correct implementation watches every channel and
-// unblocks as soon as any one of them closes.
+// TestOrFiresOnAnyChannel closes a channel in the middle of the slice.
+// A real clock and timeout keep a broken version from crashing synctest.
 func TestOrFiresOnAnyChannel(t *testing.T) {
 	chans := makeSignalChannels(5)
 
@@ -71,11 +59,7 @@ func TestOrFiresOnAnyChannel(t *testing.T) {
 	}
 }
 
-// TestOrFiresOnFirstChannel sanity-checks the other direction: closing
-// channels[0] must still make or fire promptly. This is the one case
-// the naive implementation accidentally gets right (it only watches
-// channels[0]), so this test passes both before and after the fix -
-// it just guards against the fix accidentally breaking that case.
+// TestOrFiresOnFirstChannel checks the naive version's only working case.
 func TestOrFiresOnFirstChannel(t *testing.T) {
 	synctest.Test(t, func(t *testing.T) {
 		chans := makeSignalChannels(4)
@@ -96,16 +80,8 @@ func TestOrFiresOnFirstChannel(t *testing.T) {
 	})
 }
 
-// TestOrHandlesManyChannels stress-tests the recursive/many-channel
-// path specifically: with only 2 or 3 input channels, a broken
-// recursive step might still happen to work by accident, but with 20
-// channels the divide-and-conquer recursion has to actually thread
-// every level's select correctly for the signal buried in the middle
-// of the slice to propagate all the way back out. Like
-// TestOrFiresOnAnyChannel above, this runs on the real clock with a
-// select + time.After guard instead of synctest.Test, since the naive
-// implementation hanging forever here would otherwise crash the test
-// binary with a synctest deadlock panic instead of failing cleanly.
+// TestOrHandlesManyChannels checks a signal from the middle of 20 inputs.
+// A real clock and timeout handle a broken implementation cleanly.
 func TestOrHandlesManyChannels(t *testing.T) {
 	const n = 20
 	const closeIndex = 12
@@ -132,10 +108,7 @@ func TestOrHandlesManyChannels(t *testing.T) {
 	}
 }
 
-// TestOrHandlesEdgeCases checks the two boundary cases explicitly:
-// zero input channels (nothing to wait on - the returned channel must
-// never close) and exactly one input channel (a trivial passthrough -
-// closing it must close the returned channel promptly).
+// TestOrHandlesEdgeCases checks zero inputs and one input.
 func TestOrHandlesEdgeCases(t *testing.T) {
 	t.Run("zero channels", func(t *testing.T) {
 		combined := or()
@@ -147,7 +120,7 @@ func TestOrHandlesEdgeCases(t *testing.T) {
 		case <-combined:
 			t.Error("or() with no input channels closed on its own; it should never close")
 		case <-time.After(20 * time.Millisecond):
-			// Expected: nothing to react to, so it never fires.
+			// Expected: there is nothing to close it.
 		}
 	})
 

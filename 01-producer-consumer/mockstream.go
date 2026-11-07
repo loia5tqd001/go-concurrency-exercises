@@ -12,26 +12,23 @@ import (
 	"time"
 )
 
-// GetMockStream is a blackbox function which returns a mock stream for
-// demonstration purposes
+// GetMockStream returns a mock stream for this exercise.
 func GetMockStream() Stream {
 	return Stream{0, mockdata}
 }
 
-// Stream is a mock stream for demonstration purposes, not threadsafe
+// Stream is a mock tweet stream. It is not thread-safe.
 type Stream struct {
 	pos    int
 	tweets []Tweet
 }
 
-// ErrEOF returns on End of File error
+// ErrEOF means the stream has no more tweets.
 var ErrEOF = errors.New("End of File")
 
-// Next returns the next Tweet in the stream, returns EOF error if
-// there are no more tweets
+// Next waits, then returns the next tweet.
+// It returns ErrEOF after the last tweet.
 func (s *Stream) Next() (*Tweet, error) {
-
-	// simulate delay
 	time.Sleep(320 * time.Millisecond)
 	if s.pos >= len(s.tweets) {
 		return &Tweet{}, ErrEOF
@@ -43,15 +40,14 @@ func (s *Stream) Next() (*Tweet, error) {
 	return &tweet, nil
 }
 
-// Tweet defines the simlified representation of a tweet
+// Tweet is a simplified tweet.
 type Tweet struct {
 	Username string
 	Text     string
 }
 
-// IsTalkingAboutGo is a mock process which pretend to be a sophisticated procedure to analyse whether tweet is talking about go or not
+// IsTalkingAboutGo checks whether a tweet mentions Go.
 func (t *Tweet) IsTalkingAboutGo() bool {
-	// simulate delay
 	time.Sleep(330 * time.Millisecond)
 
 	hasGolang := strings.Contains(strings.ToLower(t.Text), "golang")

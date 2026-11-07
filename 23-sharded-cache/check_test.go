@@ -12,23 +12,15 @@ import (
 	"time"
 )
 
-// referenceNumShards mirrors the shard count the exercise documents.
-// The reference prefix avoids colliding with a solver's own numShards.
+// referenceNumShards matches the shard count in the exercise.
 const referenceNumShards = 16
 
-// referenceShard reproduces the exact sharding formula documented in
-// main.go's header comment (shard by the key's first byte, mod
-// referenceNumShards). It exists purely so this test file can
-// demonstrate, by direct computation, that keyA and keyB below land
-// in different shards under that scheme - it is not used to inspect
-// the solver's actual Cache internals in any way.
+// referenceShard follows the documented shard formula.
 func referenceShard(key string) int {
 	return int(key[0]) % referenceNumShards
 }
 
-// keyA and keyB are two literal keys chosen so that, under the
-// documented sharding formula (first byte mod referenceNumShards),
-// they land in different shards:
+// keyA and keyB must land in different shards:
 //
 //	keyA = "apple-key"  -> first byte 'a' (97), 97 % 16 = shard 1
 //	keyB = "banana-key" -> first byte 'b' (98), 98 % 16 = shard 2
@@ -43,26 +35,22 @@ func init() {
 	}
 }
 
-// TestCacheCorrectness runs many sequential Do calls across a handful
-// of keys and checks the final values land where a sequence of plain
-// increments/updates would put them. It makes no assumption about
-// timing or internal sharding, so it passes against both the naive
-// single-mutex Cache and a correctly sharded one.
+// TestCacheCorrectness checks final values for several keys.
 func TestCacheCorrectness(t *testing.T) {
 	cache := NewCache()
 
-	// "counter" gets incremented 100 times.
+	// Increment "counter" 100 times.
 	for i := 0; i < 100; i++ {
 		cache.Do("counter", func(cur int) int { return cur + 1 })
 	}
 
-	// "double" gets set to 1, then doubled 10 times.
+	// Set "double" to 1 and double it 10 times.
 	cache.Do("double", func(cur int) int { return 1 })
 	for i := 0; i < 10; i++ {
 		cache.Do("double", func(cur int) int { return cur * 2 })
 	}
 
-	// "sum" accumulates 1..20.
+	// Add 1 through 20 to "sum".
 	want := 0
 	for i := 1; i <= 20; i++ {
 		want += i
@@ -90,12 +78,8 @@ func TestCacheCorrectness(t *testing.T) {
 	}
 }
 
-// TestCacheSameKeySerializesCorrectly launches many goroutines that
-// all increment the SAME key concurrently. Sharding must never break
-// the guarantee that operations on one key are serialized: if two
-// increments on "shared-key" ever ran concurrently and both read the
-// same "cur" before either wrote back, the final count would come out
-// too low. Run with `go test -race` to also catch any data race.
+// TestCacheSameKeySerializesCorrectly increments one key concurrently.
+// Concurrent updates could read the same value and lose a count.
 func TestCacheSameKeySerializesCorrectly(t *testing.T) {
 	cache := NewCache()
 
@@ -117,22 +101,11 @@ func TestCacheSameKeySerializesCorrectly(t *testing.T) {
 	}
 }
 
-// TestCacheDifferentKeysDontBlockEachOther is the test that actually
-// proves sharding happened. keyA and keyB are chosen (see above) to
-// land in different shards under the documented sharding scheme. One
-// goroutine starts a slow operation on keyA; shortly after, the main
-// test goroutine performs a fast operation on keyB and times it. If
-// the cache still uses one global lock, keyB's call is forced to wait
-// behind keyA's lock hold and takes roughly slowWork. If the keys are
-// sharded independently, keyB's call finishes almost immediately.
-//
-// This uses the real wall clock rather than testing/synctest: a plain
-// sync.Mutex.Lock block (exactly what the naive, un-sharded Cache
-// does) is not a synctest-durable operation, so wrapping this in
-// synctest.Test would deadlock forever against the naive
-// implementation instead of failing fast. The margins here are wide
-// (slowWork is 4x the budget on either side of the pass/fail line),
-// so the assertion is not flaky in practice.
+// TestCacheDifferentKeysDontBlockEachOther checks separate shards.
+// One key runs slow work while another key runs fast work.
+// A global lock would make the fast call wait.
+// A sharded cache would finish it quickly.
+// This test uses real time because synctest ignores mutex waits.
 func TestCacheDifferentKeysDontBlockEachOther(t *testing.T) {
 	const slowWork = 200 * time.Millisecond
 	const budget = 50 * time.Millisecond
@@ -150,9 +123,7 @@ func TestCacheDifferentKeysDontBlockEachOther(t *testing.T) {
 		})
 	}()
 
-	// Wait until keyA's work is running. Do holds the relevant lock
-	// for the whole callback, so this proves keyB's timing starts
-	// after keyA's lock is held instead of relying on a scheduler sleep.
+	// Wait until keyA holds its shard lock.
 	<-entered
 
 	start := time.Now()
@@ -165,9 +136,6 @@ func TestCacheDifferentKeysDontBlockEachOther(t *testing.T) {
 			"but this call appears to have waited behind keyA's %s lock hold", elapsed, budget, slowWork)
 	}
 
-	// Wait for the keyA goroutine to finish so it doesn't outlive the
-	// test (which, under -race, could otherwise produce a confusing
-	// report about a goroutine touching the cache after the test
-	// returns).
+	// Let the slow call finish before the test ends.
 	<-done
 }

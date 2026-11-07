@@ -16,12 +16,8 @@ import (
 	"time"
 )
 
-// helperProcessEnv, when set in the child's environment, tells
-// TestMain to run main() directly instead of the test suite - this
-// same compiled test binary re-executes itself as "the program" so
-// the tests below can send it real OS signals, the way the exercise
-// actually gets exercised (Ctrl-C from a terminal), instead of trying
-// to fake signal delivery in-process.
+// helperProcessEnv makes the test binary run main.
+// This lets tests send real OS signals to the program.
 const helperProcessEnv = "GRACEFUL_SIGINT_HELPER_PROCESS"
 
 func TestMain(m *testing.M) {
@@ -32,9 +28,7 @@ func TestMain(m *testing.M) {
 	os.Exit(m.Run())
 }
 
-// safeBuffer is an io.Writer safe for concurrent use: the child
-// process writes to it from its own OS process (via the pipe backing
-// cmd.Stdout/Stderr), while the test goroutine polls its contents.
+// safeBuffer lets the child and test share output safely.
 type safeBuffer struct {
 	mu  sync.Mutex
 	buf bytes.Buffer
@@ -52,8 +46,7 @@ func (b *safeBuffer) String() string {
 	return b.buf.String()
 }
 
-// child is a running copy of this same test binary, re-executed with
-// helperProcessEnv set so it behaves as the program under test.
+// child is the test binary running as the program.
 type child struct {
 	cmd  *exec.Cmd
 	out  *safeBuffer
@@ -88,12 +81,9 @@ func startChild(t *testing.T) *child {
 	return c
 }
 
-// waitForOutput polls the child's combined stdout/stderr until it
-// contains substr, or fails the test if timeout elapses first. Every
-// substr checked below comes from mockprocess.go (DO NOT EDIT), never
-// from log lines a solution itself chooses to print - so this can
-// only ever prove proc.Run()/proc.Stop() were actually reached, not
-// enforce any particular logging.
+// waitForOutput waits until child output contains substr.
+// The strings come from mockprocess.go, not solution logs.
+// The check proves Run or Stop was reached.
 func waitForOutput(t *testing.T, c *child, substr string, timeout time.Duration) {
 	t.Helper()
 
@@ -108,23 +98,15 @@ func waitForOutput(t *testing.T, c *child, substr string, timeout time.Duration)
 	t.Fatalf("timed out after %s waiting for output containing %q; got:\n%s", timeout, substr, c.out.String())
 }
 
-// TestFirstSigintTriesGracefulStopWithoutExiting sends exactly one
-// SIGINT and checks two things: proc.Stop() actually gets called
-// (mockprocess.go prints "Stopping process.." once inside it), and
-// the program does NOT exit afterwards. The naive scaffold has no
-// signal.Notify at all, so the OS's default SIGINT disposition kills
-// it on this very first signal - it never reaches Stop() and this
-// test fails fast. A solution that calls proc.Stop() synchronously
-// (without keeping main free to keep running) would also be
-// indistinguishable from "still alive" at this point, since the mock's
-// Stop() never returns either way - the second test below is what
-// catches that variant.
+// TestFirstSigintTriesGracefulStopWithoutExiting sends one SIGINT.
+// It checks that Stop runs and the program stays alive.
+// The scaffold dies on the first signal.
+// Calling Stop synchronously fails the next test.
 func TestFirstSigintTriesGracefulStopWithoutExiting(t *testing.T) {
 	c := startChild(t)
 
 	waitForOutput(t, c, "Process running", 10*time.Second)
-	// Give signal.Notify a moment to register before we send anything -
-	// the child only just started the process goroutine.
+	// Wait for signal.Notify to register inside the child.
 	time.Sleep(100 * time.Millisecond)
 
 	if err := c.cmd.Process.Signal(os.Interrupt); err != nil {
@@ -137,18 +119,13 @@ func TestFirstSigintTriesGracefulStopWithoutExiting(t *testing.T) {
 	case <-c.done:
 		t.Fatal("process exited after a single SIGINT; the first signal must only attempt a graceful stop (proc.Stop()), not kill the program")
 	case <-time.After(500 * time.Millisecond):
-		// Still running, as required.
 	}
 }
 
-// TestSecondSigintForcesPromptExit sends a first SIGINT (to start the
-// graceful stop), waits for proc.Stop() to actually be reached, then
-// sends a second SIGINT and requires the program to exit promptly.
-// Since the mock's Stop() never returns, any solution that waits on
-// it synchronously - or that reads only one signal and never listens
-// again - never observes the second SIGINT and hangs forever here,
-// which this test catches via a bounded timeout instead of hanging
-// itself.
+// TestSecondSigintForcesPromptExit sends two SIGINTs.
+// The first starts Stop. The second must end the program.
+// Stop never returns, so main cannot wait for it directly.
+// The timeout makes a broken solution fail fast.
 func TestSecondSigintForcesPromptExit(t *testing.T) {
 	c := startChild(t)
 
@@ -167,7 +144,6 @@ func TestSecondSigintForcesPromptExit(t *testing.T) {
 	const exitTimeout = 5 * time.Second
 	select {
 	case <-c.done:
-		// Exited promptly, as required.
 	case <-time.After(exitTimeout):
 		t.Fatalf("process did not exit within %s of the second SIGINT; a second SIGINT must kill the program as a last resort, even though proc.Stop() never returns", exitTimeout)
 	}

@@ -13,10 +13,7 @@ import (
 	"time"
 )
 
-// recvWithTimeout reads one value from ch, failing the test if nothing
-// arrives within d. It's a hang-safety-net, not the primary assertion:
-// a correct implementation delivers essentially instantly, so d only
-// needs to be generous enough to never flake on a busy machine.
+// recvWithTimeout prevents a broken implementation from hanging the test.
 func recvWithTimeout(t *testing.T, ch <-chan Event, d time.Duration) (Event, bool) {
 	t.Helper()
 
@@ -28,10 +25,7 @@ func recvWithTimeout(t *testing.T, ch <-chan Event, d time.Duration) (Event, boo
 	}
 }
 
-// TestPubSubBasicDelivery checks that two independent subscribers each
-// receive every published event, in order. This passes against the
-// naive implementation too, as long as both subscribers keep reading
-// promptly (which they do here).
+// TestPubSubBasicDelivery checks two subscribers receive all events in order.
 func TestPubSubBasicDelivery(t *testing.T) {
 	bus := NewEventBus()
 
@@ -77,12 +71,8 @@ func TestPubSubBasicDelivery(t *testing.T) {
 	}
 }
 
-// TestUnsubscribeStopsDelivery is the key test proving Unsubscribe
-// works: after a subscriber unsubscribes, it must not receive events
-// published afterwards, while every other subscriber keeps receiving
-// them normally. This does not even compile against the naive
-// starting point (there is no Unsubscribe method yet) - that's
-// expected, since adding it is exactly the missing piece of the task.
+// TestUnsubscribeStopsDelivery checks only events after Unsubscribe are lost.
+// Other subscribers must keep receiving events.
 func TestUnsubscribeStopsDelivery(t *testing.T) {
 	bus := NewEventBus()
 
@@ -116,8 +106,7 @@ func TestUnsubscribeStopsDelivery(t *testing.T) {
 	event2 := Event{Topic: "orders", Data: "2"}
 
 	bus.Publish(event1)
-	// Give both background readers a moment to drain event1 before we
-	// unsubscribe A, so the outcome doesn't depend on scheduling luck.
+	// Let both readers drain event1 before unsubscribing A.
 	time.Sleep(50 * time.Millisecond)
 
 	bus.Unsubscribe(chA)
@@ -145,16 +134,8 @@ func TestUnsubscribeStopsDelivery(t *testing.T) {
 	}
 }
 
-// TestPublishNeverBlocksOnStalledSubscriber is the key non-hanging
-// test. chStalled deliberately is never read from - simulating a dead
-// or stuck subscriber. A correct Publish drops events for a full,
-// unread subscriber channel instead of blocking, so all Publish calls
-// must return promptly regardless of how many events pile up for
-// chStalled. Against the naive implementation, which does a blocking
-// unbuffered send to every subscriber in turn, Publish permanently
-// hangs on the very first send to chStalled - so `done` below never
-// fires and this test times out (an easy-to-spot failure, not a
-// crash).
+// TestPublishNeverBlocksOnStalledSubscriber never reads chStalled.
+// Publish must still finish by dropping events for that subscriber.
 func TestPublishNeverBlocksOnStalledSubscriber(t *testing.T) {
 	bus := NewEventBus()
 
@@ -164,11 +145,11 @@ func TestPublishNeverBlocksOnStalledSubscriber(t *testing.T) {
 
 	go func() {
 		for range chFast {
-			// drain as fast as possible
+			// Drain continuously.
 		}
 	}()
 
-	const numEvents = 20 // more than any reasonable per-subscriber buffer
+	const numEvents = 20 // Larger than any normal subscriber buffer.
 
 	done := make(chan struct{})
 	go func() {
@@ -186,9 +167,7 @@ func TestPublishNeverBlocksOnStalledSubscriber(t *testing.T) {
 	}
 }
 
-// TestPubSubConcurrentAccess hammers Subscribe, Unsubscribe, and
-// Publish from many goroutines at once. It makes no assertions beyond
-// "doesn't panic or race" - run with `go test -race`.
+// TestPubSubConcurrentAccess checks concurrent calls do not race or panic.
 func TestPubSubConcurrentAccess(t *testing.T) {
 	bus := NewEventBus()
 
@@ -210,7 +189,7 @@ func TestPubSubConcurrentAccess(t *testing.T) {
 			defer wg.Done()
 			for j := 0; j < iterations; j++ {
 				ch := bus.Subscribe()
-				// Drain a little so a full buffer doesn't matter here.
+				// Make room in the buffer.
 				select {
 				case <-ch:
 				default:

@@ -57,6 +57,7 @@ Commit only the scaffold, then copy the backup back.
 | `layout` | Every exercise has `README.md`, `main.go`, `check_test.go`, and `solutions/<folder>.md`; exercise folders hold only `.go` files and `README.md`; no orphan solution docs |
 | `gofmt`, `package` | Exercise and tool code is gofmt-clean and in `package main` |
 | `browser` | No `os/exec`, `os/signal`, `os.Pipe`, `runtime.NumCPU`, or `runtime.GOMAXPROCS`; the browser runner cannot support them |
+| `comment-language` | Exercise Go comments use prose sentences of at most 20 words and avoid the hard-word list shared with the Markdown audit |
 | `test-header` | `check_test.go` has the `DO NOT EDIT THIS PART` header |
 | `readme-title`, `readme-test-section`, `readme-diagram` | The README has a title, a "Test your solution" section, and an ASCII diagram |
 | `viz-diagram` | Every visualisation spec's `diagrams` pins name plain fences in its exercise README; the commit gate compares the staged README, so a diagram edit and its spec land together |

@@ -172,7 +172,7 @@ func lint(t *tree) []problem {
 			continue
 		}
 		fset := token.NewFileSet()
-		file, err := parser.ParseFile(fset, f, src, 0)
+		file, err := parser.ParseFile(fset, f, src, parser.ParseComments)
 		if err == nil && strings.HasSuffix(f, "_test.go") {
 			if tests[dir] == nil {
 				tests[dir] = map[string]bool{}
@@ -185,6 +185,9 @@ func lint(t *tree) []problem {
 		}
 		if ownerWIP[f] {
 			continue
+		}
+		if isEx && file != nil {
+			ps = append(ps, commentLanguageProblems(f, fset, file, dir)...)
 		}
 		if formatted, err := format.Source(src); err != nil {
 			add("gofmt", f, f, "does not parse: %v", err)

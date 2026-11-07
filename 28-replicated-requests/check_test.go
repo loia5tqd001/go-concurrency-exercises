@@ -14,19 +14,11 @@ import (
 	"time"
 )
 
-// callTimeout bounds every direct call to FetchFastest made outside a
-// synctest bubble (synctest's own fake-clock deadlock detector already
-// guards the tests above that run inside one). A subtly-wrong fix -
-// e.g. one that closes stop and then waits for every replica goroutine
-// to finish sending on an unbuffered results channel before returning
-// - can leave FetchFastest itself wedged forever; without this guard
-// that turns into Go's default 10-minute test timeout instead of a
-// fast, readable failure.
+// callTimeout limits direct FetchFastest calls.
+// A cancelled replica can still block a broken implementation.
 const callTimeout = 2 * time.Second
 
-// fetchFastestWithTimeout calls FetchFastest in its own goroutine and
-// bounds how long the test waits for it to return, so a wedged
-// FetchFastest fails the test fast instead of hanging it.
+// fetchFastestWithTimeout limits how long FetchFastest may take.
 func fetchFastestWithTimeout(t *testing.T, done <-chan struct{}, replicas ...Replica) (string, error) {
 	t.Helper()
 
@@ -49,16 +41,9 @@ func fetchFastestWithTimeout(t *testing.T, done <-chan struct{}, replicas ...Rep
 	}
 }
 
-// TestFetchFastestReturnsFastestValue checks that FetchFastest returns
-// the value (and lack of error) from the fastest replica, and that it
-// does so in roughly the fastest replica's own latency - not after
-// waiting for the slower ones too. It then uses the mocks'
-// observability hook to check, within a short bound after the winner
-// returned, that every losing replica actually observed its done
-// being closed and exited early - this is what catches the naive bug,
-// since the naive version answers correctly but leaks. Uses
-// testing/synctest's fake clock so both timing assertions are
-// deterministic rather than flaky.
+// TestFetchFastestReturnsFastestValue checks the fastest result.
+// It also checks that every losing replica sees cancellation.
+// The fake clock keeps both timing checks stable.
 func TestFetchFastestReturnsFastestValue(t *testing.T) {
 	synctest.Test(t, func(t *testing.T) {
 		fast := NewMockReplica("fast", 10*time.Millisecond)
@@ -83,9 +68,7 @@ func TestFetchFastestReturnsFastestValue(t *testing.T) {
 				"not the slower replicas' latency too", elapsed)
 		}
 
-		// Give the losers a short moment (in fake time, well short of
-		// even the second-fastest loser's 100ms latency) to react to
-		// losing the race before checking whether they noticed at all.
+		// Give the losers a short fake-time moment to react.
 		time.Sleep(5 * time.Millisecond)
 
 		for _, loser := range []*MockReplica{slow1, slow2, slow3} {
@@ -99,20 +82,12 @@ func TestFetchFastestReturnsFastestValue(t *testing.T) {
 			}
 		}
 
-		// Let any still-leaked goroutine (from a naive implementation
-		// that never cancels its losers) actually run out its
-		// artificial latency and finish before this synctest bubble
-		// closes: synctest requires every goroutine started inside
-		// the bubble to have exited by the time this function
-		// returns, or it panics with a deadlock report.
+		// Let leaked goroutines finish before synctest checks the bubble.
 		time.Sleep(400 * time.Millisecond)
 	})
 }
 
-// TestFetchFastestReturnsWinnerError checks that FetchFastest
-// propagates the winning replica's own error alongside its value,
-// rather than discarding it (e.g. `return res.value, nil` instead of
-// `return res.value, res.err`).
+// TestFetchFastestReturnsWinnerError checks the winning error.
 func TestFetchFastestReturnsWinnerError(t *testing.T) {
 	synctest.Test(t, func(t *testing.T) {
 		wantErr := errors.New("boom")
@@ -131,19 +106,14 @@ func TestFetchFastestReturnsWinnerError(t *testing.T) {
 				"the winner's error must be returned alongside its value, not discarded", err, wantErr)
 		}
 
-		// Give the loser time to react to losing the race before this
-		// synctest bubble closes.
+		// Let the loser react before synctest checks the bubble.
 		time.Sleep(150 * time.Millisecond)
 	})
 }
 
-// TestFetchFastestClosedDoneCancelsEarly checks that passing an
-// already-closed done returns promptly with an error and no winner,
-// without waiting on any replica - and that every in-flight replica is
-// also told to stop in that case, not just when a replica wins the
-// race. This is what catches an implementation that only wires
-// cancellation into the "a replica won" branch of its select and
-// forgets it on the "caller's done fired" branch.
+// TestFetchFastestClosedDoneCancelsEarly checks caller cancellation.
+// It must return an error with no winner.
+// Every replica must also receive cancellation.
 func TestFetchFastestClosedDoneCancelsEarly(t *testing.T) {
 	synctest.Test(t, func(t *testing.T) {
 		r1 := NewMockReplica("a", 50*time.Millisecond)
@@ -167,9 +137,7 @@ func TestFetchFastestClosedDoneCancelsEarly(t *testing.T) {
 			t.Errorf("FetchFastest took %s with an already-closed done, want a near-instant return", elapsed)
 		}
 
-		// Give the replicas a short moment (in fake time, well short of
-		// even the faster one's 50ms latency) to react to the caller's
-		// done firing before checking whether they noticed at all.
+		// Give the replicas a short fake-time moment to react.
 		time.Sleep(5 * time.Millisecond)
 
 		for _, r := range []*MockReplica{r1, r2} {
@@ -183,20 +151,13 @@ func TestFetchFastestClosedDoneCancelsEarly(t *testing.T) {
 			}
 		}
 
-		// Same reasoning as in TestFetchFastestReturnsFastestValue:
-		// give any replica goroutines still running in the background
-		// (naive implementation) time to finish before this synctest
-		// bubble closes, so they don't trip synctest's deadlock check.
+		// Let leaked goroutines finish before synctest checks the bubble.
 		time.Sleep(150 * time.Millisecond)
 	})
 }
 
-// TestFetchFastestNoReplicas checks the degenerate case of calling
-// FetchFastest with no replicas at all. Guarded by
-// fetchFastestWithTimeout: a fix that moves or drops the
-// len(replicas) == 0 early return falls through to a select with zero
-// senders and a done that's never closed - a direct call would hang
-// forever instead of failing fast.
+// TestFetchFastestNoReplicas checks an empty replica list.
+// It must return an error, not wait forever.
 func TestFetchFastestNoReplicas(t *testing.T) {
 	done := make(chan struct{})
 	if _, err := fetchFastestWithTimeout(t, done); err == nil {
@@ -204,13 +165,9 @@ func TestFetchFastestNoReplicas(t *testing.T) {
 	}
 }
 
-// TestFetchFastestConcurrentSafety hammers FetchFastest with many
-// concurrent calls, each racing several mock replicas, to catch data
-// races (run with `go test -race`). The wait below is itself bounded:
-// a subtly-wrong fix can leave one FetchFastest call wedged forever
-// (see callTimeout's doc comment) without necessarily failing any of
-// the synctest-guarded tests above, so wg.Wait() alone would hang this
-// test toward Go's default 10-minute timeout instead of failing fast.
+// TestFetchFastestConcurrentSafety runs many FetchFastest calls at once.
+// Run it with `go test -race`.
+// The final wait is limited because one broken call can hang.
 func TestFetchFastestConcurrentSafety(t *testing.T) {
 	const calls = 20
 

@@ -1,43 +1,18 @@
 //////////////////////////////////////////////////////////////////////
 //
-// Pool is a fixed-size worker pool meant to be safe to submit to from
-// any number of unrelated goroutines, even while it is concurrently
-// being shut down. Picture an HTTP handler submitting a background job
-// on every request: dozens can be in-flight, each calling Submit from
-// its own goroutine, at the exact moment the process starts a
-// graceful shutdown and calls Close.
+// Pool has a fixed number of workers.
+// Submit may run while Close is shutting the pool down.
 //
-// Right now there is ZERO coordination between the two:
+// Submit sends to p.jobs. Close closes p.jobs.
+// A send during Close can panic on a closed channel.
 //
-//   goroutine A: Submit(job) ──▶ p.jobs <- job  ─────┐
-//                                                      ├──▶ race
-//   goroutine B: Close()     ──▶ close(p.jobs)  ─────┘
-//                                                      send on a
-//                                                      closed channel
-//                                                      → PANIC
+// Fix Pool so:
+// - Submit never panics during Close.
+// - accepted=true means the job will run.
+// - accepted=false means the job will not run.
+// - Close waits for every accepted job to finish.
 //
-// Submit sends on that channel unconditionally, and Close closes it
-// with no regard for what's still in flight. If ANY goroutine calls
-// Submit while another runs Close, that send can race the close. This
-// isn't a rare corner case: it's the normal way Submit/Close get
-// called wherever more than one goroutine might reach for the same
-// Pool near shutdown.
-//
-// Your task is to fix Pool so that:
-//
-//   - Submit(job func()) (accepted bool) is safe to call concurrently
-//     with Close, from any number of goroutines, without ever
-//     panicking.
-//   - Submit returns accepted = true and guarantees job WILL run if
-//     it was called before Close finished shutting the pool down;
-//     it returns accepted = false (and never runs job) if the pool
-//     was already closed.
-//   - Close stops accepting new jobs and does not return until every
-//     job that Submit ever reported as accepted has fully finished
-//     running - not merely been handed to a worker, actually
-//     finished.
-//
-// The signatures must stay the same:
+// Keep the signatures:
 //
 //     func NewPool(workers int) *Pool
 //     func (p *Pool) Submit(job func()) (accepted bool)
@@ -51,14 +26,12 @@ import (
 	"sync"
 )
 
-// Pool is a fixed-size pool of worker goroutines that run jobs handed
-// to it via Submit.
+// Pool runs submitted jobs on a fixed set of workers.
 type Pool struct {
 	jobs chan func()
 }
 
-// NewPool starts a pool of `workers` long-lived goroutines that pull
-// jobs off a shared channel and run them, one at a time per worker.
+// NewPool starts workers that read jobs from one shared channel.
 func NewPool(workers int) *Pool {
 	p := &Pool{jobs: make(chan func())}
 
@@ -75,17 +48,14 @@ func (p *Pool) worker() {
 	}
 }
 
-// Submit hands job to a worker to run. It returns whether job was
-// accepted - false means the pool was already closed and job will
-// never run. Submit may be called concurrently, from any number of
-// goroutines, even while Close is running.
+// Submit sends job to a worker.
+// It returns false when the pool is closed.
 func (p *Pool) Submit(job func()) (accepted bool) {
 	p.jobs <- job
 	return true
 }
 
-// Close stops accepting new jobs and blocks until every job that was
-// ever accepted has fully finished running.
+// Close rejects new jobs and waits for accepted jobs to finish.
 func (p *Pool) Close() {
 	close(p.jobs)
 }

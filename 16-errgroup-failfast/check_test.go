@@ -14,13 +14,8 @@ import (
 	"time"
 )
 
-// TestGroupRunsAllTasksToCompletion checks that every task passed to
-// Go actually runs to completion, and that Wait reports a non-nil
-// error when at least one task failed. This is a correctness
-// baseline that already holds for the naive sequential
-// implementation too (it also runs every task, just one at a time) -
-// that's fine, it just confirms the basics before the concurrency
-// and race tests raise the bar.
+// TestGroupRunsAllTasksToCompletion checks every task runs.
+// Wait must return one of the task errors.
 func TestGroupRunsAllTasksToCompletion(t *testing.T) {
 	var g Group
 
@@ -65,13 +60,8 @@ func TestGroupRunsAllTasksToCompletion(t *testing.T) {
 	}
 }
 
-// TestGroupRunsConcurrently is the key test: it asserts that Go
-// actually launches tasks concurrently instead of running them
-// synchronously. Ten tasks that each sleep 100ms take 1s if run one
-// at a time, but well under that if run concurrently. synctest.Test
-// runs the body on a fake clock that jumps forward as soon as every
-// goroutine in the bubble is durably blocked, so this assertion is
-// exact and doesn't flake on a busy machine.
+// TestGroupRunsConcurrently rejects sequential execution.
+// synctest makes the timing check deterministic.
 func TestGroupRunsConcurrently(t *testing.T) {
 	synctest.Test(t, func(t *testing.T) {
 		var g Group
@@ -104,14 +94,8 @@ func TestGroupRunsConcurrently(t *testing.T) {
 	})
 }
 
-// TestGroupFirstErrorRaceSafe stress-tests the "first error wins"
-// bookkeeping with many tasks that all fail immediately (no sleep, so
-// they race to finish and to record their error at roughly the same
-// time). Run with `go test -race` to catch any unsynchronized access
-// to the shared "first error" field. The naive sequential
-// implementation is - by construction - never concurrent, so it
-// won't trip the race detector here; this test guards the concurrent
-// fix, not just the naive bug.
+// TestGroupFirstErrorRaceSafe makes many tasks fail at once.
+// Run with `-race` to check first-error access is safe.
 func TestGroupFirstErrorRaceSafe(t *testing.T) {
 	var g Group
 

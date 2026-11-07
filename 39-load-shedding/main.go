@@ -1,43 +1,16 @@
 //////////////////////////////////////////////////////////////////////
 //
-// Queue is a fixed-size pool of workers processing jobs handed to it
-// via Submit - think an app's telemetry client: every request calls
-// Submit to record a metric, a small background pool aggregates and
-// ships them, and the actual request-handling code must never be
-// slowed down by that bookkeeping.
+// Queue runs jobs on a fixed number of workers.
+// It has a bounded backlog.
 //
-// Right now Submit is a plain blocking send:
+// Submit currently blocks when the backlog and all workers are full.
+// That can slow the code submitting the job.
+// Submit must fail fast instead.
 //
-//	func (q *Queue) Submit(job Job) error {
-//		q.jobs <- job
-//		return nil
-//	}
+// Return ErrOverloaded as soon as there is no room.
+// Hint: select with default tries a send without waiting.
 //
-// jobs is a real bounded channel (capacity capacity), not something
-// that grows without limit - so once it, plus every worker, are all
-// full, this send has nowhere to go:
-//
-//   jobs (cap capacity): FULL, every worker: busy
-//
-//   next Submit(job) ──▶ q.jobs <- job ──▶ blocks... waiting for
-//                          ANYTHING to free up (not a deadlock - the
-//                          workers are still draining - but the
-//                          caller has no idea how long)
-//
-// That's fine for a caller who's SUPPOSED to feel the slowdown. It's
-// not fine here: Submit is on the hot path of whatever's calling it,
-// and every millisecond it blocks is a millisecond that has nothing
-// to do with serving the actual request - it's purely overhead from
-// recording a metric about it.
-//
-// Your task: make Submit fail fast. The instant jobs has no room,
-// Submit must return ErrOverloaded immediately - never block waiting
-// for space to free up.
-//
-// Hint: select+default tries a send once; if nothing's ready this
-// instant, default runs instead of waiting.
-//
-// Keep the exported surface the same:
+// Keep the public API:
 //
 //	func NewQueue(workers, capacity int) *Queue
 //	func (q *Queue) Submit(job Job) error
@@ -53,25 +26,21 @@ import (
 	"time"
 )
 
-// ErrOverloaded is returned by Submit when jobs is full and Queue
-// can't accept any more work right now.
+// ErrOverloaded means the Queue has no room for a job.
 var ErrOverloaded = errors.New("queue: overloaded")
 
-// Job is one unit of work submitted to the Queue: Run is the work
-// itself, and Result is where its return value is delivered.
+// Job contains work and the channel for its result.
 type Job struct {
 	Run    func() int
 	Result chan int
 }
 
-// Queue is a fixed-size pool of workers that run Jobs handed to it
-// via Submit, backed by a bounded backlog.
+// Queue runs Jobs on fixed workers with a bounded backlog.
 type Queue struct {
 	jobs chan Job
 }
 
-// NewQueue starts workers long-lived goroutines, each pulling Jobs off
-// a shared, capacity-bounded channel and running them one at a time.
+// NewQueue starts workers that read Jobs from one bounded channel.
 func NewQueue(workers, capacity int) *Queue {
 	q := &Queue{jobs: make(chan Job, capacity)}
 
@@ -88,10 +57,8 @@ func (q *Queue) worker() {
 	}
 }
 
-// Submit hands job to a worker to run. It returns ErrOverloaded
-// instead of job ever running if the Queue has no room for it right
-// now. Submit may be called concurrently, from any number of
-// goroutines, and must never block the caller.
+// Submit adds job to the queue without blocking.
+// It returns ErrOverloaded when the queue is full.
 func (q *Queue) Submit(job Job) error {
 	q.jobs <- job
 	return nil

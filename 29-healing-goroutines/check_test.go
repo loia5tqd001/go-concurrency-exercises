@@ -12,11 +12,8 @@ import (
 	"time"
 )
 
-// TestStewardRestartsWedgedWard configures a MockWard that wedges
-// after a handful of pulses, and checks that the steward keeps pulses
-// flowing on its own heartbeat well past the point an unsupervised
-// ward would have gone silent - and that it actually did so by
-// starting more than one ward generation, not merely by luck.
+// TestStewardRestartsWedgedWard checks heartbeat recovery.
+// The steward must start more than one ward generation.
 func TestStewardRestartsWedgedWard(t *testing.T) {
 	synctest.Test(t, func(t *testing.T) {
 		const (
@@ -59,14 +56,7 @@ func TestStewardRestartsWedgedWard(t *testing.T) {
 			t.Fatalf("expected the steward to have started more than 1 ward generation, got %d - a restart does not appear to have actually happened", gensAtShutdown)
 		}
 
-		// If the steward were passing its own incoming done straight
-		// through as every generation's wardDone (instead of a fresh,
-		// steward-owned one per generation), closing done above would
-		// look like it stopped everything - but the monitoring loop
-		// would still be alive underneath and would still start a new
-		// generation on the next stall. Wait out a few more timeouts
-		// and confirm no further generation ever gets started once
-		// done has been closed.
+		// Closing done must stop the monitor itself, not one ward only.
 		time.Sleep(5 * timeout)
 		synctest.Wait()
 
@@ -79,18 +69,9 @@ func TestStewardRestartsWedgedWard(t *testing.T) {
 	})
 }
 
-// TestStewardUsesFreshPerGenerationDone checks that each ward
-// generation is started with its own steward-owned wardDone, never
-// the steward's own incoming done passed straight through unchanged.
-//
-// MockWard's wedge is entirely self-triggered by its own pulse
-// counter - it never actually looks at whether its own wardDone was
-// closed - so a steward that has fully correct restart-on-stall logic
-// but reuses the caller's own done as every generation's wardDone
-// would still pass TestStewardRestartsWedgedWard: restarts would
-// still happen right on schedule regardless of what done value each
-// generation received. This test catches that by inspecting the done
-// channel each generation actually received, via MockWard.Dones.
+// TestStewardUsesFreshPerGenerationDone checks each ward's done channel.
+// A reused caller done would still pass the restart test.
+// This test catches that by checking every recorded done.
 func TestStewardUsesFreshPerGenerationDone(t *testing.T) {
 	synctest.Test(t, func(t *testing.T) {
 		const (
@@ -154,10 +135,8 @@ func TestStewardUsesFreshPerGenerationDone(t *testing.T) {
 	})
 }
 
-// TestStewardKeepsMonitoringWithoutAReader catches the tempting fix
-// that forwards every heartbeat with a blocking send. That version lets
-// a slow caller pause the steward's select loop, so it can no longer
-// observe the ward's timeout and restart a wedged generation.
+// TestStewardKeepsMonitoringWithoutAReader checks a slow caller.
+// A blocking heartbeat send must not stop restarts.
 func TestStewardKeepsMonitoringWithoutAReader(t *testing.T) {
 	synctest.Test(t, func(t *testing.T) {
 		const (
@@ -172,8 +151,7 @@ func TestStewardKeepsMonitoringWithoutAReader(t *testing.T) {
 		done := make(chan struct{})
 		_ = steward(done, pulseInterval)
 
-		// Stay intentionally behind the heartbeat stream. Health checks
-		// must continue even though the caller has not received yet.
+		// Do not read heartbeats while the steward monitors.
 		time.Sleep(2 * timeout)
 		if gens := ward.Generations(); gens < 2 {
 			t.Fatalf("steward started %d ward generation(s) with no heartbeat reader, want at least 2 - forwarding a heartbeat appears to block the monitor loop", gens)
@@ -184,13 +162,9 @@ func TestStewardKeepsMonitoringWithoutAReader(t *testing.T) {
 	})
 }
 
-// TestStewardStopsOnDone checks that closing the steward's own done
-// channel stops it from forwarding any further pulses, and that doing
-// so never hangs - even while a ward generation is alive and healthy.
-// Along the way, it also checks that a healthy ward that never stalls
-// is never restarted: a steward that churns generations on some fixed
-// cadence instead of genuinely tracking "time since last pulse" would
-// otherwise slip through undetected.
+// TestStewardStopsOnDone checks shutdown and healthy behavior.
+// Shutdown must not hang.
+// A healthy ward must never restart.
 func TestStewardStopsOnDone(t *testing.T) {
 	synctest.Test(t, func(t *testing.T) {
 		const (
@@ -206,15 +180,8 @@ func TestStewardStopsOnDone(t *testing.T) {
 		done := make(chan struct{})
 		heartbeat := steward(done, pulseInterval)
 
-		// Read enough pulses from a healthy ward to span several
-		// multiples of timeout. A steward that only restarts on an
-		// actual stall must never restart here: every pulse resets
-		// its "time since last pulse" clock, so a continuously
-		// pulsing ward is never judged stalled. A steward that
-		// instead restarts on a fixed cadence regardless of ward
-		// health - rather than genuinely tracking elapsed time since
-		// the last pulse - would already have restarted several
-		// times over by now.
+		// Read well past several timeout windows.
+		// Every pulse should reset the stall timer.
 		for i := 0; i < healthyPulses; i++ {
 			select {
 			case <-heartbeat:
@@ -243,19 +210,15 @@ func TestStewardStopsOnDone(t *testing.T) {
 			t.Error("active generation's wardDone is still open after the steward's own done closed")
 		}
 
-		// No further pulses should ever arrive once done is closed.
+		// No pulse should arrive after done closes.
 		select {
 		case _, ok := <-heartbeat:
 			if ok {
 				t.Fatalf("received a pulse after closing done; steward should have stopped sending")
 			}
-			// A closed heartbeat channel is acceptable too: the
-			// steward is allowed to close it on shutdown, it's just
-			// not required to.
+			// Closing heartbeat on shutdown is allowed but optional.
 		case <-time.After(2 * time.Second):
-			// No pulse and no close within a generous fake-time
-			// window: exactly what we want - the steward went quiet
-			// and stayed quiet.
+			// No pulse and no close is fine too.
 		}
 	})
 }

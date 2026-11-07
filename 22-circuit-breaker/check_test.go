@@ -14,21 +14,12 @@ import (
 	"time"
 )
 
-// guardTimeout bounds every blocking join or Execute call below that a
-// self-deadlocking solution could otherwise hang forever - e.g. a
-// non-reentrant sync.Mutex locked twice on the same goroutine, or a
-// buffered channel used as a semaphore that's never drained back on
-// some code path. Without a guard, that kind of bug turns one broken
-// submission into a 10-minute `go test` timeout with no useful
-// message instead of a fast, clear failure. It's set well above the
-// slowest legitimate wait in this file (the 150ms gateway delay) so it
-// can never mask a real timing assertion.
+// guardTimeout limits a broken solution that blocks forever.
+// It is longer than the slowest normal gateway call.
 const guardTimeout = 5 * time.Second
 
-// executeWithTimeout bounds a call to cb.Execute itself, not just
-// anything it might return - a solution that deadlocks on its own
-// lock while handling this call would otherwise block the calling
-// goroutine forever.
+// executeWithTimeout limits one Execute call.
+// A broken lock can otherwise block this test forever.
 func executeWithTimeout(t *testing.T, cb *CircuitBreaker, amountCents int) error {
 	t.Helper()
 
@@ -44,10 +35,8 @@ func executeWithTimeout(t *testing.T, cb *CircuitBreaker, amountCents int) error
 	}
 }
 
-// waitWithTimeout bounds a sync.WaitGroup.Wait() call. If any
-// goroutine that owes wg.Done() is instead stuck inside a
-// self-deadlocked Execute, a bare wg.Wait() would hang for the rest of
-// the test run - this turns that into a fast, clear failure instead.
+// waitWithTimeout limits wg.Wait().
+// A worker stuck in Execute would otherwise hang the test.
 func waitWithTimeout(t *testing.T, wg *sync.WaitGroup, timeout time.Duration) {
 	t.Helper()
 
@@ -64,10 +53,8 @@ func waitWithTimeout(t *testing.T, wg *sync.WaitGroup, timeout time.Duration) {
 	}
 }
 
-// TestCircuitOpensAfterThreshold checks that the breaker passes
-// failures straight through to the gateway while closed, but trips to
-// Open and starts fail-fasting (without touching the gateway at all)
-// once 5 consecutive failures have been observed.
+// TestCircuitOpensAfterThreshold checks the 5-failure limit.
+// The sixth call must fail fast without using the gateway.
 func TestCircuitOpensAfterThreshold(t *testing.T) {
 	gateway := NewPaymentGateway()
 	cb := NewCircuitBreaker(gateway)
@@ -85,8 +72,7 @@ func TestCircuitOpensAfterThreshold(t *testing.T) {
 		t.Fatalf("expected gateway to have been called 5 times, got %d", got)
 	}
 
-	// The 6th call should now be failed fast by the open breaker,
-	// without ever reaching the gateway.
+	// The open breaker must reject the sixth call.
 	err := cb.Execute(100)
 	if !errors.Is(err, ErrCircuitOpen) {
 		t.Fatalf("expected ErrCircuitOpen on 6th call, got %v", err)
@@ -97,10 +83,8 @@ func TestCircuitOpensAfterThreshold(t *testing.T) {
 	}
 }
 
-// TestCircuitHalfOpenRecovery checks that after the cooldown elapses
-// the breaker allows a trial call through (Half-Open), and that a
-// success there fully recovers the breaker back to Closed rather than
-// leaving it stuck.
+// TestCircuitHalfOpenRecovery checks the cooldown and trial call.
+// A successful trial must close the breaker again.
 func TestCircuitHalfOpenRecovery(t *testing.T) {
 	synctest.Test(t, func(t *testing.T) {
 		gateway := NewPaymentGateway()
@@ -112,23 +96,21 @@ func TestCircuitHalfOpenRecovery(t *testing.T) {
 			_ = cb.Execute(100)
 		}
 
-		// Confirm it's actually open now.
+		// Check that the breaker is open.
 		if err := cb.Execute(100); !errors.Is(err, ErrCircuitOpen) {
 			t.Fatalf("expected breaker to be open, got %v", err)
 		}
 
-		// Gateway recovers, and we wait past the 2s cooldown.
+		// Recover the gateway and pass the cooldown.
 		gateway.SetFailing(false)
 		time.Sleep(2*time.Second + 10*time.Millisecond)
 
-		// The trial (half-open) call should now go through and
-		// succeed, closing the breaker again.
+		// The trial call should succeed and close the breaker.
 		if err := cb.Execute(100); err != nil {
 			t.Fatalf("expected half-open trial call to succeed, got %v", err)
 		}
 
-		// Breaker should be fully closed now, not stuck half-open:
-		// further calls should succeed normally too.
+		// Later calls should also use the gateway.
 		for i := 0; i < 3; i++ {
 			if err := cb.Execute(100); err != nil {
 				t.Fatalf("expected breaker to be closed after recovery, got %v", err)
@@ -137,21 +119,10 @@ func TestCircuitHalfOpenRecovery(t *testing.T) {
 	})
 }
 
-// TestCircuitClosedDoesNotSerializeOnGatewayCall checks that the
-// breaker's own lock isn't held across the (potentially slow) call to
-// the wrapped gateway. If it were, two callers arriving while the
-// circuit is Closed and the gateway happens to be slow would be
-// serialized behind the breaker itself - exactly the kind of
-// bottleneck a circuit breaker is supposed to prevent, not cause.
-//
-// This uses real wall-clock timing rather than testing/synctest:
-// synctest's fake clock only advances once every goroutine in the
-// bubble is "durably blocked", and per its own docs, blocking on a
-// sync.Mutex does NOT count as durably blocked. A buggy
-// lock-held-across-the-call implementation would leave one goroutine
-// merely blocked on cb.mu while the other sleeps inside the bubble,
-// which never satisfies synctest's all-durably-blocked condition -
-// so the test would hang instead of failing.
+// TestCircuitClosedDoesNotSerializeOnGatewayCall checks gateway calls.
+// The breaker must release its lock before a slow gateway call.
+// Otherwise two callers wait in line, and the breaker adds load.
+// This test uses real time because synctest ignores mutex waits.
 func TestCircuitClosedDoesNotSerializeOnGatewayCall(t *testing.T) {
 	gateway := NewPaymentGateway()
 	cb := NewCircuitBreaker(gateway)
@@ -171,25 +142,16 @@ func TestCircuitClosedDoesNotSerializeOnGatewayCall(t *testing.T) {
 	waitWithTimeout(t, &wg, guardTimeout)
 	elapsed := time.Since(start)
 
-	// Run concurrently: ~1x delay. Serialized behind the breaker's own
-	// lock: ~2x delay. The threshold sits well in between.
+	// Concurrent calls take about one delay.
+	// Serialized calls take about two delays.
 	if elapsed >= delay*3/2 {
 		t.Fatalf("two concurrent Closed-state calls took %v (gateway delay %v) - the breaker appears to serialize callers behind its own lock instead of releasing it during the gateway call", elapsed, delay)
 	}
 }
 
-// TestCircuitHalfOpenTrialFailsFastForOthers checks that while the
-// single Half-Open trial call is in flight, a concurrent caller is
-// rejected immediately with ErrCircuitOpen rather than blocking until
-// the trial finishes. Blocking instead of failing fast would mean the
-// breaker's own lock is held across the trial's gateway call, which
-// defeats the fail-fast guarantee Open/Half-Open is supposed to give
-// every other caller.
-//
-// Real wall-clock timing is used for the same reason as
-// TestCircuitClosedDoesNotSerializeOnGatewayCall: the failure mode
-// this test targets is a goroutine stuck on cb.mu, which
-// testing/synctest cannot recognize as blocked.
+// TestCircuitHalfOpenTrialFailsFastForOthers checks the trial slot.
+// Other callers must get ErrCircuitOpen while the trial runs.
+// They must not wait on the breaker lock.
 func TestCircuitHalfOpenTrialFailsFastForOthers(t *testing.T) {
 	gateway := NewPaymentGateway()
 	cb := NewCircuitBreaker(gateway)
@@ -211,9 +173,7 @@ func TestCircuitHalfOpenTrialFailsFastForOthers(t *testing.T) {
 		close(trialDone)
 	}()
 
-	// Give the trial goroutine time to claim the half-open slot and
-	// start its (slow) call to the gateway, without waiting for it to
-	// finish.
+	// Let the trial take the slot and start its slow call.
 	time.Sleep(delay / 3)
 
 	secondStart := time.Now()
@@ -237,9 +197,8 @@ func TestCircuitHalfOpenTrialFailsFastForOthers(t *testing.T) {
 	}
 }
 
-// TestCircuitConcurrentSafety hammers Execute from many goroutines at
-// once while the gateway is failing, to catch data races on the
-// breaker's internal state (run with `go test -race`).
+// TestCircuitConcurrentSafety calls Execute from many goroutines.
+// Run it with `go test -race`.
 func TestCircuitConcurrentSafety(t *testing.T) {
 	gateway := NewPaymentGateway()
 	cb := NewCircuitBreaker(gateway)
@@ -260,8 +219,7 @@ func TestCircuitConcurrentSafety(t *testing.T) {
 
 	waitWithTimeout(t, &wg, guardTimeout)
 
-	// Loose, non-flaky sanity bound: the gateway can never have been
-	// hit more often than the number of callers.
+	// The gateway cannot receive more calls than the test launched.
 	if got := gateway.Calls(); got > numGoroutines {
 		t.Fatalf("gateway called more times (%d) than goroutines launched (%d)", got, numGoroutines)
 	}

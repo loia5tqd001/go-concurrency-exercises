@@ -19,18 +19,11 @@ import (
 	"time"
 )
 
-// callTimeout bounds every direct Deposit/Withdraw/Balance/Close call
-// in this file. All four are supposed to be thin methods that hand a
-// request to the actor goroutine and block on a reply - but a
-// solution that forgets to drain its own reply channel (or wedges the
-// actor some other way) hangs that call forever, and every call after
-// it, since the single actor goroutine is now stuck. A bounded wait
-// turns that into a clear, fast test failure instead of a 10-minute
-// `go test` timeout with a bare stack dump.
+// callTimeout prevents a stuck actor from hanging the suite.
+// One stuck request would block every later request.
 const callTimeout = 2 * time.Second
 
-// depositWithTimeout calls account.Deposit(amount) and fails the test
-// fast if it doesn't return in time.
+// depositWithTimeout prevents Deposit from hanging the test.
 func depositWithTimeout(t *testing.T, account *Account, amount int) {
 	t.Helper()
 
@@ -47,8 +40,7 @@ func depositWithTimeout(t *testing.T, account *Account, amount int) {
 	}
 }
 
-// withdrawWithTimeout calls account.Withdraw(amount) and fails the
-// test fast if it doesn't return in time.
+// withdrawWithTimeout prevents Withdraw from hanging the test.
 func withdrawWithTimeout(t *testing.T, account *Account, amount int) error {
 	t.Helper()
 
@@ -64,8 +56,7 @@ func withdrawWithTimeout(t *testing.T, account *Account, amount int) error {
 	}
 }
 
-// balanceWithTimeout calls account.Balance() and fails the test fast
-// if it doesn't return in time.
+// balanceWithTimeout prevents Balance from hanging the test.
 func balanceWithTimeout(t *testing.T, account *Account) int {
 	t.Helper()
 
@@ -81,8 +72,7 @@ func balanceWithTimeout(t *testing.T, account *Account) int {
 	}
 }
 
-// closeWithTimeout calls account.Close() and fails the test fast if it
-// doesn't return in time.
+// closeWithTimeout prevents Close from hanging the test.
 func closeWithTimeout(t *testing.T, account *Account) {
 	t.Helper()
 
@@ -99,13 +89,8 @@ func closeWithTimeout(t *testing.T, account *Account) {
 	}
 }
 
-// TestAccountBasicOperations exercises Deposit, Withdraw, and Balance
-// from a single goroutine, so it passes against both the naive and
-// the fixed implementation - except for the insufficient-funds check,
-// which only the fixed implementation performs. Every call goes
-// through the *WithTimeout helpers above so a solution whose actor
-// goroutine is wedged (e.g. a Deposit that forgets to drain its own
-// reply) fails this test fast instead of hanging it.
+// TestAccountBasicOperations checks basic balance changes.
+// It also checks an overdraft is rejected without changing balance.
 func TestAccountBasicOperations(t *testing.T) {
 	account := NewAccount(100)
 
@@ -134,23 +119,8 @@ func TestAccountBasicOperations(t *testing.T) {
 	}
 }
 
-// TestAccountConcurrentSafety is the key `-race` test. Many goroutines
-// deposit concurrently; the naive implementation reads and writes
-// balance with no synchronization at all, so the race detector must
-// flag a data race on every run, and the final balance is likely to
-// be wrong on top of that. The actor implementation serializes all
-// access through a single goroutine, so this passes cleanly under
-// -race with the exact expected balance.
-//
-// goroutines is 1000, not a smaller round number, because the final
-// balance assertion needs to catch the naive lost-update race even
-// without -race: at 100 goroutines the naive Account happened to land
-// on the exact right sum often enough to pass this check ~16% of the
-// time on plain `go test` (no -race) in local testing - a coin flip
-// that would let a solver's run get lucky. 1000 failed this assertion
-// 20/20 in the same testing, matching how exercise 38 needed more
-// contention (4000 goroutines, not 500) before its check-then-act race
-// failed reliably without -race.
+// TestAccountConcurrentSafety runs many concurrent deposits.
+// The final balance must be exact. Use 1000 goroutines to expose lost updates.
 func TestAccountConcurrentSafety(t *testing.T) {
 	const initial = 10000
 	const goroutines = 1000
@@ -183,11 +153,8 @@ func TestAccountConcurrentSafety(t *testing.T) {
 	}
 }
 
-// TestAccountWithdrawRejectsInsufficientFunds fires more concurrent
-// withdrawals than the account can afford and checks that exactly as
-// many succeed as the balance allows, with no lost or duplicated
-// withdrawals and no negative balance - which requires the actor to
-// serialize the check-then-debit sequence atomically per request.
+// TestAccountWithdrawRejectsInsufficientFunds runs too many withdrawals.
+// The count and balance must match successful withdrawals.
 func TestAccountWithdrawRejectsInsufficientFunds(t *testing.T) {
 	const initial = 100
 	const amount = 30
@@ -242,21 +209,9 @@ func TestAccountWithdrawRejectsInsufficientFunds(t *testing.T) {
 	}
 }
 
-// TestAccountCloseStopsActorGoroutine checks that Close actually
-// terminates the actor goroutine an actor-based Account starts,
-// rather than just existing as a no-op to satisfy the API. It never
-// inspects Account's internals - it relies entirely on
-// synctest.Test's own rule that every goroutine spawned inside the
-// bubble (transitively) must have exited by the time the function
-// passed to it returns. NewAccount's actor goroutine, if any, is
-// spawned inside this bubble; if Close doesn't make it exit, it's
-// still durably blocked (e.g. on <-requests) when this test function
-// returns, and synctest.Test panics with a deadlock message instead
-// of this test merely failing an assertion.
-//
-// This passes trivially against the naive, lock-free implementation
-// above, which starts no goroutine at all - it only starts pulling
-// its weight once Deposit/Withdraw/Balance are backed by an actor.
+// TestAccountCloseStopsActorGoroutine requires every started goroutine to exit.
+// synctest fails if Close leaves the actor blocked.
+// The naive version passes because it starts no goroutine.
 func TestAccountCloseStopsActorGoroutine(t *testing.T) {
 	synctest.Test(t, func(t *testing.T) {
 		account := NewAccount(100)
@@ -269,16 +224,8 @@ func TestAccountCloseStopsActorGoroutine(t *testing.T) {
 	})
 }
 
-// TestMainDoesNotUseLocks statically rejects any solution that reaches
-// for sync.Mutex, sync.RWMutex, sync.Map, or sync/atomic - no behavioral
-// test can catch this, since a lock-guarded Account is observationally
-// identical to an actor-based one on every property the tests above
-// check (serialized access, atomic check-then-debit, correct balances).
-// It parses main.go's AST rather than scanning its text, so it isn't
-// tripped up by the exercise's own doc comment above mentioning
-// "sync.Mutex" in prose, and it flags the identifiers rather than the
-// "sync" import itself, since main()'s demo below legitimately uses
-// sync.WaitGroup.
+// TestMainDoesNotUseLocks rejects locks and atomic operations.
+// It parses the AST so comments and normal sync.WaitGroup use are allowed.
 func TestMainDoesNotUseLocks(t *testing.T) {
 	fset := token.NewFileSet()
 	file, err := parser.ParseFile(fset, "main.go", nil, 0)
@@ -324,11 +271,8 @@ func TestMainDoesNotUseLocks(t *testing.T) {
 	})
 }
 
-// numGoroutinesToSettle polls runtime.NumGoroutine() until it drops to
-// (or below) a threshold, or a deadline passes, and returns whatever it
-// last observed. Mirrors the helper in
-// 34-prime-sieve/check_test.go, which faces the same need to wait out a
-// goroutine's exit without hardcoding a sleep.
+// numGoroutinesToSettle waits for the goroutine count to drop.
+// It returns the last count when the deadline expires.
 func numGoroutinesToSettle(threshold int, timeout time.Duration) int {
 	deadline := time.Now().Add(timeout)
 	for {
@@ -340,15 +284,8 @@ func numGoroutinesToSettle(threshold int, timeout time.Duration) int {
 	}
 }
 
-// TestNewAccountStartsActorGoroutineAndCloseStopsIt checks the one
-// property that actually distinguishes an actor-based Account from a
-// mutex-guarded one: the actor owns a long-lived goroutine, and a lock
-// does not. TestAccountCloseStopsActorGoroutine above already proves
-// Close doesn't leave that goroutine dangling - but its doc comment says
-// outright that it passes trivially when no goroutine was ever started,
-// which is exactly what a mutex-based Account does. This test closes
-// that gap directly: NewAccount must raise the goroutine count by at
-// least one, and Close must bring it back down.
+// TestNewAccountStartsActorGoroutineAndCloseStopsIt checks the goroutine lifecycle.
+// NewAccount must start one goroutine, and Close must stop it.
 func TestNewAccountStartsActorGoroutineAndCloseStopsIt(t *testing.T) {
 	before := runtime.NumGoroutine()
 

@@ -15,12 +15,7 @@ import (
 	"time"
 )
 
-// TestConstructReturnsAllFieldsWithAmpleDeadline checks the happy
-// path: with a deadline comfortably larger than every component's
-// latency, Construct should return a fully populated Result with no
-// error. This holds for both the naive implementation and a properly
-// fixed one - the bug only shows up once a component outlasts the
-// deadline.
+// Construct must fill every Result field before a large deadline.
 func TestConstructReturnsAllFieldsWithAmpleDeadline(t *testing.T) {
 	synctest.Test(t, func(t *testing.T) {
 		basic := NewMockComponent("basic-ok", 20*time.Millisecond)
@@ -46,9 +41,7 @@ func TestConstructReturnsAllFieldsWithAmpleDeadline(t *testing.T) {
 	})
 }
 
-// TestConstructAlreadyExpiredContextWins checks deadline precedence
-// when all components complete immediately. A correct implementation
-// must not return a Result from an already-expired context.
+// An already-cancelled context must win over instant components.
 func TestConstructAlreadyExpiredContextWins(t *testing.T) {
 	for i := 0; i < 100; i++ {
 		ctx, cancel := context.WithCancel(context.Background())
@@ -67,18 +60,9 @@ func TestConstructAlreadyExpiredContextWins(t *testing.T) {
 	}
 }
 
-// TestConstructRespectsDeadlineWhenAComponentStalls is the key test.
-// Three components are fast; history takes 500ms and, like every
-// component here, has no ctx parameter at all, so it cannot notice
-// the deadline elapsing. Construct is given only a 100ms deadline. A
-// correct implementation stops waiting once the deadline passes and
-// returns ctx.Err() with a nil Result promptly; it does NOT (and
-// cannot) make the stalled component itself stop running.
-//
-// The naive implementation calls wg.Wait() unconditionally, so it
-// takes history's full 500ms regardless of the 100ms deadline, and
-// returns a fully populated Result with no error at all - exactly the
-// bug this exercise is about.
+// Three components finish quickly. History takes 500ms and ignores ctx.
+// Construct must return the deadline error and nil after 100ms.
+// History must keep running in the background.
 func TestConstructRespectsDeadlineWhenAComponentStalls(t *testing.T) {
 	synctest.Test(t, func(t *testing.T) {
 		basic := NewMockComponent("basic-ok", 20*time.Millisecond)
@@ -113,11 +97,8 @@ func TestConstructRespectsDeadlineWhenAComponentStalls(t *testing.T) {
 				"component regardless of ctx", elapsed, budget)
 		}
 
-		// Give the still-running history component goroutine time to
-		// actually finish its full 500ms before this synctest bubble
-		// closes: synctest requires every goroutine started inside
-		// the bubble to have exited by the time this function
-		// returns, or it panics with a deadlock report.
+		// Let history finish.
+		// synctest requires every started goroutine to exit.
 		time.Sleep(500 * time.Millisecond)
 
 		if !history.RanToCompletion() {
@@ -129,9 +110,7 @@ func TestConstructRespectsDeadlineWhenAComponentStalls(t *testing.T) {
 	})
 }
 
-// TestConstructConcurrentSafety hammers Construct with many concurrent
-// calls, each racing four mock components against a tight deadline, to
-// catch data races on the shared Result (run with `go test -race`).
+// Concurrent calls must not race on Result.
 func TestConstructConcurrentSafety(t *testing.T) {
 	const calls = 20
 

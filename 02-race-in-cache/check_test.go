@@ -13,12 +13,10 @@ import (
 	"time"
 )
 
-// waitWithTimeout runs fn and fails the test if it doesn't return within
-// timeout, instead of hanging toward Go's default 10-minute test timeout.
-// Two known ways a solution can end up here: a per-key load-dedup
-// ("singleflight") attempt that leaves a goroutine blocked forever on a
-// done channel nobody closes, or a lock held across every Get - including
-// on cache hits - that fully serializes 20ms DB loads into minutes.
+// waitWithTimeout fails if fn does not return in time.
+// A broken solution may leave a goroutine blocked forever.
+// Another may hold a lock across every Get.
+// The timeout makes either case fail fast.
 func waitWithTimeout(t *testing.T, timeout time.Duration, fn func()) {
 	t.Helper()
 	done := make(chan struct{})
@@ -92,16 +90,10 @@ func TestLRU(t *testing.T) {
 
 }
 
-// TestConcurrentHits hammers a handful of already-cached keys with heavy
-// concurrent, repeated re-access. This specifically targets a common
-// near-miss fix: an RWMutex that only takes an RLock() on the cache-hit
-// path. That looks safe (multiple readers, no writer overlap on the map),
-// but a hit also calls pages.MoveToFront - a write to the shared list -
-// and RLock() does not exclude other RLock holders from each other. Only
-// heavy, repeated contention on the SAME small set of keys makes that
-// list race show up reliably under -race; a single pass over many
-// distinct keys (as in TestMain/TestLRU) mostly moves each element to the
-// front once and rarely collides.
+// TestConcurrentHits repeatedly reads a few cached keys.
+// A cache hit changes the shared list.
+// A read lock alone does not protect that change.
+// Heavy use of few keys makes the race easier to find.
 func TestConcurrentHits(t *testing.T) {
 	loader := Loader{DB: GetMockDB()}
 	cache := New(&loader)
@@ -122,10 +114,7 @@ func TestConcurrentHits(t *testing.T) {
 		}(g)
 	}
 
-	// Bounded wait: a solution that's correctly locked but never actually
-	// caches anything (e.g. always misses through to the DB) turns every
-	// one of these 100k calls into a 20ms load, fully serialized - that's
-	// tens of minutes, not a fast pass. Fail well before Go's default
-	// 10-minute test timeout instead of hanging toward it.
+	// A solution that never caches turns these calls into slow DB loads.
+	// Fail before the test runs for many minutes.
 	waitWithTimeout(t, 30*time.Second, wg.Wait)
 }

@@ -11,11 +11,8 @@ import (
 	"time"
 )
 
-// TestOrDoneForwardsValues checks that orDone still does its one job
-// while done stays open: values read from the wrapped channel must be
-// the same sequential, increasing values StartMetricStream emits.
-// This passes against both the naive passthrough and a correct
-// implementation.
+// TestOrDoneForwardsValues checks values pass through in order.
+// This runs while done stays open.
 func TestOrDoneForwardsValues(t *testing.T) {
 	done := make(chan struct{})
 	defer close(done)
@@ -38,25 +35,14 @@ func TestOrDoneForwardsValues(t *testing.T) {
 	}
 }
 
-// orDoneStopsPromptly is the shared body of the "does orDone actually
-// stop leaking" check: it wires orDone up to a channel that will
-// never receive a value (so any unconditional read on it blocks
-// forever), starts a goroutine that tries to read from the wrapped
-// channel, closes done, and then asserts - via a short, real-time
-// safety-net timeout - that the wrapped channel closes promptly
-// instead of the reader hanging forever.
-//
-// c is never written to, so the only way `out` can produce anything
-// is by observing done and closing itself. Against the naive
-// passthrough (`return c`), out IS c: closing done does nothing to
-// it, nobody ever sends on c, and the read below hangs until the
-// safety-net timeout fires - which is exactly the leak this exercise
-// is about.
+// orDoneStopsPromptly checks that closing done closes out.
+// The input never sends, so a plain receive would block forever.
+// The timeout turns a leaked goroutine into a clear test failure.
 func orDoneStopsPromptly(t *testing.T) {
 	t.Helper()
 
 	done := make(chan struct{})
-	c := make(chan int) // never written to: an unconditional read blocks forever
+	c := make(chan int) // no sends occur
 
 	out := orDone(done, c)
 
@@ -78,45 +64,21 @@ func orDoneStopsPromptly(t *testing.T) {
 	}
 }
 
-// TestOrDoneStopsPromptlyOnDone is the key test: it proves that
-// closing done actually unblocks and shuts down orDone's forwarding
-// goroutine, rather than leaving it stuck forever.
+// TestOrDoneStopsPromptlyOnDone checks that closing done closes out.
 func TestOrDoneStopsPromptlyOnDone(t *testing.T) {
 	orDoneStopsPromptly(t)
 }
 
-// TestOrDoneNoGoroutineLeakRace repeats the shutdown scenario a
-// number of times so that, run with `go test -race`, it has a
-// reasonable chance of catching a data race in a select-based
-// shutdown path that only shows up under contention.
+// TestOrDoneNoGoroutineLeakRace repeats shutdown to expose race bugs.
 func TestOrDoneNoGoroutineLeakRace(t *testing.T) {
 	for i := 0; i < 20; i++ {
 		orDoneStopsPromptly(t)
 	}
 }
 
-// orDoneStopsPromptlyMidForward covers a gap orDoneStopsPromptly
-// can't: it never writes to c, so an implementation only has to react
-// to done while sitting idle at the outer receive. That's not enough
-// - the forwarding send onto out can block just as long if it isn't
-// also select-guarded on done.
-//
-// Here c is actively, continuously written to (like StartMetricStream
-// does). The test drains exactly one value to confirm forwarding is
-// alive, sleeps briefly so the goroutine loops back and pulls the
-// next value off c, then closes done while nobody is reading out.
-//
-// An implementation that guards the receive but not the send, e.g.
-//
-//	case v := <-c:
-//	    out <- v // unconditional - doesn't watch done
-//
-// passes orDoneStopsPromptly (c there never sends, so this code path
-// never runs) but fails here: once it already has a value in hand,
-// its bare send blocks regardless of done, and whatever eventually
-// reads out next gets that stale, post-done value instead of out
-// being closed. This is exactly what main.go demonstrates by printing
-// "unexpected: got a value after done closed".
+// orDoneStopsPromptlyMidForward checks a send that is already in progress.
+// A solution that guards only the receive will fail here.
+// It will send a stale value after done closes.
 func orDoneStopsPromptlyMidForward(t *testing.T) {
 	t.Helper()
 
@@ -152,17 +114,12 @@ func orDoneStopsPromptlyMidForward(t *testing.T) {
 	}
 }
 
-// TestOrDoneStopsPromptlyMidForward proves that done still shuts
-// orDone down promptly even when a value pulled from c is already in
-// flight toward out at the moment done closes.
+// TestOrDoneStopsPromptlyMidForward checks shutdown during a send.
 func TestOrDoneStopsPromptlyMidForward(t *testing.T) {
 	orDoneStopsPromptlyMidForward(t)
 }
 
-// TestOrDoneNoGoroutineLeakMidForwardRace repeats the mid-forward
-// shutdown scenario a number of times so that, run with `go test
-// -race`, it has a reasonable chance of catching a data race in a
-// select-based shutdown path that only shows up under contention.
+// TestOrDoneNoGoroutineLeakMidForwardRace repeats shutdown to expose race bugs.
 func TestOrDoneNoGoroutineLeakMidForwardRace(t *testing.T) {
 	for i := 0; i < 20; i++ {
 		orDoneStopsPromptlyMidForward(t)

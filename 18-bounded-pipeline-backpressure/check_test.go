@@ -12,12 +12,8 @@ import (
 	"testing/synctest"
 )
 
-// TestRunPipelineProcessesAllItems checks that every item makes it
-// through exactly once: produce and consume are each called exactly
-// once per index in [0, itemCount). It makes no assumption about
-// timing or how the producer and consumer are wired together, so it
-// passes against both the naive unbounded-buffer implementation and a
-// properly bounded one.
+// TestRunPipelineProcessesAllItems checks every item once.
+// Produce and consume must each run once per index.
 func TestRunPipelineProcessesAllItems(t *testing.T) {
 	const itemCount = 20
 
@@ -49,31 +45,9 @@ func TestRunPipelineProcessesAllItems(t *testing.T) {
 	}
 }
 
-// TestRunPipelineAppliesBackpressure asserts that RunPipeline actually
-// throttles the producer to (roughly) the consumer's pace instead of
-// letting it race ahead and buffer the entire run in memory. Every
-// time produce(i) fires, the test records how many items have already
-// been fully consumed at that instant; the gap between the two
-// (i - consumedSoFar) measures how far ahead of the consumer the
-// producer has been allowed to get. consume itself owns the slow
-// work (SlowConsume) here - RunPipeline has no idea it's even
-// happening, which is exactly the point: it's just plumbing.
-//
-// With an unbounded channel (buffer = itemCount), the producer never
-// has to wait for anything: it can - and does - produce every one of
-// the 20 items before the consumer, which pays a real 50ms per item,
-// has consumed even the first one. That makes the gap for the last
-// item roughly 19.
-//
-// With a small, fixed-size channel buffer, the producer's send blocks
-// as soon as the buffer (plus the one item the consumer may be
-// actively processing) is full, so the gap stays small and bounded,
-// regardless of itemCount.
-//
-// synctest.Test runs the body on a fake clock that jumps forward as
-// soon as every goroutine in the bubble is durably blocked (e.g. the
-// consumer asleep inside SlowConsume), so this is deterministic and
-// doesn't flake on a busy machine.
+// TestRunPipelineAppliesBackpressure measures how far production runs ahead.
+// A bounded buffer must keep that gap small.
+// synctest makes the timing check deterministic.
 func TestRunPipelineAppliesBackpressure(t *testing.T) {
 	synctest.Test(t, func(t *testing.T) {
 		const itemCount = 20

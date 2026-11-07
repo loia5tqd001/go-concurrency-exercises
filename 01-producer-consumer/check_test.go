@@ -14,11 +14,8 @@ import (
 	"time"
 )
 
-// TestMainProducesCorrectOutput runs the program's actual main() and
-// checks that every tweet is classified correctly and printed in the
-// same order the mock stream produces them - regardless of how
-// producer/consumer are wired up internally, since main() is the only
-// part of the contract this exercise doesn't let you change.
+// TestMainProducesCorrectOutput runs main.
+// It checks every tweet is classified in stream order.
 func TestMainProducesCorrectOutput(t *testing.T) {
 	output := captureStdout(t, main, 10*time.Second)
 
@@ -40,18 +37,10 @@ func TestMainProducesCorrectOutput(t *testing.T) {
 	}
 }
 
-// TestMainRunsProducerAndConsumerConcurrently checks that the total
-// time is close to the slower of the two stages run back-to-back per
-// tweet, rather than close to their sum. Each Stream.Next() sleeps
-// 320ms and each IsTalkingAboutGo() sleeps 330ms; running them fully
-// sequentially (read all 5, then classify all 5) takes roughly
-// 5*(320+330)ms = 3.25s. Pipelining them - the producer reading ahead
-// while the consumer is still classifying an earlier tweet - takes
-// closer to one read plus five classifications, ~1.97s, since
-// classifying tweet N overlaps with reading tweet N+1. 2.5s is well
-// above the pipelined time and well below the sequential time, so it
-// reliably tells the two apart without being flaky about exactly how
-// much the pipeline saves.
+// TestMainRunsProducerAndConsumerConcurrently checks the run time.
+// Reading and classifying all tweets one after another takes about 3.25s.
+// Overlapping the two stages takes about 1.97s.
+// The 2.5s limit separates the two designs reliably.
 func TestMainRunsProducerAndConsumerConcurrently(t *testing.T) {
 	start := time.Now()
 	captureStdout(t, main, 10*time.Second)
@@ -62,24 +51,13 @@ func TestMainRunsProducerAndConsumerConcurrently(t *testing.T) {
 	}
 }
 
-// captureStdout redirects os.Stdout for the duration of fn and returns
-// everything written to it. fn is bounded to timeout: a producer and
-// consumer wired together incorrectly (e.g. a send on a channel nobody
-// is left to receive from, or a range over a channel that's never
-// closed) can deadlock, and calling fn directly with no guard would
-// hang the test toward Go's default 10-minute -timeout instead of
-// failing fast - go test's own alarm goroutine means the runtime's
-// deadlock detector never fires inside a test binary, timeout or not,
-// so this guard is the only thing that catches it quickly.
-//
-// If fn truly deadlocks, its goroutine is left running - there's no
-// way to force it to exit - but the test still fails within timeout
-// instead of hanging. Its writes (if any ever happen) land on the now
-// -closed file and are silently dropped, which is harmless.
-//
-// Output goes to a temp file rather than an os.Pipe because GOOS=js
-// (the in-browser runner) has no pipes; a file behaves the same here,
-// since nothing reads the output until fn has returned.
+// captureStdout runs fn and returns everything it writes.
+// A timeout prevents a broken pipeline from hanging the test.
+// The test cannot kill a truly stuck goroutine.
+// It still fails after the timeout.
+// Writes after cleanup are dropped.
+// The browser test runner has no pipes.
+// Use a temp file so the same test works in the browser.
 func captureStdout(t *testing.T, fn func(), timeout time.Duration) string {
 	t.Helper()
 

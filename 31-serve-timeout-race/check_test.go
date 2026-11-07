@@ -15,12 +15,7 @@ import (
 	"time"
 )
 
-// TestServeReturnsHandlerResultWithAmpleDeadline checks the happy
-// path: with a deadline comfortably larger than the handler's own
-// latency, Serve should return the handler's result with no error.
-// This holds for both the naive implementation and a properly fixed
-// one - the bug only shows up once the deadline is the tighter side
-// of the race.
+// Serve must return the handler result before a large deadline.
 func TestServeReturnsHandlerResultWithAmpleDeadline(t *testing.T) {
 	synctest.Test(t, func(t *testing.T) {
 		h := NewMockHandler("payload", 50*time.Millisecond)
@@ -38,17 +33,9 @@ func TestServeReturnsHandlerResultWithAmpleDeadline(t *testing.T) {
 	})
 }
 
-// TestServeRespectsDeadlineWhenHandlerIgnoresCtx is the key test. The
-// handler takes 500ms and has no way to notice ctx at all - it's not
-// even given a ctx parameter. Serve is given only a 100ms deadline. A
-// correct implementation stops waiting on the handler once the
-// deadline passes and returns ctx.Err() promptly; it does NOT (and
-// cannot) make the handler itself stop running.
-//
-// The naive implementation just calls handler() and returns whatever
-// it gets, so it takes the handler's full 500ms regardless of the
-// 100ms deadline, and returns a successful result with no error at
-// all - exactly the bug this exercise is about.
+// Serve must stop waiting after 100ms even if the handler runs for 500ms.
+// The handler cannot see ctx and keeps running in the background.
+// Serve must return the deadline error, not a successful result.
 func TestServeRespectsDeadlineWhenHandlerIgnoresCtx(t *testing.T) {
 	synctest.Test(t, func(t *testing.T) {
 		h := NewMockHandler("too-late", 500*time.Millisecond)
@@ -76,12 +63,8 @@ func TestServeRespectsDeadlineWhenHandlerIgnoresCtx(t *testing.T) {
 				elapsed, budget)
 		}
 
-		// Give the still-running handler goroutine (in a correct
-		// implementation, one is spawned to race against ctx.Done())
-		// time to actually finish its full 500ms before this synctest
-		// bubble closes: synctest requires every goroutine started
-		// inside the bubble to have exited by the time this function
-		// returns, or it panics with a deadlock report.
+		// Let the background handler finish.
+		// synctest requires every started goroutine to exit.
 		time.Sleep(500 * time.Millisecond)
 
 		if !h.RanToCompletion() {
@@ -92,9 +75,7 @@ func TestServeRespectsDeadlineWhenHandlerIgnoresCtx(t *testing.T) {
 	})
 }
 
-// TestServeReturnsHandlerErrorWhenItWinsTheRace checks that Serve
-// propagates the handler's own error alongside its value when the
-// handler finishes before the deadline, rather than discarding it.
+// Serve must return both the handler value and its error.
 func TestServeReturnsHandlerErrorWhenItWinsTheRace(t *testing.T) {
 	synctest.Test(t, func(t *testing.T) {
 		wantErr := errors.New("boom")
@@ -115,10 +96,7 @@ func TestServeReturnsHandlerErrorWhenItWinsTheRace(t *testing.T) {
 	})
 }
 
-// TestServeAlreadyExpiredContextWinsEvenWhenHandlerIsInstant checks
-// deadline precedence at entry. Both the deadline and a trivial
-// handler are ready immediately, so a bare select between them can
-// return either result unless the implementation checks ctx first.
+// An already-cancelled context must win over an instant handler.
 func TestServeAlreadyExpiredContextWinsEvenWhenHandlerIsInstant(t *testing.T) {
 	for i := 0; i < 100; i++ {
 		ctx, cancel := context.WithCancel(context.Background())
@@ -133,9 +111,7 @@ func TestServeAlreadyExpiredContextWinsEvenWhenHandlerIsInstant(t *testing.T) {
 	}
 }
 
-// TestServeConcurrentSafety hammers Serve with many concurrent calls,
-// each racing a mock handler against its own deadline, to catch data
-// races (run with `go test -race`).
+// Concurrent calls must be race-free.
 func TestServeConcurrentSafety(t *testing.T) {
 	const calls = 20
 

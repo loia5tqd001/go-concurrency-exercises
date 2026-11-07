@@ -11,12 +11,12 @@ import (
 	"time"
 )
 
-// MockDB used to simulate a database model
+// MockDB simulates a database.
 type MockDB struct {
 	Calls int32
 }
 
-// Get only returns the key, as this is only for demonstration purposes
+// Get waits, then returns the key.
 func (db *MockDB) Get(key string) (string, error) {
 	d, _ := time.ParseDuration("20ms")
 	time.Sleep(d)
@@ -24,7 +24,7 @@ func (db *MockDB) Get(key string) (string, error) {
 	return key, nil
 }
 
-// GetMockDB returns an instance of MockDB
+// GetMockDB returns an empty MockDB.
 func GetMockDB() *MockDB {
 	return &MockDB{
 		Calls: 0,

@@ -1,40 +1,21 @@
 //////////////////////////////////////////////////////////////////////
 //
-// Given is a CircuitBreaker that wraps calls to a flaky downstream
-// PaymentGateway. The gateway occasionally goes down for a while
-// (see mockgateway.go), and right now the CircuitBreaker does nothing
-// to protect it: every call to Execute is simply passed straight
-// through to the gateway, no matter how many times in a row it has
-// just failed.
+// CircuitBreaker wraps a flaky payment gateway.
+// The current code sends every call to the gateway.
+// When the gateway is down, that adds more load and slows every caller.
 //
-// This is a problem. When the gateway is down, every single caller
-// still pays the full cost of reaching out to it (and getting an
-// error back) instead of failing fast - and a struggling downstream
-// service gets hammered with even more load exactly when it can least
-// handle it, instead of being given room to recover.
+// Your task is to build a circuit breaker:
+//   - Closed: pass calls through.
+//     Reset the failure count on success.
+//     Open after 5 failures in a row.
+//   - Open: return ErrCircuitOpen for 2 seconds.
+//     Then allow one trial call.
+//   - Half-Open: allow one call.
+//     Success closes the breaker.
+//     Failure reopens it and restarts the wait.
 //
-// Your task is to implement the actual circuit breaker pattern on top
-// of CircuitBreaker, safe for concurrent use from multiple goroutines:
-//
-//   - Closed (initial state): calls pass through to gateway.Charge.
-//     Each failure increments a consecutive-failure counter; a
-//     success resets it back to 0. After 5 consecutive failures, the
-//     breaker trips to Open.
-//
-//   - Open: calls fail immediately with ErrCircuitOpen, without
-//     calling the gateway at all, for a cooldown period of 2 seconds.
-//     After the cooldown elapses, the breaker moves to Half-Open.
-//
-//   - Half-Open: exactly one trial call is allowed through to the
-//     gateway. If it succeeds, the breaker resets to Closed (failure
-//     counter back to 0). If it fails, the breaker goes back to Open
-//     and the cooldown restarts.
-//
-// Keep the CircuitBreaker type and the Execute(amountCents int) error
-// signature identical - add whatever unexported state you need to
-// track the current state, the failure counter and the cooldown
-// deadline. Export a sentinel var ErrCircuitOpen = errors.New(...) for
-// callers to check against.
+// Keep the type and Execute signature.
+// Add private state for the failure count and cooldown.
 //
 
 package main
@@ -44,27 +25,22 @@ import (
 	"fmt"
 )
 
-// ErrCircuitOpen is returned by Execute when the circuit breaker is
-// open (or half-open with its trial slot taken) and is fail-fasting
-// without reaching the gateway. The naive implementation below never
-// actually returns it yet.
+// ErrCircuitOpen means the breaker rejected the call without using the gateway.
 var ErrCircuitOpen = errors.New("circuit breaker is open")
 
-// CircuitBreaker wraps a PaymentGateway. In its current, naive form
-// it does no failure tracking whatsoever and is just a pass-through.
+// CircuitBreaker wraps a PaymentGateway.
 type CircuitBreaker struct {
 	gateway *PaymentGateway
 }
 
-// NewCircuitBreaker creates a new CircuitBreaker wrapping the given
-// gateway.
+// NewCircuitBreaker wraps gateway.
 func NewCircuitBreaker(gateway *PaymentGateway) *CircuitBreaker {
 	return &CircuitBreaker{
 		gateway: gateway,
 	}
 }
 
-// Execute charges amountCents through the wrapped gateway.
+// Execute charges through the wrapped gateway.
 func (cb *CircuitBreaker) Execute(amountCents int) error {
 	return cb.gateway.Charge(amountCents)
 }

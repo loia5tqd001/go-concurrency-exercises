@@ -12,26 +12,9 @@ import (
 	"time"
 )
 
-// TestBridgeFlattensAllShards makes sure Bridge doesn't stop at the
-// first inner channel it receives from chanStream: it must keep
-// reading chanStream and flatten every shard it ever produces into the
-// single output stream, only closing that output once chanStream
-// itself is closed and every shard has been fully drained.
-//
-// Against the naive Bridge in main.go, only the first shard's lines
-// (4 of the 20 total) ever make it out, so this test fails there.
-//
-// This runs on the real clock rather than under testing/synctest: a
-// naive/broken Bridge abandons chanStream after its first shard, which
-// leaves the hub's producer goroutines permanently blocked trying to
-// send shards/lines nobody will ever read again - exactly the bug this
-// test is meant to expose. Inside a synctest bubble that permanent
-// block is treated as a fatal deadlock the moment the test function
-// returns, which would crash the whole test binary instead of
-// reporting a normal, readable test failure. The assertions below are
-// still fully deterministic (total count and exact set of lines seen);
-// the 2s timeout is only a safety net against the test hanging forever
-// if Bridge never closes its output at all.
+// TestBridgeFlattensAllShards requires every line from every shard.
+// It uses a real clock because broken producers can remain blocked.
+// The timeout turns a non-closing output into a test failure.
 func TestBridgeFlattensAllShards(t *testing.T) {
 	const numShards = 5
 	const linesPerShard = 4
@@ -77,15 +60,8 @@ collect:
 	}
 }
 
-// TestBridgeStopsOnDone proves that Bridge reacts to done being closed
-// instead of hanging around (or leaking goroutines) until every shard
-// naturally finishes. It starts a hub with far more shards/lines than
-// it will ever consume, reads a few values, closes done, and then
-// expects the output channel to close promptly.
-//
-// This uses the real clock (not synctest) since it's a "does it stop
-// quickly" check rather than a precise-duration one, but the bound is
-// generous enough to never be flaky while keeping the test fast.
+// TestBridgeStopsOnDone requires output to close after done closes.
+// The timeout is generous enough for a busy machine.
 func TestBridgeStopsOnDone(t *testing.T) {
 	done := make(chan struct{})
 
@@ -110,9 +86,9 @@ func TestBridgeStopsOnDone(t *testing.T) {
 		select {
 		case _, ok := <-logs:
 			if !ok {
-				return // output channel closed promptly after done - success.
+				return // Output closed promptly.
 			}
-			// Drain any values already in flight and keep waiting for close.
+			// Drain values already in flight.
 		case <-deadline:
 			t.Fatal("Bridge did not close its output channel promptly after done was closed")
 		}

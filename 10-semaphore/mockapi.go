@@ -7,22 +7,14 @@ import (
 	"time"
 )
 
-// CallLatency is how long a single successful call to FlakyAPI.Call takes.
+// CallLatency is the duration of one successful call.
 const CallLatency = 100 * time.Millisecond
 
-// ErrTooManyConcurrentRequests is returned by FlakyAPI.Call when more than
-// maxConcurrent calls are in flight at the same instant.
+// ErrTooManyConcurrentRequests means the API is at its concurrency limit.
 var ErrTooManyConcurrentRequests = errors.New("too many concurrent requests")
 
-// FlakyAPI simulates a downstream service with a strict limit on how many
-// requests it can handle at the same time. If more than maxConcurrent calls
-// to Call are in flight simultaneously, the excess calls immediately fail
-// with ErrTooManyConcurrentRequests instead of being queued. Calls that are
-// accepted take CallLatency to complete.
-//
-// FlakyAPI also tracks the high-water mark of concurrent in-flight calls it
-// has ever observed, via HighWaterMark, purely for test instrumentation -
-// a real API wouldn't expose this.
+// FlakyAPI rejects calls above maxConcurrent instead of queueing them.
+// It records peak concurrency only for tests.
 type FlakyAPI struct {
 	mu            sync.Mutex
 	current       int
@@ -30,16 +22,13 @@ type FlakyAPI struct {
 	maxConcurrent int
 }
 
-// NewFlakyAPI returns a FlakyAPI that rejects calls once more than
-// maxConcurrent of them are in flight at once.
+// NewFlakyAPI sets the API's concurrency limit.
 func NewFlakyAPI(maxConcurrent int) *FlakyAPI {
 	return &FlakyAPI{maxConcurrent: maxConcurrent}
 }
 
-// Call simulates a single request to the downstream API for req. If
-// accepting this call would push the number of in-flight calls above
-// maxConcurrent, it returns ErrTooManyConcurrentRequests immediately.
-// Otherwise it blocks for CallLatency and returns a canned response.
+// Call returns an error above the limit.
+// Otherwise it sleeps for CallLatency and returns a fixed response.
 func (a *FlakyAPI) Call(req string) (string, error) {
 	a.mu.Lock()
 	a.current++
@@ -66,9 +55,7 @@ func (a *FlakyAPI) Call(req string) (string, error) {
 	return fmt.Sprintf("response-for-%s", req), nil
 }
 
-// HighWaterMark returns the largest number of calls to Call that this
-// FlakyAPI has ever observed in flight at the same instant, whether or not
-// those calls were ultimately accepted or rejected.
+// HighWaterMark returns the largest number of observed calls in flight.
 func (a *FlakyAPI) HighWaterMark() int {
 	a.mu.Lock()
 	defer a.mu.Unlock()

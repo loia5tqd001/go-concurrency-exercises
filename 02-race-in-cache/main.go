@@ -1,11 +1,11 @@
 //////////////////////////////////////////////////////////////////////
 //
-// KeyStoreCache is an LRU cache: a map for O(1) lookup, plus a
-// container/list.List that tracks recency so the least-recently-used
-// entry can be evicted once the cache fills up. Get has zero
-// synchronization right now - not just around the map (a concurrent
-// write races any read) but around the list too, since MoveToFront
-// mutates it even on a cache *hit*. See README.md for the full task.
+// KeyStoreCache is an LRU cache.
+// A map gives fast lookup. A list tracks recent use.
+// A full cache removes its least recently used entry.
+// Get has no locking now.
+// A hit still changes the list, so both parts need protection.
+// See README.md for the task.
 //
 
 package main
@@ -14,12 +14,12 @@ import (
 	"container/list"
 )
 
-// CacheSize determines how big the cache can grow
+// CacheSize sets the largest number of cached entries.
 const CacheSize = 100
 
-// KeyStoreCacheLoader is an interface for the KeyStoreCache
+// KeyStoreCacheLoader loads cache values from another source.
 type KeyStoreCacheLoader interface {
-	// Load implements a function where the cache should gets it's content from
+	// Load returns the value for a key.
 	Load(string) string
 }
 
@@ -28,14 +28,14 @@ type page struct {
 	Value string
 }
 
-// KeyStoreCache is a LRU cache for string key-value pairs
+// KeyStoreCache stores string key-value pairs in an LRU cache.
 type KeyStoreCache struct {
 	cache map[string]*list.Element
 	pages list.List
 	load  func(string) string
 }
 
-// New creates a new KeyStoreCache
+// New creates an empty cache.
 func New(load KeyStoreCacheLoader) *KeyStoreCache {
 	return &KeyStoreCache{
 		load:  load.Load,
@@ -43,20 +43,16 @@ func New(load KeyStoreCacheLoader) *KeyStoreCache {
 	}
 }
 
-// Get gets the key from cache, loads it from the source if needed
+// Get returns a cached value or loads it.
 func (k *KeyStoreCache) Get(key string) string {
 	if e, ok := k.cache[key]; ok {
 		k.pages.MoveToFront(e)
 		return e.Value.(page).Value
 	}
-	// Miss - load from database and save it in cache
 	p := page{key, k.load(key)}
-	// if cache is full remove the least used item
 	if len(k.cache) >= CacheSize {
 		end := k.pages.Back()
-		// remove from map
 		delete(k.cache, end.Value.(page).Key)
-		// remove from list
 		k.pages.Remove(end)
 	}
 	k.pages.PushFront(p)
@@ -64,12 +60,12 @@ func (k *KeyStoreCache) Get(key string) string {
 	return p.Value
 }
 
-// Loader implements KeyStoreLoader
+// Loader loads cache values from MockDB.
 type Loader struct {
 	DB *MockDB
 }
 
-// Load gets the data from the database
+// Load reads a value from the database.
 func (l *Loader) Load(key string) string {
 	val, err := l.DB.Get(key)
 	if err != nil {

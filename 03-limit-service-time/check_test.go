@@ -13,13 +13,10 @@ import (
 	"time"
 )
 
-// The following two tests never leave a goroutine still running past the
-// end of the test: FastProcessCompletes's process finishes well inside the
-// quota and self-cancels, and PremiumUser_NeverKilled's premium branch
-// calls process() synchronously with no timeout at all. That makes them
-// safe to run in a synctest bubble - the fake clock advances instantly to
-// each Sleep's end, and no goroutine is left needing a tick of fake time
-// that never comes.
+// These two tests finish every goroutine before they return.
+// FastProcessCompletes stops inside the quota.
+// PremiumUser_NeverKilled waits for process without a timeout.
+// Both can use synctest's fake clock safely.
 
 func TestHandleRequest_FreeUser_FastProcessCompletes(t *testing.T) {
 	synctest.Test(t, func(t *testing.T) {
@@ -57,17 +54,12 @@ func TestHandleRequest_PremiumUser_NeverKilled(t *testing.T) {
 	})
 }
 
-// Every test below this point involves a request that gets killed while
-// process() is still running. Go has no way to forcibly stop a goroutine,
-// so HandleRequest returning early always leaves that goroutine still
-// asleep in the background. A synctest bubble only advances its fake clock
-// while every goroutine is durably blocked, and it stops advancing the
-// moment the bubble's root goroutine (the test function) returns - so a
-// test that returns right after asserting on the kill leaves that straggler
-// permanently blocked, and synctest.Test panics with a deadlock rather than
-// letting the test finish. These stay on the real clock, same as the two
-// genuinely concurrent tests further down (which have their own,
-// mutex-related reason to stay there).
+// Tests below kill process while it still runs.
+// Go cannot force a goroutine to stop.
+// HandleRequest therefore leaves a sleeping goroutine behind.
+// synctest stops fake time when the test returns.
+// A sleeping goroutine then looks like a deadlock.
+// Keep these tests on the real clock.
 
 func TestHandleRequest_FreeUser_SlowProcessKilled(t *testing.T) {
 	t.Parallel()
@@ -81,24 +73,23 @@ func TestHandleRequest_FreeUser_SlowProcessKilled(t *testing.T) {
 	}
 }
 
-// --- Advanced level: 10s quota accumulated across a free user's requests ---
+// Advanced level: free quota accumulates across requests.
 
 func TestHandleRequest_FreeUser_AccumulatedTimeExceeded(t *testing.T) {
 	t.Parallel()
 	u := &User{ID: 4, IsPremium: false}
 
-	// Uses 4s of the user's 10s lifetime quota.
+	// Use 4s of the 10s quota.
 	if ok := HandleRequest(func() { time.Sleep(4 * time.Second) }, u); !ok {
 		t.Fatal("expected first 4s request to succeed")
 	}
 
-	// Uses another 4s, for 8s accumulated.
+	// Use another 4s, for 8s total.
 	if ok := HandleRequest(func() { time.Sleep(4 * time.Second) }, u); !ok {
 		t.Fatal("expected second 4s request to succeed")
 	}
 
-	// Only 2s of quota remains, so a 4s request should be killed ~2s in,
-	// not allowed to run the full 4s.
+	// Only 2s remains, so this 4s request should stop after 2s.
 	start := time.Now()
 	if ok := HandleRequest(func() { time.Sleep(4 * time.Second) }, u); ok {
 		t.Error("expected third request to be killed once accumulated quota is exceeded")
@@ -107,8 +98,7 @@ func TestHandleRequest_FreeUser_AccumulatedTimeExceeded(t *testing.T) {
 		t.Errorf("expected request to be killed ~2s in, took %v", elapsed)
 	}
 
-	// Quota is now fully spent; a further request should be killed immediately
-	// rather than waiting for any remaining timeout.
+	// The quota is gone. Kill the next request immediately.
 	start = time.Now()
 	if ok := HandleRequest(func() { time.Sleep(1 * time.Second) }, u); ok {
 		t.Error("expected request to be killed immediately once quota is fully used")
@@ -123,8 +113,7 @@ func TestHandleRequest_FreeUser_QuotaIsPerUser(t *testing.T) {
 	u1 := &User{ID: 5, IsPremium: false}
 	u2 := &User{ID: 6, IsPremium: false}
 
-	// Exhaust u1's quota: 5s used, then a 6s request only has 5s left and
-	// gets killed partway through.
+	// Use 5s for u1, then start a 6s request with only 5s left.
 	if ok := HandleRequest(func() { time.Sleep(5 * time.Second) }, u1); !ok {
 		t.Fatal("expected u1's first 5s request to succeed")
 	}
@@ -132,31 +121,25 @@ func TestHandleRequest_FreeUser_QuotaIsPerUser(t *testing.T) {
 		t.Error("expected u1's second request to be killed once its quota is exceeded")
 	}
 
-	// u2 has never made a request, so it should have a fresh 10s quota
-	// unaffected by u1's usage.
+	// u2 still has the full quota.
 	if ok := HandleRequest(func() { time.Sleep(3 * time.Second) }, u2); !ok {
 		t.Error("expected u2's quota to be independent of u1's usage")
 	}
 }
 
-// The following two tests fire genuinely concurrent requests at the same
-// free user and rely on real mutex contention while one goroutine sleeps.
-// They are intentionally left on the real clock (not synctest): a bubble
-// only advances its fake clock once every goroutine is "durably blocked",
-// and blocking on a sync.Mutex does not count as durably blocked. With one
-// goroutine parked on HandleRequest's per-user mutex while another is
-// durably blocked inside its own timeout wait, the bubble's clock would
-// never advance and synctest.Test would hang rather than fail fast.
+// These tests send concurrent requests for one free user.
+// They need real mutex contention while one request sleeps.
+// synctest does not advance while a goroutine waits on sync.Mutex.
+// The fake clock could hang, so keep these tests on the real clock.
 
 func TestHandleRequest_FreeUser_ConcurrentRequestsDoNotDoubleSpendQuota(t *testing.T) {
 	t.Parallel()
 	u := &User{ID: 7, IsPremium: false}
 
-	// Fire two 6s requests at the same free user at once. Together they need
-	// 12s, more than the 10s quota, so checking "is there time left?" and
-	// spending it can't be two separate steps - a request must reserve its
-	// share of the quota atomically, or both goroutines can read the quota
-	// as available before either has recorded its usage.
+	// Two 6s requests need 12s from a 10s quota.
+	// Only one request may succeed.
+	// Checking and reserving quota must happen as one step.
+	// Otherwise both requests can see the same free quota.
 	const concurrentRequests = 2
 	results := make([]bool, concurrentRequests)
 	var wg sync.WaitGroup
@@ -181,18 +164,10 @@ func TestHandleRequest_FreeUser_ConcurrentRequestsDoNotDoubleSpendQuota(t *testi
 	}
 }
 
-// TestHandleRequest_FreeUser_ConcurrentRequestNotRejectedOnEarlierEarlyFinish
-// asserts that a concurrent request is judged against the quota the earlier
-// one *actually* used, not the worst case it could have used.
-//
-// A request that reserves its entire remaining quota up front (so a sibling
-// can be rejected without waiting for it to finish) has no way to know in
-// advance that the earlier request will only take 1s out of its 10s
-// allotment - it must assume the worst case (it might run all the way to
-// its own timeout) to stay safe. That means a second request arriving while
-// the first is still in flight gets rejected even though, in reality,
-// plenty of quota was available. This test only passes for a design that
-// makes the second request wait for an accurate answer instead of guessing.
+// This test checks that a later request uses the first request's real usage.
+// Reserving all remaining quota upfront would reject the second request.
+// The first request uses only 1s, so the second should still succeed.
+// A correct design waits for the actual usage.
 func TestHandleRequest_FreeUser_ConcurrentRequestNotRejectedOnEarlierEarlyFinish(t *testing.T) {
 	t.Parallel()
 	u := &User{ID: 9, IsPremium: false}
@@ -206,9 +181,7 @@ func TestHandleRequest_FreeUser_ConcurrentRequestNotRejectedOnEarlierEarlyFinish
 		firstOK = HandleRequest(func() { time.Sleep(1 * time.Second) }, u)
 	}()
 
-	// Give the first request time to start and begin its 1s run, but start
-	// the second well before it finishes - this is the overlap window where
-	// a worst-case reservation would still be holding the whole quota.
+	// Start the second request while the first is still running.
 	time.Sleep(200 * time.Millisecond)
 
 	wg.Add(1)

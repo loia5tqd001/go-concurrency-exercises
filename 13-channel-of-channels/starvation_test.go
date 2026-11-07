@@ -5,26 +5,16 @@ import (
 	"time"
 )
 
-// TestBridgeDoesNotStarveOnSlowShard lives alongside check_test.go rather
-// than inside it (check_test.go is marked "DO NOT EDIT" for solvers) but
-// is required to pass just the same - see README.md.
-//
-// Shard 0 arrives on chanStream but never sends a line and never closes
-// ("stuck" - imagine a shard whose producer is wedged, or a connection
-// that's still open but idle). Shard 1 arrives right after and already
-// has a line ready to send. A Bridge that truly fans shards in
-// concurrently (one goroutine per shard) still delivers shard 1's line
-// promptly, regardless of shard 0's state. A Bridge that drains
-// chanStream's shards strictly one at a time - fully finishing shard 0
-// before going back to chanStream for shard 1 - never even reads shard 1
-// off chanStream, so this test times out against it.
+// TestBridgeDoesNotStarveOnSlowShard requires concurrent shard draining.
+// Shard 0 never sends or closes. Shard 1 is ready immediately.
+// A one-shard-at-a-time Bridge never reads shard 1 and times out.
 func TestBridgeDoesNotStarveOnSlowShard(t *testing.T) {
 	done := make(chan struct{})
 	defer close(done)
 
 	chanStream := make(chan (<-chan string))
 
-	stuck := make(chan string) // never sent to, never closed
+	stuck := make(chan string) // Never sent to or closed.
 	ready := make(chan string, 1)
 	ready <- "shard-1-line-0"
 

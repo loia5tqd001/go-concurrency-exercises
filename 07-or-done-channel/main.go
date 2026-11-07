@@ -1,35 +1,18 @@
 //////////////////////////////////////////////////////////////////////
 //
-// Given is a function StartMetricStream (see mockmonitor.go) that
-// simulates a monitoring agent: it emits one metric reading every
-// 20ms, forever, on the channel it returns. It's a long-lived feed -
-// think of a metrics websocket or a tailed log - and it has no way of
-// knowing when the consumer has stopped caring about new values, so
-// it never closes its channel on its own.
+// StartMetricStream emits a metric every 20ms and never closes.
+// A consumer may stop early by closing done.
 //
-// orDone below is supposed to let a consumer stop reading early (by
-// closing the done channel it's given) without leaking the goroutine
-// that forwards values, and without making every read site litter
-// itself with a done-aware select. Right now it doesn't do any of
-// that - it just hands back the input channel unchanged, so closing
-// done has no effect on it at all: nothing ever stops the producer
-// goroutine from trying to send a value that nobody will read again.
+// orDone must forward values until done closes.
+// Then it must close its output and exit.
+// Both receives and sends can block.
+// Guard both with a select on done.
 //
-// Your task is to implement orDone properly. It must spawn its own
-// goroutine that ranges over c, forwarding each value onto a new
-// output channel it returns. Both operations that goroutine performs
-// - receiving the next value from c, and sending the forwarded value
-// on the output channel - can block forever if nobody's on the other
-// end any more, so each of them must be a select that also watches
-// done. As soon as done is closed, the goroutine must return promptly
-// (closing the output channel behind it) instead of blocking forever
-// on a send nobody will read or a receive that may never come. The
-// function signature must stay the same:
+// Keep this signature:
 //
 //     func orDone(done <-chan struct{}, c <-chan int) <-chan int
 //
-// so that it remains a drop-in replacement for the passthrough
-// version below.
+// The current version returns c unchanged.
 //
 
 package main
@@ -39,11 +22,8 @@ import (
 	"time"
 )
 
-// orDone wraps c so that ranging over the returned channel stops as
-// soon as done is closed, instead of blocking forever waiting for a
-// value from c that may never come (or waiting to send a value that
-// nobody's reading any more). Right now it's a no-op: it just returns
-// c, so done has no effect on it whatsoever.
+// orDone returns c without watching done.
+// Closing done therefore has no effect.
 func orDone(done <-chan struct{}, c <-chan int) <-chan int {
 	return c
 }
@@ -64,11 +44,7 @@ func main() {
 	}
 	fmt.Println("done reading, done closed - checking whether orDone actually stopped...")
 
-	// If orDone worked, closing done should make out close promptly,
-	// so this receive should come back immediately with ok == false.
-	// Against the no-op passthrough, out IS stream: nothing closes it,
-	// and the goroutine inside StartMetricStream is still out there
-	// trying to send the next tick on a channel nobody drains anymore.
+	// Wait briefly for out to close after done closes.
 	select {
 	case v, ok := <-out:
 		if ok {

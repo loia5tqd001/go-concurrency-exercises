@@ -6,23 +6,16 @@ import (
 	"time"
 )
 
-// ComputeLatency is how long a single call to ComputeExpensive takes. It
-// stands in for whatever expensive work a real computation would do
-// (a cache-cold database aggregation, a heavy calculation, ...).
+// ComputeLatency is the duration of one simulated computation.
 const ComputeLatency = 150 * time.Millisecond
 
-// callCount, protected by callCountMu, lets tests verify how many times
-// the underlying expensive computation actually ran.
+// callCount records computation calls for tests.
 var (
 	callCountMu sync.Mutex
 	callCount   int
 )
 
-// ComputeExpensive simulates an expensive, slow computation (e.g. a
-// cache-cold database aggregation) for the given key: it sleeps for
-// ComputeLatency, then returns a deterministic result derived from
-// key, incrementing the shared call counter exactly once per
-// invocation.
+// ComputeExpensive sleeps, records one call, then returns a value from key.
 func ComputeExpensive(key string) int {
 	time.Sleep(ComputeLatency)
 
@@ -36,8 +29,7 @@ func ComputeExpensive(key string) int {
 	return int(h.Sum64() % 1_000_000)
 }
 
-// CallCount returns how many times ComputeExpensive has run since the
-// last ResetCallCount.
+// CallCount returns the number of computations since the last reset.
 func CallCount() int {
 	callCountMu.Lock()
 	defer callCountMu.Unlock()
@@ -45,8 +37,7 @@ func CallCount() int {
 	return callCount
 }
 
-// ResetCallCount resets the shared call counter. It is a test-only
-// helper for isolating call counts between test cases.
+// ResetCallCount clears the computation counter.
 func ResetCallCount() {
 	callCountMu.Lock()
 	callCount = 0

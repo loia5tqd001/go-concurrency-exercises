@@ -14,8 +14,7 @@ import (
 
 var wg sync.WaitGroup
 
-// RunMockServer pretends to be a video processing service. It
-// simulates user interacting with the Server.
+// RunMockServer simulates users sending video jobs.
 func RunMockServer() {
 	u1 := User{ID: 0, IsPremium: false}
 	u2 := User{ID: 1, IsPremium: true}

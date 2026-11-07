@@ -31,7 +31,7 @@ import (
 const usage = `usage: go run ./tools/check <command> [flags]
 
 commands:
-  lint       static rules: layout, README tables, docs, gofmt, browser support
+  lint       static rules: layout, README tables, docs, comments, gofmt, browser support
   gen        rewrite the generated sections of README.md and solutions/README.md
   scaffolds  every scaffold must build, pass go vet, and fail its own tests fast
   try        run an exercise's tests against a candidate main.go, in a temp copy

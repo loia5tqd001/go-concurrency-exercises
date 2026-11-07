@@ -1,9 +1,8 @@
 //////////////////////////////////////////////////////////////////////
 //
-// Given is a producer-consumer scenario, where a producer reads in
-// tweets from a mockstream and a consumer is processing the
-// data. Your task is to change the code so that the producer as well
-// as the consumer can run concurrently
+// A producer reads tweets from a mock stream.
+// A consumer processes the tweets.
+// Change the code so both run at the same time.
 //
 
 package main
@@ -38,10 +37,8 @@ func main() {
 	start := time.Now()
 	stream := GetMockStream()
 
-	// Producer
 	tweets := producer(stream)
 
-	// Consumer
 	consumer(tweets)
 
 	fmt.Printf("Process took %s\n", time.Since(start))

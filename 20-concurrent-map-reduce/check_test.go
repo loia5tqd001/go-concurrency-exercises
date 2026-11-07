@@ -14,11 +14,9 @@ import (
 	"time"
 )
 
-// wordCountChunks returns the ~10 text chunks used across the tests.
-// Several words (e.g. "fox", "the", "dog", "quick") repeat both across
-// chunks and, in a couple of places, within the same chunk, so a
-// correct implementation has to actually merge partial counts rather
-// than just union keys together.
+// wordCountChunks returns the test chunks.
+// Words repeat across chunks and within chunks.
+// Counts must be added. Matching keys alone are not enough.
 func wordCountChunks() []string {
 	return []string{
 		"the quick brown fox jumps over the lazy dog",
@@ -34,9 +32,7 @@ func wordCountChunks() []string {
 	}
 }
 
-// expectedWordCountsFor10Chunks is the hand-computed word count for
-// wordCountChunks(), verified by tallying each word occurrence chunk
-// by chunk.
+// expectedWordCountsFor10Chunks returns the known counts for the test chunks.
 func expectedWordCountsFor10Chunks() map[string]int {
 	return map[string]int{
 		"all":     1,
@@ -69,10 +65,8 @@ func expectedWordCountsFor10Chunks() map[string]int {
 	}
 }
 
-// tallyWordCounts is an independent (non-WordCount) computation of
-// word counts over chunks, used to check WordCount's output against
-// an input set that doesn't have a hand-written expected map (e.g.
-// the larger input used by the race test).
+// tallyWordCounts counts words without calling WordCount.
+// The race test uses it for larger inputs.
 func tallyWordCounts(chunks []string) map[string]int {
 	want := make(map[string]int)
 	for _, chunk := range chunks {
@@ -83,10 +77,7 @@ func tallyWordCounts(chunks []string) map[string]int {
 	return want
 }
 
-// TestWordCountCorrectness checks that WordCount produces exactly the
-// expected merged word counts. It makes no assumption about how the
-// chunks are processed internally, so it passes against both the
-// naive sequential implementation and a map-reduce one.
+// TestWordCountCorrectness checks the merged word counts.
 func TestWordCountCorrectness(t *testing.T) {
 	chunks := wordCountChunks()
 
@@ -98,14 +89,10 @@ func TestWordCountCorrectness(t *testing.T) {
 	}
 }
 
-// TestWordCountConcurrency asserts that WordCount actually maps
-// chunks out across multiple goroutines instead of tokenizing them
-// one at a time. Ten chunks at 30ms each take 300ms sequentially; a
-// map-reduce implementation finishes in roughly one chunk's worth of
-// (fake) time, regardless of how many chunks there are. synctest.Test
-// runs the body on a fake clock that jumps forward as soon as every
-// goroutine in the bubble is durably blocked, so this assertion is
-// exact and doesn't flake on a busy machine.
+// TestWordCountConcurrency checks that chunks run at the same time.
+// Sequential work takes 10 * 30ms = 300ms.
+// The test wants less than 100ms.
+// synctest uses a fake clock, so this check is stable.
 func TestWordCountConcurrency(t *testing.T) {
 	synctest.Test(t, func(t *testing.T) {
 		chunks := wordCountChunks()
@@ -130,12 +117,8 @@ func TestWordCountConcurrency(t *testing.T) {
 	})
 }
 
-// TestWordCountRace stress-tests WordCount with many chunks across
-// several runs, re-checking correctness every time, to catch a
-// data race on a shared result map that a naive "fix" might introduce
-// by spawning one goroutine per chunk but still writing directly into
-// a single shared map without a proper merge step (run with `go test
-// -race`).
+// TestWordCountRace repeats a larger input.
+// Run it with `go test -race` to catch shared-map writes.
 func TestWordCountRace(t *testing.T) {
 	base := wordCountChunks()
 

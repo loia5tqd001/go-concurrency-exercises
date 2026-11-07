@@ -1,71 +1,29 @@
 //////////////////////////////////////////////////////////////////////
 //
-// Collector coalesces many independent, concurrent calls into batch
-// API calls - and, unlike a one-shot join, keeps doing it for as long
-// as the process is running:
+// Collector groups concurrent requests into batches.
+// It keeps opening new batches until Close.
 //
-//   Add(order 0) ─┐
-//   Add(order 1) ─┼─▶ buffer requests ──MaxBatchSize-th Add, OR────▶ fn(batch) ── fires,
-//   Add(order 2) ─┘    MaxWait elapses since the batch's 1st Add     then a fresh
-//                                          fan back out, each caller  batch opens
-//                                          gets its own matching
-//                                          response
+// Add calls -> open batch -> fn(batch) -> one Result per caller
 //
-// Imagine 30 goroutines each needing a shipping quote for their own
-// order, from an API that supports batches (N orders in, N quotes
-// out) but charges a full round-trip per call regardless of size, and
-// this keeps happening for as long as the service is up - not just
-// once. One batched call is the efficient move - but the 30
-// goroutines don't know about each other, don't know when the 30th
-// shows up, and each still needs exactly its own quote back. And a
-// batch that's still short of 30 when traffic goes quiet can't just
-// wait forever either - every caller needs their answer within some
-// bounded latency, full batch or not.
+// A batch fires when its size reaches MaxBatchSize.
+// It also fires when MaxWait passes from its first request.
 //
-// Right now Collector doesn't batch anything at all:
+// The current version does not batch:
+// - Add calls fn once for every request.
+// - MaxBatchSize and MaxWait are ignored.
+// - Close does nothing.
 //
-//   - Add calls fn immediately, with a "batch" of exactly the one
-//     request it was given - the entire "coalesce many callers into
-//     one round-trip" idea this exercise is about doesn't exist yet.
-//   - MaxBatchSize and MaxWait are both accepted in Config and never
-//     looked at.
-//   - Close returns nil immediately. It doesn't stop Add from still
-//     accepting requests, doesn't fire anything, and doesn't wait for
-//     anything.
+// Fix Collector so:
+// - Add is safe to call concurrently.
+// - fn runs once for each batch.
+// - Each caller gets its own response.
+// - A shared error reaches every caller in the batch.
+// - A new batch opens after each fire.
+// - Close rejects later Adds and flushes the pending batch.
+// - Close waits for started batches, unless ctx ends first.
+// - Close is idempotent and safe during Add calls.
 //
-// Your task is to fix Collector so that:
-//
-//   - Add(request int) <-chan Result registers request as part of
-//     whichever batch is currently open and returns a channel that
-//     will receive exactly one Result once that batch has run.
-//   - Add is safe to call concurrently, from any number of goroutines,
-//     for as long as the Collector hasn't been closed.
-//   - A batch fires - runs fn exactly once, with every request queued
-//     into it so far, in the order Add was called for each of them -
-//     the moment EITHER its MaxBatchSize-th request arrives OR
-//     MaxWait has elapsed since its first request, whichever happens
-//     first. A batch that hits neither trigger twice: fn must never
-//     run twice for the same batch, no matter which trigger wins or
-//     how close the timing.
-//   - The moment one batch fires, the Collector opens a fresh one -
-//     it keeps doing this indefinitely, not just once. Every caller
-//     gets back the Result at fn's response index matching the
-//     position ITS OWN request ended up at in ITS OWN batch - never
-//     another caller's, and never another batch's.
-//   - If fn returns an error, every caller in that batch receives that
-//     same error in its Result, instead of a value.
-//   - Close(ctx) stops the Collector from accepting any further Add
-//     calls (each returns ErrCollectorClosed immediately instead), and
-//     fires whatever's currently queued as one last partial batch
-//     instead of abandoning it. Close blocks until every batch it
-//     ever started - including one already racing to fire the instant
-//     Close was called - has actually finished running fn, or returns
-//     ctx's error if ctx is done first (the in-flight batch keeps
-//     running in the background regardless; Close just stops waiting
-//     on it). Close is safe to call more than once, and concurrently
-//     with Add and with itself.
-//
-// The signatures must stay the same:
+// Keep the signatures:
 //
 //     func NewCollector(cfg Config, fn BatchFunc) *Collector
 //     func (c *Collector) Add(request int) <-chan Result
@@ -82,51 +40,41 @@ import (
 	"time"
 )
 
-// BatchFunc processes an entire batch of requests in one call.
-// responses[i] must be the result for requests[i] - the ordering
-// between the two slices matters.
+// BatchFunc processes a batch in one call.
+// responses[i] must match requests[i].
 type BatchFunc func(requests []int) (responses []int, err error)
 
-// Result is what a single caller receives back for its own request,
-// once the batch it was part of has been executed.
+// Result is the value or error for one caller.
 type Result struct {
 	Value int
 	Err   error
 }
 
-// ErrCollectorClosed is the error every Add call gets back once Close
-// has been called - a closed Collector never accepts another request.
+// ErrCollectorClosed means the Collector no longer accepts requests.
 var ErrCollectorClosed = errors.New("collector: closed")
 
-// Config controls when a batch fires - whichever bound is hit first.
+// Config controls when a batch fires.
 type Config struct {
-	// MaxBatchSize is how many requests trigger an immediate fire.
+	// MaxBatchSize is the request count that fires a batch.
 	MaxBatchSize int
-	// MaxWait bounds how long a batch waits for more requests before
-	// firing anyway, once its first request has arrived. Zero means no
-	// deadline - the batch only ever fires by reaching MaxBatchSize.
+	// MaxWait is the maximum wait after the first request.
+	// Zero means only MaxBatchSize can fire the batch.
 	MaxWait time.Duration
 }
 
-// Collector coalesces many independent calls to Add into batch calls
-// to fn, fans each batch's per-request responses (or a shared error)
-// back out through every caller's own channel, and keeps doing this
-// for as long as it hasn't been Closed.
+// Collector groups calls to Add into calls to fn.
 type Collector struct {
 	cfg Config
 	fn  BatchFunc
 }
 
-// NewCollector returns a Collector that batches calls to Add per cfg,
-// running fn once per batch.
+// NewCollector returns a Collector with the given config and batch function.
 func NewCollector(cfg Config, fn BatchFunc) *Collector {
 	return &Collector{cfg: cfg, fn: fn}
 }
 
-// Add registers request as part of the currently-open batch and
-// returns a channel that will receive exactly one Result once that
-// batch has run. Add may be called concurrently, from any number of
-// goroutines.
+// Add adds request to the open batch.
+// It returns a channel that receives one Result.
 func (c *Collector) Add(request int) <-chan Result {
 	ch := make(chan Result, 1)
 
@@ -140,7 +88,7 @@ func (c *Collector) Add(request int) <-chan Result {
 	return ch
 }
 
-// Close stops the Collector from accepting new requests.
+// Close rejects new requests and waits for started batches.
 func (c *Collector) Close(ctx context.Context) error {
 	return nil
 }
@@ -158,9 +106,7 @@ func main() {
 
 	c := NewCollector(Config{MaxBatchSize: 5, MaxWait: 200 * time.Millisecond}, double)
 
-	// 12 concurrent requests against a batch size of 5: two full
-	// batches plus a straggling partial one that only MaxWait can
-	// rescue.
+	// Twelve requests make two full batches and one partial batch.
 	var wg sync.WaitGroup
 	for i := 0; i < 12; i++ {
 		i := i

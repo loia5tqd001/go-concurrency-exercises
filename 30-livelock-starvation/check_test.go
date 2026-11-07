@@ -12,23 +12,15 @@ import (
 	"time"
 )
 
-// TestLivelockBothWorkersMakeProgress fails against the naive fixed-backoff
-// version (both workers stay locked at 0 progress) and passes once the
-// backoff is independently jittered. Runs under synctest so the fake clock
-// resolves every backoff instantly.
-//
-// The elapsed-time check guards against an implementation that quietly
-// drops the required announce/settle protocol (e.g. a bare TryLock loop):
-// that protocol costs at least two probeWindow sleeps per attempt even when
-// uncontested, so a compliant implementation always burns through a
-// predictable minimum of fake time.
+// Both workers must make progress after the backoff is jittered.
+// The fake clock resolves sleeps without waiting in real time.
+// The elapsed check rejects a solution that skips the required protocol.
 func TestLivelockBothWorkersMakeProgress(t *testing.T) {
 	synctest.Test(t, func(t *testing.T) {
 		const attempts = 50
-		const floor = attempts / 4 // generous: neither worker should be anywhere near stuck at zero
+		const floor = attempts / 4 // Neither worker should be near zero.
 
-		// Comfortably under one probeWindow, but well above what a
-		// protocol-less implementation would incur.
+		// This is below one probeWindow but above the minimum cost.
 		const minRoundOverhead = 500 * time.Microsecond
 		minElapsed := time.Duration(attempts) * minRoundOverhead
 
@@ -50,9 +42,7 @@ func TestLivelockBothWorkersMakeProgress(t *testing.T) {
 	})
 }
 
-// TestDispatcherServicesQueuedJobsWhenAvailable is a sanity check,
-// independent of the starvation bug: with no high-priority backlog at all,
-// low-priority jobs still get serviced normally.
+// Low-priority jobs must still run when no high-priority work waits.
 func TestDispatcherServicesQueuedJobsWhenAvailable(t *testing.T) {
 	d := NewDispatcher()
 	d.SubmitLowPriority(1)
@@ -65,20 +55,14 @@ func TestDispatcherServicesQueuedJobsWhenAvailable(t *testing.T) {
 	}
 }
 
-// maxLowWaitCycles is the README's bounded-wait guarantee: a waiting
-// low-priority job must complete within this many cycles, no matter how
-// deep the high-priority backlog is.
+// A low-priority job must finish within this many cycles.
 const maxLowWaitCycles = 10
 
-// TestDispatcherLowPriorityBoundedWait keeps a high-priority backlog deep
-// enough that it never empties within maxLowWaitCycles, submits exactly one
-// low-priority job, and runs one cycle at a time to find out how long the
-// low-priority job actually waits. Fails against the naive strict-priority
-// policy, which never services it at all.
+// One low-priority job must run despite a deep high-priority backlog.
 func TestDispatcherLowPriorityBoundedWait(t *testing.T) {
 	d := NewDispatcher()
 
-	const highBacklog = maxLowWaitCycles * 100 // never drains within the bound
+	const highBacklog = maxLowWaitCycles * 100 // This backlog cannot empty in time.
 	for i := 0; i < highBacklog; i++ {
 		d.SubmitHighPriority(i)
 	}
@@ -93,9 +77,7 @@ func TestDispatcherLowPriorityBoundedWait(t *testing.T) {
 	t.Fatalf("low-priority job wasn't serviced within %d cycles despite a %d-job high-priority backlog", maxLowWaitCycles, highBacklog)
 }
 
-// TestDispatcherLowPriorityQueueKeepsFIFOOrder makes sure the aging
-// guarantee applies to the oldest low-priority job even when several
-// low-priority jobs are waiting behind the same high-priority backlog.
+// The oldest low-priority job must win when several are waiting.
 func TestDispatcherLowPriorityQueueKeepsFIFOOrder(t *testing.T) {
 	d := NewDispatcher()
 
@@ -116,12 +98,8 @@ func TestDispatcherLowPriorityQueueKeepsFIFOOrder(t *testing.T) {
 	t.Fatalf("none of the queued low-priority jobs was serviced within %d cycles", maxLowWaitCycles)
 }
 
-// TestDispatcherHighPriorityKeepsMajorityShare checks fairness from the
-// other direction: with BOTH queues kept busy for the whole run, high-priority
-// work must still take at least two-thirds of completed cycles. This is what
-// catches a policy that has simply swapped which queue is favored (e.g.
-// draining low first) - such a policy passes the bounded-wait test trivially
-// but fails the majority-share check here.
+// With both queues busy, high-priority work must keep most cycles.
+// This catches a policy that simply favors the low queue.
 func TestDispatcherHighPriorityKeepsMajorityShare(t *testing.T) {
 	d := NewDispatcher()
 

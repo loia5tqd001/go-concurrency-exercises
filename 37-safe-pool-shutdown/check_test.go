@@ -13,11 +13,7 @@ import (
 	"time"
 )
 
-// closeTimeout bounds how long we'll wait for Close to return. The
-// naive Pool can deadlock (a lost sync.WaitGroup Add/Done pairing, or
-// a straggler goroutine blocked forever trying to send on a channel
-// nobody will ever read from again), so this turns that into a clear,
-// fast test failure instead of a 10-minute `go test` timeout.
+// closeTimeout turns a stuck Close into a fast failure.
 const closeTimeout = 3 * time.Second
 
 func closeWithTimeout(t *testing.T, p *Pool) {
@@ -36,9 +32,7 @@ func closeWithTimeout(t *testing.T, p *Pool) {
 	}
 }
 
-// TestSubmitRunsAllJobsSequentially is the uncontended baseline: every
-// Submit call made before Close is ever invoked must be accepted, and
-// must have actually run by the time Close returns.
+// Every job accepted before Close must run.
 func TestSubmitRunsAllJobsSequentially(t *testing.T) {
 	p := NewPool(3)
 
@@ -58,16 +52,8 @@ func TestSubmitRunsAllJobsSequentially(t *testing.T) {
 	}
 }
 
-// TestSubmitAfterCloseIsRejectedNotPanicked is the deterministic core
-// test. It submits a few jobs, closes the pool, WAITS for Close to
-// fully return, and only then fires a burst of concurrent Submit
-// calls - each one guaranteed to happen strictly after the pool is
-// already closed. Every naive Pool, on every run, sends on an
-// already-closed channel here and panics: there is no scheduling luck
-// involved, since Close has unambiguously already finished by the
-// time these calls start. A correct Pool must reject every one of
-// them (accepted = false), run none of their jobs, and never let a
-// panic escape Submit.
+// Submit after Close must return false without panic.
+// None of those jobs may run.
 func TestSubmitAfterCloseIsRejectedNotPanicked(t *testing.T) {
 	p := NewPool(3)
 
@@ -120,20 +106,11 @@ func TestSubmitAfterCloseIsRejectedNotPanicked(t *testing.T) {
 	}
 }
 
-// TestConcurrentSubmitDuringCloseNeverPanics goes further than the
-// deterministic test above: `submitters` goroutines call Submit at
-// once, racing against a single concurrent call to Close, so some
-// calls genuinely overlap the shutdown itself rather than landing
-// cleanly before or after it. It checks that no panic ever escapes
-// Submit under that overlap, and that every job Submit reported as
-// accepted actually ran by the time Close returns - ruling out a
-// "fix" that silently drops jobs once shutdown starts instead of
-// honestly reporting accepted = false for them. Run with `go test
-// -race`, where the added instrumentation overhead makes the race
-// window reliably wide enough to hit.
+// Submit and Close must be safe when they overlap.
+// Every accepted job must run before Close returns.
 func TestConcurrentSubmitDuringCloseNeverPanics(t *testing.T) {
 	const submitters = 200
-	const closeAfter = 10 // start Close early, while most callers are still mid-flight
+	const closeAfter = 10 // Start Close while other callers are active.
 
 	p := NewPool(4)
 

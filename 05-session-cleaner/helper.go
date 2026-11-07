@@ -12,7 +12,7 @@ import (
 	"io"
 )
 
-// MakeSessionID is used to generate a random dummy sessionID
+// MakeSessionID returns a random session ID.
 func MakeSessionID() (string, error) {
 	buf := make([]byte, 26)
 	_, err := io.ReadFull(rand.Reader, buf)

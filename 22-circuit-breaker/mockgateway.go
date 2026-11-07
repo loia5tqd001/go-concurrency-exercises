@@ -12,13 +12,11 @@ import (
 	"time"
 )
 
-// ErrGatewayDown is returned by Charge whenever the gateway has been
-// set into a failing state.
+// ErrGatewayDown means the mock gateway is failing.
 var ErrGatewayDown = errors.New("payment gateway: connection down")
 
-// PaymentGateway simulates a flaky downstream payment gateway. Tests
-// (and main) can flip it between failing and healthy via SetFailing.
-// All methods are safe for concurrent use.
+// PaymentGateway simulates a flaky payment service.
+// Its methods are safe for concurrent use.
 type PaymentGateway struct {
 	mu      sync.Mutex
 	failing bool
@@ -26,41 +24,34 @@ type PaymentGateway struct {
 	delay   time.Duration
 }
 
-// NewPaymentGateway creates a new, initially healthy, PaymentGateway.
+// NewPaymentGateway returns a healthy gateway.
 func NewPaymentGateway() *PaymentGateway {
 	return &PaymentGateway{}
 }
 
-// SetFailing controls whether subsequent calls to Charge succeed or
-// fail. Used by tests to simulate the gateway going down and
-// recovering.
+// SetFailing controls whether Charge succeeds.
 func (g *PaymentGateway) SetFailing(failing bool) {
 	g.mu.Lock()
 	defer g.mu.Unlock()
 	g.failing = failing
 }
 
-// Calls returns the number of times Charge actually reached the
-// gateway.
+// Calls returns how many calls reached the gateway.
 func (g *PaymentGateway) Calls() int {
 	g.mu.Lock()
 	defer g.mu.Unlock()
 	return g.calls
 }
 
-// SetDelay makes every subsequent call to Charge block for d before
-// returning, simulating a slow downstream call. Used by tests that
-// check a caller isn't stuck waiting on the breaker's own lock while
-// an unrelated call is in flight.
+// SetDelay makes Charge wait for d.
 func (g *PaymentGateway) SetDelay(d time.Duration) {
 	g.mu.Lock()
 	defer g.mu.Unlock()
 	g.delay = d
 }
 
-// Charge simulates charging amountCents to the gateway. It always
-// counts as a call regardless of outcome. If the gateway is currently
-// set to failing, it returns ErrGatewayDown; otherwise it succeeds.
+// Charge simulates a payment.
+// It counts every call and returns ErrGatewayDown while failing.
 func (g *PaymentGateway) Charge(amountCents int) error {
 	g.mu.Lock()
 	g.calls++

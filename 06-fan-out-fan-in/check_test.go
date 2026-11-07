@@ -15,9 +15,7 @@ import (
 	"time"
 )
 
-// expectedThumbnailData mirrors the (deterministic) data-generation
-// logic in ProcessImage, without paying for the simulated latency, so
-// tests can check correctness cheaply.
+// expectedThumbnailData copies ProcessImage data logic without the sleep.
 func expectedThumbnailData(url string) string {
 	h := fnv.New64a()
 	_, _ = h.Write([]byte(url))
@@ -34,10 +32,8 @@ func testURLs(n int) []string {
 	return urls
 }
 
-// TestGenerateThumbnailsCorrectness checks that every URL that goes in
-// comes back out exactly once, with the right thumbnail data. It
-// makes no assumption about ordering or timing, so it passes against
-// both the naive sequential implementation and a fanned-out one.
+// TestGenerateThumbnailsCorrectness checks each URL appears once with right data.
+// It does not depend on order or timing.
 func TestGenerateThumbnailsCorrectness(t *testing.T) {
 	urls := testURLs(10)
 
@@ -67,16 +63,10 @@ func TestGenerateThumbnailsCorrectness(t *testing.T) {
 	}
 }
 
-// TestGenerateThumbnailsConcurrency asserts that GenerateThumbnails
-// actually fans work out across multiple goroutines instead of
-// processing URLs one at a time. Ten URLs at 150ms each take 1.5s
-// sequentially; a fanned-out implementation finishes in roughly one
-// ProcessImage call's worth of (fake) time, regardless of how many
-// URLs there are. synctest.Test runs the body on a fake clock that
-// jumps forward as soon as every goroutine in the bubble is durably
-// blocked, so this assertion is exact and doesn't flake on a busy
-// machine. This test does not require a fixed-size worker pool - one
-// goroutine per URL passes just as well as a bounded pool would.
+// TestGenerateThumbnailsConcurrency checks that image work runs concurrently.
+// Ten sequential calls take 1.5s. Concurrent calls take about 150ms.
+// synctest uses a fake clock, so the timing check is stable.
+// One goroutine per URL is enough.
 func TestGenerateThumbnailsConcurrency(t *testing.T) {
 	synctest.Test(t, func(t *testing.T) {
 		urls := testURLs(10)
@@ -100,10 +90,8 @@ func TestGenerateThumbnailsConcurrency(t *testing.T) {
 	})
 }
 
-// TestGenerateThumbnailsConcurrentCorrectness stress-tests
-// GenerateThumbnails with many URLs to catch data races on any shared
-// slice/map used internally to collect results (run with `go test
-// -race`).
+// TestGenerateThumbnailsConcurrentCorrectness checks many URLs with the race detector.
+// It looks for unsafe shared result storage.
 func TestGenerateThumbnailsConcurrentCorrectness(t *testing.T) {
 	urls := testURLs(50)
 

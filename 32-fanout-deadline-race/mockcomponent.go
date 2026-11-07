@@ -11,11 +11,9 @@ import (
 	"time"
 )
 
-// MockComponent is a test/demo helper that builds a Component with a
-// configurable artificial latency, and exposes - after the fact -
-// whether that particular call ran all the way to completion. Like
-// the real components Construct fans out to, its Component method has
-// no ctx parameter, so it cannot be told to stop early once started.
+// MockComponent is a component with a fixed delay.
+// It cannot observe a context.
+// It records whether the component finished.
 type MockComponent struct {
 	value   string
 	latency time.Duration
@@ -24,17 +22,13 @@ type MockComponent struct {
 	completed bool
 }
 
-// NewMockComponent creates a MockComponent that, once wired up via its
-// Component method, blocks for latency (simulating real, ctx-blind
-// work) before returning value.
+// NewMockComponent returns a component with the given value and delay.
 func NewMockComponent(value string, latency time.Duration) *MockComponent {
 	return &MockComponent{value: value, latency: latency}
 }
 
-// Component is the Component function backed by this mock - pass
-// m.Component straight into Construct as one of its four components.
-// It unconditionally sleeps for m.latency and then returns - it has
-// no way to notice a deadline elapsing, no matter how long it runs.
+// Component runs the mock. Pass it directly to Construct.
+// It always waits for the full delay.
 func (m *MockComponent) Component() string {
 	time.Sleep(m.latency)
 
@@ -45,9 +39,7 @@ func (m *MockComponent) Component() string {
 	return m.value
 }
 
-// RanToCompletion reports whether this component's artificial latency
-// fully elapsed and it returned its value, regardless of whether
-// Construct was still around to use it.
+// RanToCompletion reports whether Component finished.
 func (m *MockComponent) RanToCompletion() bool {
 	m.mu.Lock()
 	defer m.mu.Unlock()

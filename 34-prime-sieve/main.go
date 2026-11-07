@@ -1,33 +1,16 @@
 //////////////////////////////////////////////////////////////////////
 //
-// Given is a concurrent Sieve of Eratosthenes, modeled directly on the
-// classic concurrent prime sieve from Rob Pike's 2012 "Go Concurrency
-// Patterns" talk: generate emits 2, 3, 4, 5, ... forever, and every
-// time a new prime falls out of the chain, a new filter stage gets
-// spliced onto the end of it that strips that prime's multiples out of
-// everything flowing past. Ask for the first n primes and you get a
-// pipeline that's n+1 goroutines deep by the time it's done: one
-// generate, and one filter per prime found so far.
+// This is a concurrent Sieve of Eratosthenes.
+// generate emits numbers and each filter removes one prime's multiples.
+// The first n primes create a pipeline of n+1 goroutines.
 //
-// generate and filter both already correctly respect a done channel -
-// each one's select watches done on every receive AND every send it
-// makes, exactly like the or-done idiom from exercise 07. That part of
-// this exercise is already solved for you; don't change either
-// function.
+// generate and filter already respond to done. Do not change them.
 //
-// The bug is entirely in Primes. It builds the chain exactly as
-// described and reads exactly n primes off the end of it, and every
-// value it returns is correct - but once it has its n-th prime and
-// returns, every one of those n+1 goroutines is still out there,
-// blocked forever trying to send the NEXT candidate integer to a
-// pipeline nobody is reading from anymore. Call Primes(50) a few times
-// in a row and you leak dozens of goroutines every single call,
-// forever.
+// Primes returns correct values but leaks the whole pipeline.
+// Once it has n primes, every stage keeps waiting to send.
 //
-// Your task is to fix Primes so that once it has collected n primes,
-// it shuts the entire chain down - generate and every filter stage it
-// spliced in - instead of abandoning it mid-flight. The signature must
-// stay the same:
+// Fix Primes so it stops generate and every filter before returning.
+// Keep the signature:
 //
 //     func Primes(n int) []int
 //
@@ -36,10 +19,8 @@ package main
 
 import "fmt"
 
-// generate sends 2, 3, 4, 5, ... on the returned channel, forever -
-// the classic Sieve of Eratosthenes' first stage. It stops as soon as
-// done is closed, instead of blocking forever trying to send the next
-// integer to nobody. Already correct - nothing here needs to change.
+// generate sends 2, 3, 4, 5, and so on.
+// It stops when done closes. It is already correct.
 func generate(done <-chan struct{}) <-chan int {
 	out := make(chan int)
 	go func() {
@@ -55,10 +36,8 @@ func generate(done <-chan struct{}) <-chan int {
 	return out
 }
 
-// filter reads every value from in and forwards it to the returned
-// channel unless it's a multiple of prime - one stage of the sieve
-// chain. Like generate, it stops as soon as done is closed. Already
-// correct - nothing here needs to change.
+// filter forwards values that are not multiples of prime.
+// It stops when done closes. It is already correct.
 func filter(done <-chan struct{}, in <-chan int, prime int) <-chan int {
 	out := make(chan int)
 	go func() {
@@ -84,15 +63,9 @@ func filter(done <-chan struct{}, in <-chan int, prime int) <-chan int {
 	return out
 }
 
-// Primes returns the first n primes, using a concurrently-growing
-// pipeline: generate feeds a chain of filter stages, one per prime
-// found so far, each one stripping that prime's multiples out of
-// everything flowing past it.
+// Primes returns the first n primes.
 //
-// NAIVE / BROKEN: it builds and drains exactly that pipeline, and the
-// n primes it returns are always correct - but nothing ever tells any
-// stage in the chain to stop. Every call leaks its entire
-// n+1-goroutine chain, forever.
+// BROKEN: It never stops the pipeline, so every call leaks goroutines.
 func Primes(n int) []int {
 	ch := generate(nil)
 

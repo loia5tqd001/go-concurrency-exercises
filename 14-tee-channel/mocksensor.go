@@ -2,15 +2,10 @@ package main
 
 import "time"
 
-// SensorInterval is how long StartSensor waits between emitting two
-// consecutive readings.
+// SensorInterval is the delay between readings.
 const SensorInterval = 5 * time.Millisecond
 
-// StartSensor simulates a hardware sensor: it emits `count` incrementing
-// integer readings (0, 1, 2, ...), one every SensorInterval, on the
-// channel it returns, then closes that channel. Think of a temperature
-// probe or an accelerometer streaming samples that need to reach more
-// than one consumer - a live display AND a logger, say.
+// StartSensor emits 0 through count-1, then closes its channel.
 func StartSensor(count int) <-chan int {
 	out := make(chan int)
 

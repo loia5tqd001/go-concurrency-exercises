@@ -11,26 +11,22 @@ import (
 	"time"
 )
 
-// mainTimeout bounds the whole test. A correct solution rate-limits to
-// 1 fetch/sec and this crawl makes ~13 fetches (depth 4 from
-// http://golang.org/), so it legitimately takes ~13s - measured at
-// 13.00s against a correct reference fix. A solution that deadlocks
-// (e.g. a mutex or WaitGroup misused while adding the rate limit)
-// would otherwise hang toward Go's default 10-minute test timeout
-// instead of failing fast.
+// mainTimeout bounds the whole test.
+// A correct solution limits fetches to one per second.
+// This crawl makes about 13 fetches, so it needs about 13 seconds.
+// The limit lets a deadlocked solution fail quickly.
 const mainTimeout = 30 * time.Second
 
 func TestMain(t *testing.T) {
 	fetchSig := fetchSignalInstance()
 
-	// violation carries the "too fast" message out of the checker
-	// goroutine below. t.Fatal/t.FailNow may only be called from the
-	// goroutine running the test itself, so the checker reports over a
-	// channel instead of failing the test directly.
+	// violation carries a timing error from the checker goroutine.
+	// t.Fatal may only run in the test goroutine.
+	// The checker reports through this channel instead.
 	violation := make(chan string, 1)
 	go func(start time.Time) {
 		for range fetchSig {
-			// Check if signal arrived earlier than a second (with error margin)
+			// Fail if two fetches are less than one second apart.
 			if time.Since(start) < 950*time.Millisecond {
 				select {
 				case violation <- "There exists a two crawls that were executed less than 1 second apart.":
@@ -53,7 +49,7 @@ func TestMain(t *testing.T) {
 		t.Log(msg)
 		t.Fatal("Solution is incorrect.")
 	case <-done:
-		// main() returned with no timing violation observed - solution is correct.
+		// main returned without a timing error.
 	case <-time.After(mainTimeout):
 		t.Fatalf("main() did not finish within %s - the solution likely deadlocks", mainTimeout)
 	}

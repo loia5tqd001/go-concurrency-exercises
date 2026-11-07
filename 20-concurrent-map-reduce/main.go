@@ -1,33 +1,16 @@
 //////////////////////////////////////////////////////////////////////
 //
-// WordCount is supposed to count word occurrences across many text
-// chunks, using the map-reduce pattern: a "map" phase that processes
-// each chunk independently and concurrently into its own partial
-// count, and a "reduce" phase that merges all the partials into one
-// final result - all without multiple goroutines ever writing to the
-// same shared map at the same time (which would race). Right now it
-// processes chunks sequentially, one at a time, merging each chunk's
-// words directly into a single shared result map as it goes - which
-// is correct, but leaves all the chunk-level parallelism on the
-// table, since chunk 2 can't even start being tokenized until chunk
-// 1's tokenizing (simulated by time.Sleep(ProcessDelay) per chunk) has
-// fully finished.
+// WordCount counts words across text chunks.
+// The current code processes each chunk one at a time.
 //
-// Your task is to reimplement WordCount as true map-reduce: spawn one
-// goroutine per chunk (the "map" phase) that tokenizes its OWN chunk
-// into its OWN local map[string]int (after time.Sleep(ProcessDelay),
-// simulating the per-chunk cost), with no shared mutable state
-// touched during this phase. Then, once all map-phase goroutines have
-// finished (a sync.WaitGroup, or fanning the partials in over a
-// channel of maps, both work), a single "reduce" step merges every
-// partial map into one final result sequentially, on one goroutine,
-// so no concurrent writes to the final map are ever needed. The
-// function signature must stay the same:
+// Your task is to use map-reduce:
+// map each chunk into its own local count, then merge the counts.
+// Several goroutines must never write to the final map at once.
+// Keep this signature:
 //
 //     func WordCount(chunks []string) map[string]int
 //
-// so that it remains a drop-in replacement for the sequential version
-// below.
+// The tests use this exact signature.
 //
 
 package main
@@ -38,8 +21,8 @@ import (
 	"time"
 )
 
-// WordCount counts word occurrences across all chunks. It currently
-// does so sequentially, one chunk at a time.
+// WordCount counts words in all chunks.
+// It is sequential now.
 func WordCount(chunks []string) map[string]int {
 	result := make(map[string]int)
 

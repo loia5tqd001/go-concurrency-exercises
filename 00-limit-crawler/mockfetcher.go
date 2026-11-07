@@ -8,8 +8,7 @@ package main
 
 import "fmt"
 
-// MockFetcher is Fetcher that returns canned results. Taken from
-// https://tour.golang.org/concurrency/10
+// MockFetcher returns fixed pages from the Go concurrency tour.
 type MockFetcher map[string]*mockResult
 
 type mockResult struct {
@@ -17,7 +16,7 @@ type mockResult struct {
 	urls []string
 }
 
-// Fetch pretends to retrieve the URLs and its subpages
+// Fetch returns a page and its links.
 func (f MockFetcher) Fetch(url string) (string, []string, error) {
 	fetchSignalInstance() <- true
 	if res, ok := f[url]; ok {
@@ -26,7 +25,7 @@ func (f MockFetcher) Fetch(url string) (string, []string, error) {
 	return "", nil, fmt.Errorf("not found: %s", url)
 }
 
-// fetcher is a populated MockFetcher.
+// fetcher holds the pages for this exercise.
 var fetcher = MockFetcher{
 	"http://golang.org/": &mockResult{
 		"The Go Programming Language",
@@ -61,16 +60,15 @@ var fetcher = MockFetcher{
 }
 
 //////////////////////////////////////////////////////////////////////
-// Code below is mainly used to test whether a solution is correct or
-// not
+// The code below supports the solution check.
 
-// fetchSignal is used to test whether the solution is correct
+// fetchSignal records each fetch for the timing check.
 var fetchSignal chan bool
 
-// fetchSignalInstance is a singleton to access fetchSignal
+// fetchSignalInstance returns the shared signal channel.
 func fetchSignalInstance() chan bool {
 	if fetchSignal == nil {
-		// Use buffered channel to avoid blocking
+		// Buffer the channel so sends do not block.
 		fetchSignal = make(chan bool, 1000)
 	}
 	return fetchSignal

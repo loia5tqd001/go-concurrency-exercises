@@ -1,23 +1,20 @@
 //////////////////////////////////////////////////////////////////////
 //
-// Your video processing service has a freemium model. Every free user
-// has 10 sec of processing time total, accumulated across all of their
-// requests - not 10s per request. After that, the service kills the
-// request, unless the user is a paid premium user.
+// Free users get 10 seconds total, not 10 seconds per request.
+// Kill the request when free quota runs out.
+// Premium users are never killed.
 //
 
 package main
 
-// User defines the UserModel. Use this to check whether a User is a
-// Premium user or not
+// User stores the account type and total processing time.
 type User struct {
 	ID        int
 	IsPremium bool
-	TimeUsed  int64 // in seconds
+	TimeUsed  int64 // total seconds used
 }
 
-// HandleRequest runs the processes requested by users. Returns false
-// if process had to be killed
+// HandleRequest runs process and reports whether it completed.
 func HandleRequest(process func(), u *User) bool {
 	process()
 	return true

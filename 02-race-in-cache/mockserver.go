@@ -17,8 +17,7 @@ const (
 	callsPerCycle = 100
 )
 
-// RunMockServer simulates a running server, which accesses the
-// key-value database through our cache
+// RunMockServer reads many keys through the cache at the same time.
 func RunMockServer(cache *KeyStoreCache, t *testing.T) {
 	var wg sync.WaitGroup
 

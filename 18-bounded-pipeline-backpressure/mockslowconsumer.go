@@ -2,14 +2,10 @@ package main
 
 import "time"
 
-// ConsumeLatency is how long a single call to SlowConsume takes. It
-// stands in for whatever expensive per-item cost a real downstream
-// sink would pay (writing to a remote store, a slow disk, a
-// rate-limited API, ...).
+// ConsumeLatency is the duration of one slow consumption.
 const ConsumeLatency = 50 * time.Millisecond
 
-// SlowConsume simulates a slow downstream sink (e.g. writing to a
-// remote store) - it takes 50ms to consume a single item.
+// SlowConsume sleeps for ConsumeLatency.
 func SlowConsume(item int) {
 	time.Sleep(ConsumeLatency)
 }

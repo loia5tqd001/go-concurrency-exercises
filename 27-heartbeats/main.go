@@ -1,55 +1,27 @@
 //////////////////////////////////////////////////////////////////////
 //
-// DoWork is supposed to simulate a long-running worker that processes
-// workUnits units of work one at a time (see mockworker.go for the
-// per-unit timing helper), sending one result per completed unit on
-// results and closing results once the whole job is done. While it is
-// actively working on a unit, it is also supposed to pulse on
-// heartbeat roughly every pulseInterval, for as long as that unit
-// takes - that pulse is the only way a caller monitoring the worker
-// can tell "still working, just slow" apart from "wedged forever",
-// since a unit that takes a long time and a unit that has stalled
-// completely look identical if all you can do is wait for its result.
+// DoWork runs work units and sends one result per unit.
+// It should also send heartbeats while it works.
+// A heartbeat distinguishes a slow unit from a stalled one.
 //
-// Right now DoWork's heartbeat is basically decorative: it fires a
-// single pulse the instant the goroutine starts, then never again -
-// no matter how long an individual unit takes, or whether one has
-// stalled outright. The declared heartbeat return value exists, but
-// nothing after startup ever sends on it again.
-//
-// WorkWithTimeout is supposed to run DoWork and use the heartbeat to
-// detect a stalled worker quickly: reset a timer every time a
-// heartbeat OR a result arrives, and fail the moment perPulseTimeout
-// elapses with neither. Right now it does nothing like that - it just
-// starts a single flat timer sized off the whole job at the very
-// beginning and never resets it, and it never even looks at
-// heartbeat. That means it can't tell "worker pulsing normally on a
-// slow-but-fine job" apart from "worker wedged": a healthy job that
-// happens to run a bit long gets killed just as dead as a genuinely
-// stalled one, and a real stall isn't caught within one pulse
-// interval of it starting - only whenever that same flat deadline
-// happens to expire, however long that turns out to be.
+// The current code sends one heartbeat at startup.
+// It sends nothing while a unit is running.
+// WorkWithTimeout uses one timer for the whole job.
+// That timer cannot find a stall quickly.
 //
 // Your task is to fix both:
+//   - DoWork sends heartbeats during each unit.
+//     It must still stop when done closes.
+//   - WorkWithTimeout listens for heartbeats and results.
+//     It resets a timer after each one.
+//     It returns an error after one quiet timeout.
 //
-//   - DoWork must pulse on heartbeat throughout each unit's work, not
-//     just once at startup, while still respecting done (stop
-//     promptly instead of blocking forever on a send nobody is
-//     receiving).
-//   - WorkWithTimeout must select on heartbeat, results, AND a timer
-//     that gets reset to perPulseTimeout on every heartbeat or result
-//     received - returning a non-nil error the moment perPulseTimeout
-//     elapses with neither, instead of waiting for however long the
-//     stalled unit would otherwise have taken.
-//
-// The signatures must stay the same:
+// Keep these signatures:
 //
 //	func DoWork(done <-chan struct{}, pulseInterval time.Duration, workUnits int) (heartbeat <-chan struct{}, results <-chan int)
 //	func WorkWithTimeout(workUnits int, stallAfter int, perPulseTimeout time.Duration) ([]int, error)
 //
-// stallAfter < 0 or stallAfter >= workUnits means "no stall, run
-// normally" - see mockworker.go's SetStallUnit for how the simulated
-// stall is configured.
+// stallAfter outside the work range disables the simulated stall.
 //
 
 package main
@@ -59,47 +31,28 @@ import (
 	"time"
 )
 
-// workerPulseInterval is the fixed interval WorkWithTimeout asks
-// DoWork to pulse at. It must stay shorter than any perPulseTimeout a
-// caller passes in, or every call would time out before a single
-// heartbeat could possibly arrive.
+// workerPulseInterval is shorter than a normal perPulseTimeout.
 const workerPulseInterval = 100 * time.Millisecond
 
-// DoWork simulates doing workUnits units of work, one at a time,
-// sending one result int per completed unit on results and closing
-// results when the whole job is done (or done fires early). It is
-// meant to also pulse on heartbeat roughly every pulseInterval for as
-// long as it is actively working on a unit - see the package comment
-// above for why the implementation below does not actually do that
-// yet.
+// DoWork runs the units and returns heartbeat and result channels.
 func DoWork(done <-chan struct{}, pulseInterval time.Duration, workUnits int) (heartbeat <-chan struct{}, results <-chan int) {
-	// hb is deliberately buffered (capacity 1) so the single startup
-	// pulse below can actually complete even though WorkWithTimeout
-	// (see below) discards the heartbeat return value and never
-	// receives from it - an unbuffered channel here would make that
-	// first send block forever, deadlocking the whole worker before
-	// it ever reached its first unit of work.
+	// Keep this buffer for the startup pulse.
+	// The naive WorkWithTimeout ignores heartbeat.
 	hb := make(chan struct{}, 1)
 	res := make(chan int)
 
 	go func() {
 		defer close(res)
 
-		// A single "I'm alive" pulse, sent once, right at startup.
-		// This is NOT what the exercise asks for: it says nothing
-		// about whether the worker is still making progress a second,
-		// or a minute, into some later unit of work.
+		// This one pulse does not show later progress.
 		select {
 		case hb <- struct{}{}:
 		case <-done:
 			return
 		}
 
-		// checkIn is passed to SimulateUnit as its "still working,
-		// got a moment to report in?" callback - but we never wire it
-		// up to actually send a heartbeat, so no matter how long a
-		// unit takes (normal or stalled), nothing more is ever sent
-		// on hb after the single pulse above.
+		// checkIn should send a heartbeat.
+		// The current callback does nothing.
 		checkIn := func() bool { return true }
 
 		for i := 0; i < workUnits; i++ {
@@ -118,12 +71,7 @@ func DoWork(done <-chan struct{}, pulseInterval time.Duration, workUnits int) (h
 	return hb, res
 }
 
-// WorkWithTimeout runs DoWork to completion and is meant to fail fast
-// - within roughly one perPulseTimeout window - the moment the worker
-// stops pulsing AND stops producing results, instead of waiting for
-// however long the stalled unit would otherwise have taken. See the
-// package comment above for why the implementation below does not
-// actually do that yet.
+// WorkWithTimeout collects results until it ends or the worker stalls.
 func WorkWithTimeout(workUnits int, stallAfter int, perPulseTimeout time.Duration) ([]int, error) {
 	SetStallUnit(stallAfter)
 
@@ -132,11 +80,8 @@ func WorkWithTimeout(workUnits int, stallAfter int, perPulseTimeout time.Duratio
 
 	_, results := DoWork(done, workerPulseInterval, workUnits)
 
-	// A single flat deadline for the ENTIRE job, set once, up front,
-	// and never reset. It has no way to distinguish "still going,
-	// just slow" from "wedged five seconds ago": both look exactly
-	// the same to a timer that only ever fires once, however long
-	// after the job started that turns out to be.
+	// This one deadline covers the whole job.
+	// It cannot detect a stall during the job.
 	timedOut := time.After(perPulseTimeout * time.Duration(workUnits))
 
 	collected := make([]int, 0, workUnits)

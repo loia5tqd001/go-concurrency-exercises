@@ -11,16 +11,11 @@ import (
 	"time"
 )
 
-// UnitDuration is how long a single, healthy work unit takes to
-// simulate.
+// UnitDuration is the time for one healthy unit.
 const UnitDuration = 400 * time.Millisecond
 
-// StallDuration is how long a *stalled* unit blocks for: one single,
-// un-checkpointed wait, standing in for a worker wedged on something
-// unresponsive downstream (a hung network call, a deadlock, a stuck
-// disk read, ...) that offers no opportunity to check back in at all
-// until it finally gives up - unlike a healthy unit, which
-// cooperatively checks in every pulseInterval along the way.
+// StallDuration represents a worker stuck in one long wait.
+// It never checks in until the wait ends.
 const StallDuration = 24 * time.Hour
 
 var (
@@ -28,13 +23,9 @@ var (
 	stallIndex = -1
 )
 
-// SetStallUnit configures the (0-based) work-unit index that
-// SimulateUnit should simulate a stall for. Pass a negative index, or
-// one that is out of range for the job's work units, to disable
-// stalling entirely - every unit then just runs at its normal
-// UnitDuration. Safe for concurrent use; concurrent callers that don't
-// care about stalling should all pass a negative index so they don't
-// fight over this shared, package-level configuration.
+// SetStallUnit sets the unit that will stall.
+// Use a negative or out-of-range value to disable stalls.
+// The setting is shared by all callers.
 func SetStallUnit(index int) {
 	stallMu.Lock()
 	stallIndex = index
@@ -47,24 +38,10 @@ func isStallUnit(index int) bool {
 	return index == stallIndex
 }
 
-// SimulateUnit simulates performing one full unit of work at position
-// unitIndex, respecting done throughout.
-//
-// Under normal conditions it takes UnitDuration, split into
-// pulseInterval-sized slices - after every slice except the very
-// last, it calls checkIn() to give the caller a chance to report that
-// it is still actively working (e.g. by pulsing a heartbeat) before
-// continuing. If checkIn returns false, SimulateUnit stops early and
-// returns false itself.
-//
-// If unitIndex was configured via SetStallUnit to stall, none of that
-// happens: SimulateUnit instead blocks for one single, un-checkpointed
-// StallDuration wait - checkIn is never called - simulating a worker
-// wedged on an unresponsive step with no chance to check back in
-// before it (eventually, if ever) returns.
-//
-// SimulateUnit returns true if the unit ran to completion, or false if
-// done fired (or checkIn asked to stop) before that happened.
+// SimulateUnit runs one work unit.
+// A healthy unit calls checkIn between short waits.
+// A stalled unit waits once and never calls checkIn.
+// It returns false if done or checkIn asks it to stop.
 func SimulateUnit(done <-chan struct{}, unitIndex int, pulseInterval time.Duration, checkIn func() bool) bool {
 	if isStallUnit(unitIndex) {
 		timer := time.NewTimer(StallDuration)

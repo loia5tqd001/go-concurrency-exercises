@@ -11,26 +11,10 @@ import (
 	"time"
 )
 
-// dineWithTimeout runs Dine(numPhilosophers, mealsToEat) on its own
-// goroutine and waits for it to finish, bounded by a real-clock
-// timeout.
-//
-// This deliberately does NOT use testing/synctest: the naive
-// implementation in main.go doesn't just run slowly, it deadlocks -
-// every philosopher goroutine ends up durably blocked forever,
-// waiting on a fork that will never be released. synctest.Test
-// detects exactly that condition ("every goroutine in the bubble is
-// durably blocked") and reacts by panicking with "deadlock: ...",
-// which would crash the whole test binary and fail every test in
-// this file, not just this one - a confusing result for an exercise
-// that is *about* deadlock.
-//
-// Instead, we run the simulation on a plain goroutine and signal
-// completion over a channel. If Dine deadlocks, that goroutine simply
-// never sends and is leaked - but that's harmless: go test doesn't
-// wait around for leaked goroutines, it moves on as soon as the test
-// function returns, so the timeout below produces a clean, fast,
-// readable failure instead of a hang or a panic.
+// dineWithTimeout runs Dine and returns after a real-time limit.
+// We do not use synctest here.
+// synctest panics on a deadlock and would fail the whole file.
+// A plain goroutine lets this test fail cleanly in one place.
 func dineWithTimeout(t *testing.T, numPhilosophers, mealsToEat int, timeout time.Duration) int32 {
 	t.Helper()
 
@@ -49,19 +33,9 @@ func dineWithTimeout(t *testing.T, numPhilosophers, mealsToEat int, timeout time
 	}
 }
 
-// TestDineCompletesWithoutDeadlock is the key test. mealsToEat is set
-// far higher than a "natural" handful of meals on purpose: the naive
-// implementation's deadlock is only reliable because of a brief
-// artificial pause between grabbing the left and right fork (see
-// main.go), which forces every philosopher into lockstep on the very
-// first meal. A solver who notices that pause and deletes it - without
-// actually fixing fork acquisition order - would shrink the collision
-// window down to whatever's left of scheduling noise and could
-// otherwise slip a still-broken implementation past a low meal count
-// on a lucky run. Looping enough meals gives that same
-// still-broken implementation enough independent chances to collide
-// that it deadlocks reliably, while still allowing a correct fix that
-// preserves the scaffold's two 1ms pauses to finish within the budget.
+// TestDineCompletesWithoutDeadlock uses many meals.
+// The scaffold pause makes a bad fix deadlock again and again.
+// A correct fix still finishes within the test limit.
 func TestDineCompletesWithoutDeadlock(t *testing.T) {
 	const numPhilosophers = 5
 	const mealsToEat = 250
@@ -74,10 +48,8 @@ func TestDineCompletesWithoutDeadlock(t *testing.T) {
 	}
 }
 
-// TestDineWithVaryingTableSizes stress-tests the fix across a few
-// different table sizes (including the edge case of just two
-// philosophers sharing two forks) to make sure the fix generalizes
-// instead of being hardcoded to one specific N.
+// TestDineWithVaryingTableSizes checks small and larger tables.
+// The fix must not depend on one table size.
 func TestDineWithVaryingTableSizes(t *testing.T) {
 	const mealsToEat = 5
 
@@ -94,6 +66,4 @@ func TestDineWithVaryingTableSizes(t *testing.T) {
 	}
 }
 
-// Run these tests with `go test -race` too - a correct fix only ever
-// touches each Fork's mutex and the shared meals-eaten counter through
-// atomic.AddInt32, so it should be inherently race-free.
+// Run with `go test -race` too.

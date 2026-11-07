@@ -1,28 +1,10 @@
 //////////////////////////////////////////////////////////////////////
 //
-// Five philosophers sit around a round table. Between each adjacent
-// pair of philosophers sits exactly one fork, so there are as many
-// forks as philosophers. To eat, a philosopher needs to pick up BOTH
-// the fork to their left and the fork to their right - only then can
-// they eat, after which they put both forks back down so their
-// neighbors can use them.
-//
-// Dine is supposed to let every philosopher finish all of their meals
-// without the table ever grinding to a halt. But the naive
-// implementation below always acquires forks in the same order for
-// every philosopher - left fork first, then right fork - and that is
-// exactly the textbook setup for deadlock: if every philosopher picks
-// up their left fork at roughly the same time, every single one of
-// them ends up holding one fork while waiting forever for their right
-// fork, which is being held by their neighbor who is, in turn,
-// waiting for THEM to release the fork they're holding. It's a
-// perfect circle of waiting, so nobody ever eats again.
-//
-// Your task is to fix Dine so it can never deadlock, no matter how
-// many philosophers sit down or how their goroutines happen to get
-// scheduled - using a standard, well-known deadlock-avoidance
-// strategy. Keep the function signature identical so it remains a
-// drop-in replacement for the naive version below:
+// Each philosopher needs the left and right fork.
+// The naive code always takes the left fork first.
+// Everyone can then hold one fork and wait forever.
+// Your task is to prevent that deadlock for any table size.
+// Keep this signature:
 //
 //     func Dine(numPhilosophers, mealsToEat int) (totalMealsEaten int32)
 //
@@ -36,41 +18,30 @@ import (
 	"time"
 )
 
-// Fork is a single shared utensil that only one philosopher can hold
-// at a time.
+// Fork is shared. Only one philosopher can hold it at a time.
 type Fork struct {
 	mu    sync.Mutex
 	index int
 }
 
-// Philosopher sits at the table with a fork on each side and eats
-// mealsToEat times, each time picking up its left fork, then its
-// right fork, eating (a brief simulated delay), then putting both
-// forks back down.
+// Philosopher has two forks and needs to eat a set number of meals.
 type Philosopher struct {
 	id                  int
 	leftFork, rightFork *Fork
 	mealsToEat          int
 }
 
-// Dine picks up both of the philosopher's forks (always left first,
-// then right), eats mealsToEat times, and records each meal in
-// mealsEaten.
+// Dine takes both forks, eats one meal, and records it.
 func (p *Philosopher) Dine(wg *sync.WaitGroup, mealsEaten *int32) {
 	defer wg.Done()
 
 	for i := 0; i < p.mealsToEat; i++ {
 		p.leftFork.mu.Lock()
-		// A brief pause while "reaching" for the right fork. In
-		// practice this is exactly how the classic deadlock actually
-		// manifests: it gives every other philosopher's goroutine
-		// time to also grab their own left fork before any of them
-		// moves on to try for their right one, so the circular wait
-		// forms reliably instead of only occasionally.
+		// This pause lets neighbors take their left forks.
+		// The deadlock then happens reliably.
 		time.Sleep(time.Millisecond)
 		p.rightFork.mu.Lock()
 
-		// eat
 		time.Sleep(10 * time.Microsecond)
 		atomic.AddInt32(mealsEaten, 1)
 
@@ -79,10 +50,7 @@ func (p *Philosopher) Dine(wg *sync.WaitGroup, mealsEaten *int32) {
 	}
 }
 
-// Dine seats numPhilosophers at a round table, each needing
-// mealsToEat meals, and waits for them all to finish. It returns the
-// total number of meals eaten across every philosopher, which should
-// always equal numPhilosophers * mealsToEat.
+// Dine seats the philosophers, waits for them, and returns the meal count.
 func Dine(numPhilosophers, mealsToEat int) (totalMealsEaten int32) {
 	forks := make([]*Fork, numPhilosophers)
 	for i := range forks {
@@ -104,12 +72,8 @@ func Dine(numPhilosophers, mealsToEat int) (totalMealsEaten int32) {
 }
 
 func main() {
-	// NOTE: because of the fork-ordering bug described above, this
-	// call will, in practice, hang forever essentially every time you
-	// run it directly with `go run .` - that's the bug this exercise
-	// is about. The graded artifact is the test suite (check_test.go),
-	// which guards the naive run with a timeout instead of waiting on
-	// it forever.
+	// The naive code usually deadlocks here.
+	// The tests use a timeout to report the failure.
 	total := Dine(5, 3)
 	fmt.Printf("philosophers ate a total of %d meals\n", total)
 }

@@ -11,17 +11,11 @@ import (
 	"time"
 )
 
-// jobLatency mirrors the simulated work duration in Scheduler.worker,
-// so tests can reason about timing without depending on the exact
-// constant used inside main.go.
+// jobLatency matches the worker's simulated work time.
 const jobLatency = 20 * time.Millisecond
 
-// readCompletions reads exactly n job IDs off sched.Completed(), in
-// the order they arrive, failing the test if any read doesn't show up
-// within a generous timeout. That timeout is a safety net against a
-// hang - the scheduler's single, never-shutdown worker always makes
-// progress, so there's no deadlock risk here, only a hard bound on how
-// long a broken implementation gets to keep the test alive.
+// readCompletions reads n job IDs in arrival order.
+// A timeout stops a broken scheduler from hanging the test.
 func readCompletions(t *testing.T, sched *Scheduler, n int) []int {
 	t.Helper()
 
@@ -47,10 +41,8 @@ func indexOf(ids []int, id int) int {
 	return -1
 }
 
-// TestSchedulerCompletesAllJobs checks that every submitted job
-// eventually completes exactly once. It makes no assumption about
-// ordering, so it passes against both the naive FIFO scheduler and a
-// priority-aware one.
+// TestSchedulerCompletesAllJobs checks that every job finishes once.
+// It does not check order.
 func TestSchedulerCompletesAllJobs(t *testing.T) {
 	sched := NewScheduler()
 
@@ -78,26 +70,11 @@ func TestSchedulerCompletesAllJobs(t *testing.T) {
 	}
 }
 
-// TestSchedulerPrioritizesUrgentJobs is the key test: it asserts that
-// a high-priority job submitted while a backlog of low-priority jobs
-// is already waiting jumps the queue instead of waiting behind all of
-// them.
-//
-// Job 1 is submitted first, so the single worker picks it up almost
-// immediately and is "busy" running it for jobLatency (20ms). Shortly
-// after (well before job 1's 20ms is up), five low-priority jobs
-// (2-6) are submitted, followed by one high-priority job (7). By the
-// time job 7 is submitted, jobs 2-7 are genuinely queued and waiting,
-// not raced for.
-//
-// On the naive FIFO scheduler, job 7 completes dead last (7th, after
-// jobs 2-6). On a correct priority scheduler, job 7 completes as soon
-// as whatever was already running finishes - i.e. it appears at index
-// 0 or 1 in the completion order, never after any of jobs 2-6. The
-// assertion below checks exactly that property rather than pinning
-// down an exact position for job 1, since whether job 1 or job 7 is
-// picked up first depends on timing that isn't worth pinning down
-// precisely - only that job 7 is not stuck behind the backlog.
+// TestSchedulerPrioritizesUrgentJobs checks an urgent job.
+// The worker starts job 1 first.
+// Jobs 2 through 6 are low priority.
+// Job 7 is urgent.
+// Job 7 must finish first or second, not behind the backlog.
 func TestSchedulerPrioritizesUrgentJobs(t *testing.T) {
 	sched := NewScheduler()
 
@@ -123,15 +100,8 @@ func TestSchedulerPrioritizesUrgentJobs(t *testing.T) {
 	}
 }
 
-// TestSchedulerTiesBrokenByArrivalOrder checks that jobs of equal
-// priority are run in the order they were submitted (FIFO among ties)
-// rather than being reordered arbitrarily by the priority queue.
-//
-// All jobs here, including job 1, share the same priority, so it
-// doesn't matter whether the worker has already picked job 1 up by
-// the time jobs 2-6 are submitted: the expected completion order is
-// 1..6 either way, since a same-priority job already queued (or
-// already running) always precedes one submitted later.
+// TestSchedulerTiesBrokenByArrivalOrder checks equal-priority jobs.
+// They must finish in submission order.
 func TestSchedulerTiesBrokenByArrivalOrder(t *testing.T) {
 	sched := NewScheduler()
 
@@ -153,9 +123,8 @@ func TestSchedulerTiesBrokenByArrivalOrder(t *testing.T) {
 	}
 }
 
-// TestSchedulerRace stress-tests the scheduler with many jobs and
-// mixed priorities submitted concurrently from several goroutines, to
-// catch data races on the internal queue (run with `go test -race`).
+// TestSchedulerRace submits jobs from many goroutines.
+// Run it with `go test -race`.
 func TestSchedulerRace(t *testing.T) {
 	sched := NewScheduler()
 
@@ -167,11 +136,8 @@ func TestSchedulerRace(t *testing.T) {
 			done <- struct{}{}
 		}(i)
 	}
-	// Guarded: if a broken Submit deadlocks (e.g. a signal sent while
-	// still holding the lock the worker needs, or a Cond waited on the
-	// wrong mutex), the matching Submit call above never returns and
-	// this receive never arrives - fail fast instead of hanging toward
-	// Go's default 10-minute test timeout.
+	// A broken Submit can deadlock.
+	// Stop the test instead of waiting for the Go timeout.
 	for i := 0; i < n; i++ {
 		select {
 		case <-done:

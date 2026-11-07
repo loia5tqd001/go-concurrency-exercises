@@ -14,7 +14,7 @@ import (
 	"time"
 )
 
-// rangeNums returns the slice of ints [1, n].
+// rangeNums returns all integers from 1 through n.
 func rangeNums(n int) []int {
 	nums := make([]int, n)
 	for i := range nums {
@@ -23,11 +23,8 @@ func rangeNums(n int) []int {
 	return nums
 }
 
-// TestPipelineCorrectness checks that Pipeline computes the right
-// answer - the square of every even-squared number from 1 to 10, in
-// order. It makes no assumption about timing, so it passes against
-// both the naive batch-per-stage implementation and a properly
-// pipelined one.
+// TestPipelineCorrectness checks the final result and order.
+// It does not depend on timing.
 func TestPipelineCorrectness(t *testing.T) {
 	done := make(chan struct{})
 	defer close(done)
@@ -40,19 +37,10 @@ func TestPipelineCorrectness(t *testing.T) {
 	}
 }
 
-// TestPipelineStagesOverlap asserts that generator, square, and
-// keepEven actually run concurrently, overlapping their work on
-// different items, instead of each running to completion over the
-// entire input before the next stage starts. With 20 numbers and
-// every stage paying WorkLatency per item: a batch-per-stage
-// implementation takes roughly 3 * 20 * WorkLatency (each stage waits
-// for the previous one to fully finish before it can start); a truly
-// pipelined implementation, where items flow through the stages as
-// soon as they're ready, takes roughly one stage's total work plus a
-// small constant, regardless of how many stages there are.
-// synctest.Test runs the body on a fake clock that jumps forward as
-// soon as every goroutine in the bubble is durably blocked, so this
-// assertion is exact and doesn't flake on a busy machine.
+// TestPipelineStagesOverlap checks that all stages work at the same time.
+// Batch processing takes about three full passes over the input.
+// A real pipeline finishes in about one pass.
+// synctest makes the timing check stable.
 func TestPipelineStagesOverlap(t *testing.T) {
 	synctest.Test(t, func(t *testing.T) {
 		nums := rangeNums(20)
@@ -84,16 +72,9 @@ func TestPipelineStagesOverlap(t *testing.T) {
 	})
 }
 
-// TestPipelineStopsEarly asserts that Pipeline stops promptly once
-// its done channel is closed, instead of grinding through the entire
-// (here, deliberately huge) input regardless of whether anyone still
-// wants the result. A goroutine closes done shortly after Pipeline
-// starts; a properly pipelined implementation that checks done on
-// every send/receive abandons the in-flight work and returns quickly,
-// while the naive implementation has no way to observe done at all
-// and keeps processing every one of the many items to the very end.
-// synctest.Test gives this a fake clock, so the huge input doesn't
-// cost any real wall-clock time to run.
+// TestPipelineStopsEarly closes done soon after Pipeline starts.
+// A correct pipeline returns quickly and ignores the large input.
+// synctest makes the large input cost no real time.
 func TestPipelineStopsEarly(t *testing.T) {
 	synctest.Test(t, func(t *testing.T) {
 		const hugeInput = 100
@@ -102,8 +83,7 @@ func TestPipelineStopsEarly(t *testing.T) {
 		done := make(chan struct{})
 
 		go func() {
-			// Let the pipeline get going - and let at least one item
-			// make it all the way through - before pulling the plug.
+			// Let at least one item pass before closing done.
 			time.Sleep(WorkLatency)
 			close(done)
 		}()
@@ -120,25 +100,16 @@ func TestPipelineStopsEarly(t *testing.T) {
 				"stopping once done fires", elapsed, hugeInput, budget)
 		}
 
-		// Pipeline returns as soon as the final stage's channel
-		// closes, which can happen slightly before upstream stages
-		// have themselves noticed done and unwound. Give them a
-		// generous amount of fake time to finish before the bubble is
-		// torn down - synctest.Test requires every bubble goroutine
-		// to have exited or become permanently, unresolvably blocked
-		// by the time the test function returns, and a lingering
-		// goroutine that's merely asleep (about to wake up and exit)
-		// would otherwise be reported as a deadlock instead of a
-		// clean pass. This costs no real wall-clock time.
+		// Wait for upstream stages to notice done and exit.
+		// synctest reports a sleeping goroutine when the test returns.
+		// Fake time makes this cleanup fast.
 		time.Sleep(10 * time.Second)
 	})
 }
 
-// TestPipelineConcurrentUse stress-tests many independent, concurrent
-// calls to Pipeline to catch data races on any shared state used
-// internally by the stages (run with `go test -race`). Each call gets
-// its own done channel and its own set of stage goroutines, so none
-// of them should interfere with any other.
+// TestPipelineConcurrentUse runs many Pipelines at once.
+// The race detector can then find shared stage state.
+// Each call has its own done channel and goroutines.
 func TestPipelineConcurrentUse(t *testing.T) {
 	const calls = 10
 	want := []int{4, 16, 36, 64, 100}

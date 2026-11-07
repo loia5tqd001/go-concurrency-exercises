@@ -1,47 +1,17 @@
 //////////////////////////////////////////////////////////////////////
 //
-// Given is a small, fixed-size pool of worker goroutines started by
-// Start. Each worker reads items off a shared jobs channel and calls
-// the caller-supplied process function on every item it receives,
-// until jobs is closed. This is NOT about reacting to an OS signal
-// like Ctrl-C (see the SIGINT exercise for that) - there is no signal
-// involved here at all. It's about a purely internal handshake: once
-// the producer has closed jobs, how does the pool tell the caller
-// "every job that was ever submitted has now been fully processed,
-// you may safely move on"?
+// Start runs a fixed pool of workers.
+// Each worker calls process for every job it receives.
+// The current done channel closes before the work finishes.
 //
-// That matters because callers often want to tear something down
-// right after the pool finishes - for example closing a downstream
-// file, database connection, or network socket that process writes
-// results into. Doing that teardown too early, while a worker is
-// still mid-call to process on some job it already pulled off jobs,
-// silently corrupts or drops whatever that in-flight call was about
-// to do.
-//
-// Start is supposed to return a `done` channel that only closes once
-// every job ever sent to `jobs` has been FULLY processed - i.e. it's
-// safe for a caller to wait on `done` and then treat the whole
-// pipeline as gracefully, completely finished. Right now it does
-// nothing of the sort: the returned done channel is closed
-// immediately, before any worker has necessarily even started, let
-// alone processed a single job - so a caller who waits on it and
-// then, say, tears down whatever process was writing results into,
-// can easily do so while jobs are still silently being worked on in
-// the background, silently dropping/losing whatever those in-flight
-// calls to process were about to do.
-//
-// Your task is to fix Start so that the returned done channel closes
-// ONLY once jobs has been closed AND every worker goroutine has fully
-// returned from its `range jobs` loop (i.e. every worker has finished
-// calling process on its last-received item). Start itself must still
-// return immediately - whatever waits for the workers has to happen
-// concurrently with that return, not block it. The function signature
-// must stay the same:
+// A caller can then close a file or connection too early.
+// Your task is to close done only after every worker finishes.
+// Start must still return right away.
+// Keep this signature:
 //
 //     func Start(jobs <-chan int, process func(item int)) <-chan struct{}
 //
-// so that it remains a drop-in replacement for the naive version
-// below.
+// The tests use this exact signature.
 //
 
 package main
@@ -53,22 +23,8 @@ import (
 
 const numWorkers = 4
 
-// Start launches numWorkers worker goroutines that read from jobs and
-// call process on each item until jobs is closed. It's supposed to
-// return a `done` channel that only closes once every job that was
-// ever sent to `jobs` has been FULLY processed - i.e. it's safe for a
-// caller to wait on `done` and then treat the whole pipeline as
-// gracefully, completely finished. Right now it does nothing of the
-// sort:
-//
-//	Start() ──▶ done := make(chan struct{}); close(done) ──▶ returns
-//	              (shut before any worker has even started)
-//
-// so a caller who waits on it and then, say, tears down whatever
-// `process` was writing results into, can easily do so while jobs are
-// still silently being worked on in the background, silently
-// dropping/losing whatever those in-flight calls to process were
-// about to do.
+// Start launches the workers and returns a done channel.
+// Done should close only after every process call returns.
 func Start(jobs <-chan int, process func(item int)) <-chan struct{} {
 	for i := 0; i < numWorkers; i++ {
 		go func() {
@@ -96,9 +52,7 @@ func main() {
 	}()
 
 	done := Start(jobs, func(item int) {
-		// A little artificial latency makes it obvious, when
-		// running this by hand, that "shutdown complete" below
-		// can print well before every "processed N" line has.
+		// Slow work shows that done closes too early.
 		time.Sleep(10 * time.Millisecond)
 		fmt.Println("processed", item)
 	})

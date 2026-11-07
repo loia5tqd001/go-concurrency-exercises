@@ -9,7 +9,6 @@ import (
 
 func TestSessionManagersCreationAndUpdate(t *testing.T) {
 	synctest.Test(t, func(t *testing.T) {
-		// Create manager and new session
 		m := NewSessionManager()
 		sID, err := m.CreateSession()
 		if err != nil {
@@ -21,14 +20,12 @@ func TestSessionManagersCreationAndUpdate(t *testing.T) {
 			t.Error("Error GetSessionData:", err)
 		}
 
-		// Modify and update data
 		data["website"] = "longhoang.de"
 		err = m.UpdateSessionData(sID, data)
 		if err != nil {
 			t.Error("Error UpdateSessionData:", err)
 		}
 
-		// Retrieve data from manager again
 		data, err = m.GetSessionData(sID)
 		if err != nil {
 			t.Error("Error GetSessionData:", err)
@@ -48,7 +45,7 @@ func TestSessionManagersCleaner(t *testing.T) {
 			t.Error("Error CreateSession:", err)
 		}
 
-		// Note that the cleaner is only running every 5s
+		// The cleaner runs every 5s.
 		time.Sleep(7 * time.Second)
 		_, err = m.GetSessionData(sID)
 		if err != ErrSessionNotFound {
@@ -87,16 +84,11 @@ func TestSessionManagersCleanerAfterUpdate(t *testing.T) {
 	})
 }
 
-// TestSessionManagerConcurrentAccess hammers CreateSession,
-// UpdateSessionData and GetSessionData from many goroutines at once to
-// catch unsynchronized access to the sessions map (run with `go test
-// -race`). It stays on the real clock rather than synctest: the goroutines
-// below spin on plain CPU work with no blocking call in the loop body, so
-// they never become "durably blocked" - inside a bubble the fake clock
-// would simply never advance and the test would spin forever instead of
-// finishing. A fixed iteration count (rather than a wall-clock deadline)
-// gets the same determinism win synctest would have provided, without
-// needing a bubble.
+// TestSessionManagerConcurrentAccess calls all manager methods at once.
+// The race detector can then find unsynchronized map access.
+// This test uses the real clock, not synctest.
+// The goroutines never block, so fake time would not advance.
+// A fixed loop count keeps the test deterministic.
 func TestSessionManagerConcurrentAccess(t *testing.T) {
 	m := NewSessionManager()
 

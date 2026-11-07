@@ -12,33 +12,26 @@ import (
 	"time"
 )
 
-// JobLatency is how long a single call to RunJob takes. It stands in for
-// whatever expensive work a real job would do (calling an API, touching
-// a disk, crunching numbers, ...).
+// JobLatency is the duration of one simulated job.
 const JobLatency = 80 * time.Millisecond
 
-// ErrJobFailed is returned by RunJob for any Job whose ShouldFail field
-// is set.
+// ErrJobFailed marks a simulated job failure.
 var ErrJobFailed = errors.New("job failed")
 
-// Job is a single unit of work to be processed by the worker pool.
+// Job is one unit of work.
 type Job struct {
 	ID         int
 	ShouldFail bool
 }
 
-// jobConcurrency tracks how many calls to RunJob are in flight at once, so
-// tests can measure how much (or how little) concurrency ProcessJobs
-// actually uses without depending on wall-clock timing.
+// jobConcurrency tracks active calls for tests.
 var jobConcurrency struct {
 	mu            sync.Mutex
 	current       int
 	highWaterMark int
 }
 
-// ResetJobConcurrencyTracking clears the high-water mark tracked by
-// JobConcurrencyHighWaterMark. Call it before any run whose concurrency
-// you want to measure, so an earlier test's jobs don't leak into it.
+// ResetJobConcurrencyTracking clears the recorded peak.
 func ResetJobConcurrencyTracking() {
 	jobConcurrency.mu.Lock()
 	defer jobConcurrency.mu.Unlock()
@@ -46,20 +39,14 @@ func ResetJobConcurrencyTracking() {
 	jobConcurrency.highWaterMark = 0
 }
 
-// JobConcurrencyHighWaterMark returns the largest number of RunJob calls
-// that were ever in flight at the same instant since the last call to
-// ResetJobConcurrencyTracking. It's test instrumentation only - a real
-// downstream dependency wouldn't expose this.
+// JobConcurrencyHighWaterMark returns the recorded peak.
 func JobConcurrencyHighWaterMark() int {
 	jobConcurrency.mu.Lock()
 	defer jobConcurrency.mu.Unlock()
 	return jobConcurrency.highWaterMark
 }
 
-// RunJob simulates doing the work described by j. It always takes
-// JobLatency to run, and deterministically returns ErrJobFailed when
-// j.ShouldFail is true, nil otherwise - so tests can check correctness
-// without needing a real backend.
+// RunJob sleeps for JobLatency, then returns a deterministic result.
 func RunJob(j Job) error {
 	jobConcurrency.mu.Lock()
 	jobConcurrency.current++

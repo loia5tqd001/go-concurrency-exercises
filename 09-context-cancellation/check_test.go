@@ -14,11 +14,9 @@ import (
 	"time"
 )
 
-// TestHandleRequestSucceedsWithAmpleTimeout checks the happy path: with
-// a timeout comfortably larger than all three layers combined
-// (3*LayerLatency = 900ms), HandleRequest should run the full chain and
-// return the concatenated result with no error. This holds for both the
-// naive implementation and a properly fixed one.
+// TestHandleRequestSucceedsWithAmpleTimeout gives all layers enough time.
+// The call should return "ABC" with no error.
+// The current code and a fixed version both pass.
 func TestHandleRequestSucceedsWithAmpleTimeout(t *testing.T) {
 	synctest.Test(t, func(t *testing.T) {
 		ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
@@ -35,18 +33,10 @@ func TestHandleRequestSucceedsWithAmpleTimeout(t *testing.T) {
 	})
 }
 
-// TestHandleRequestRespectsTimeout is the key test. It gives
-// HandleRequest a context that times out after 200ms - less than even
-// a single layer's 300ms latency. A correct implementation propagates
-// ctx into every layer call and stops as soon as the context is done,
-// so it should return an error (the deadline being exceeded) after
-// roughly 200ms.
-//
-// The naive implementation ignores ctx and calls every layer with
-// context.Background() instead, so all three layers run to completion
-// regardless of the timeout: it takes roughly 3*LayerLatency = 900ms
-// and very likely returns a successful result with no error at all -
-// exactly the bug this exercise is about.
+// TestHandleRequestRespectsTimeout gives HandleRequest 200ms.
+// One layer takes 300ms, so the request must fail early.
+// A correct solution returns a deadline error in about 200ms.
+// The current code ignores ctx and runs all three layers.
 func TestHandleRequestRespectsTimeout(t *testing.T) {
 	synctest.Test(t, func(t *testing.T) {
 		ctx, cancel := context.WithTimeout(context.Background(), 200*time.Millisecond)
@@ -75,11 +65,8 @@ func TestHandleRequestRespectsTimeout(t *testing.T) {
 	})
 }
 
-// TestHandleRequestCancelledMidway starts HandleRequest with a
-// cancellable context and cancels it partway through the chain (350ms
-// in, while layer B would be in flight). A correct implementation
-// notices the cancellation and returns promptly instead of continuing
-// on to (or finishing) layer C.
+// TestHandleRequestCancelledMidway cancels the context during layer B.
+// A correct solution stops quickly and does not continue.
 func TestHandleRequestCancelledMidway(t *testing.T) {
 	synctest.Test(t, func(t *testing.T) {
 		ctx, cancel := context.WithCancel(context.Background())
@@ -100,11 +87,8 @@ func TestHandleRequestCancelledMidway(t *testing.T) {
 		time.Sleep(350 * time.Millisecond)
 		cancel()
 
-		// Receiving from resCh durably blocks this goroutine on a
-		// bubble channel, so the fake clock keeps advancing (running
-		// out any remaining layer timers) until HandleRequest's
-		// goroutine sends its result - there is no wall-clock wait
-		// involved, however long that takes in fake time.
+		// This receive blocks on a bubble channel.
+		// Fake time advances until HandleRequest sends its result.
 		res := <-resCh
 		elapsed := time.Since(start)
 

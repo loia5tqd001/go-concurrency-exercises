@@ -1,22 +1,15 @@
 //////////////////////////////////////////////////////////////////////
 //
-// Given is a SessionManager that stores session information in
-// memory. The SessionManager itself is working, however, since we
-// keep on adding new sessions to the manager our program will
-// eventually run out of memory.
+// SessionManager keeps sessions in memory.
+// New sessions keep growing until the program runs out of memory.
 //
-// Your task is to implement a session cleaner that reclaims every
-// session that hasn't been updated for more than 5 seconds (of course
-// usually session times are much longer).
+// Add a cleaner that removes sessions after 5 seconds without updates.
+// A session should disappear between 5 and 7 seconds.
 //
-// Note that we expect the session to be removed anytime between 5 and
-// 7 seconds after the last update. Also, note that you have to be
-// very careful in order to prevent race conditions.
+// Protect all session data from races.
 //
-// check_test.go runs its timing tests on a fake clock (testing/synctest)
-// that requires every goroutine your code starts to have exited by the
-// time the test function returns - so whatever goroutine you start has
-// to reach its own exit before that, not run forever unconditionally.
+// Tests use synctest's fake clock.
+// Every started goroutine must exit before the test returns.
 //
 
 package main
@@ -26,18 +19,17 @@ import (
 	"log"
 )
 
-// SessionManager keeps track of all sessions from creation, updating
-// to destroying.
+// SessionManager stores sessions and their update times.
 type SessionManager struct {
 	sessions map[string]Session
 }
 
-// Session stores the session's data
+// Session stores data for one session.
 type Session struct {
 	Data map[string]interface{}
 }
 
-// NewSessionManager creates a new sessionManager
+// NewSessionManager creates an empty session manager.
 func NewSessionManager() *SessionManager {
 	m := &SessionManager{
 		sessions: make(map[string]Session),
@@ -46,7 +38,7 @@ func NewSessionManager() *SessionManager {
 	return m
 }
 
-// CreateSession creates a new session and returns the sessionID
+// CreateSession stores a new session and returns its ID.
 func (m *SessionManager) CreateSession() (string, error) {
 	sessionID, err := MakeSessionID()
 	if err != nil {
@@ -60,12 +52,10 @@ func (m *SessionManager) CreateSession() (string, error) {
 	return sessionID, nil
 }
 
-// ErrSessionNotFound returned when sessionID not listed in
-// SessionManager
+// ErrSessionNotFound means the session ID is unknown.
 var ErrSessionNotFound = errors.New("SessionID does not exists")
 
-// GetSessionData returns data related to session if sessionID is
-// found, errors otherwise
+// GetSessionData returns a session's data or an error.
 func (m *SessionManager) GetSessionData(sessionID string) (map[string]interface{}, error) {
 	session, ok := m.sessions[sessionID]
 	if !ok {
@@ -74,14 +64,14 @@ func (m *SessionManager) GetSessionData(sessionID string) (map[string]interface{
 	return session.Data, nil
 }
 
-// UpdateSessionData overwrites the old session data with the new one
+// UpdateSessionData replaces a session's data.
 func (m *SessionManager) UpdateSessionData(sessionID string, data map[string]interface{}) error {
 	_, ok := m.sessions[sessionID]
 	if !ok {
 		return ErrSessionNotFound
 	}
 
-	// Hint: you should renew expiry of the session here
+	// Hint: renew the session expiry here.
 	m.sessions[sessionID] = Session{
 		Data: data,
 	}
@@ -90,7 +80,6 @@ func (m *SessionManager) UpdateSessionData(sessionID string, data map[string]int
 }
 
 func main() {
-	// Create new sessionManager and new session
 	m := NewSessionManager()
 	sID, err := m.CreateSession()
 	if err != nil {
@@ -99,7 +88,6 @@ func main() {
 
 	log.Println("Created new session with ID", sID)
 
-	// Update session data
 	data := make(map[string]interface{})
 	data["website"] = "longhoang.de"
 
@@ -110,7 +98,6 @@ func main() {
 
 	log.Println("Update session data, set website to longhoang.de")
 
-	// Retrieve data from manager again
 	updatedData, err := m.GetSessionData(sID)
 	if err != nil {
 		log.Fatal(err)

@@ -13,9 +13,7 @@ import (
 	"testing"
 )
 
-// expectedResult mirrors the (deterministic) result-generation logic
-// in Call, without paying for the simulated latency, so tests can
-// check correctness cheaply.
+// expectedResult matches Call's result without its delay.
 func expectedResult(key string) int {
 	h := fnv.New64a()
 	_, _ = h.Write([]byte(key))
@@ -23,9 +21,7 @@ func expectedResult(key string) int {
 	return int(h.Sum64() % 1_000_000)
 }
 
-// TestDoReturnsCorrectResult checks that a single, uncontended Do call
-// returns the same deterministic value Call would directly produce
-// for the same key, with no error and shared reported as false.
+// One Do call must return Call's value and shared=false.
 func TestDoReturnsCorrectResult(t *testing.T) {
 	ResetCallCounts()
 
@@ -45,14 +41,8 @@ func TestDoReturnsCorrectResult(t *testing.T) {
 	}
 }
 
-// TestDoDedupesConcurrentCallers calls Do for the SAME key from many
-// goroutines at once and asserts that: they all observe the same
-// result, Call ran exactly once, and exactly one caller - whichever
-// actually ran fn - reports shared=false while every other caller
-// reports shared=true. This guards against a "fixed" implementation
-// that makes callers wait for each other but forgets to report
-// sharing correctly, or that still lets more than one call through to
-// Call. Run with `go test -race`.
+// Concurrent callers for one key must share one Call.
+// Exactly one caller must report shared=false.
 func TestDoDedupesConcurrentCallers(t *testing.T) {
 	ResetCallCounts()
 
@@ -103,12 +93,8 @@ func TestDoDedupesConcurrentCallers(t *testing.T) {
 	}
 }
 
-// TestDoPropagatesErrorToAllWaiters calls Do for a key whose backing
-// call always fails, from many goroutines at once, and asserts that
-// every caller - not just the one that actually ran fn - observes the
-// SAME error, and that the backend still only ran once. A dedup
-// implementation that only shares the success path (and lets every
-// waiter re-run fn on error) would fail this test.
+// Every waiter must receive the same error.
+// The backend must still run only once.
 func TestDoPropagatesErrorToAllWaiters(t *testing.T) {
 	ResetCallCounts()
 
@@ -142,13 +128,8 @@ func TestDoPropagatesErrorToAllWaiters(t *testing.T) {
 	}
 }
 
-// TestDoForgetsAfterCompletion calls Do for a key, waits for it to
-// finish (Do is synchronous, so it already has by the time the call
-// returns), then calls Do again for the SAME key and asserts the
-// second call triggers a genuinely new call to fn - unlike exercise
-// 17's Future, Group must NOT cache results forever. A second,
-// sequential Do for the same key is a brand new call, not a cache
-// hit, and must not be reported as shared.
+// A later sequential Do must start a fresh call.
+// Group must not cache like exercise 17.
 func TestDoForgetsAfterCompletion(t *testing.T) {
 	ResetCallCounts()
 

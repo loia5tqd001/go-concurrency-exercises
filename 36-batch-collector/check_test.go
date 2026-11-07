@@ -15,12 +15,7 @@ import (
 	"time"
 )
 
-// recvTimeout bounds every channel receive in this file. The naive
-// Collector can hang a caller forever (a batch that never reaches
-// MaxBatchSize with MaxWait unimplemented, or Close leaving a pending
-// batch unflushed) - a bounded receive turns that failure into a
-// clear, fast test failure instead of a 10-minute `go test` timeout
-// with no useful message.
+// recvTimeout turns a missing batch result into a fast failure.
 const recvTimeout = 2 * time.Second
 
 func recvResult(t *testing.T, ch <-chan Result) Result {
@@ -35,12 +30,8 @@ func recvResult(t *testing.T, ch <-chan Result) Result {
 	}
 }
 
-// addWithTimeout bounds the call to Add itself, not just the receive
-// from the channel it returns. A Collector that runs fn synchronously
-// inside Add (instead of handing the batch to a background goroutine
-// once it fires) can block the caller of Add indefinitely - this turns
-// that into a clear, fast test failure instead of a 10-minute `go test`
-// timeout with no useful message.
+// addWithTimeout checks that Add itself returns quickly.
+// Add must not run fn on the caller's goroutine.
 func addWithTimeout(t *testing.T, c *Collector, request int) <-chan Result {
 	t.Helper()
 
@@ -70,9 +61,7 @@ func doubleFn(callCount *int32, mu *sync.Mutex) BatchFunc {
 	}
 }
 
-// TestCollectorFiresOnMaxBatchSize checks the straightforward case:
-// MaxBatchSize concurrent callers, fn runs once with all of them, and
-// each gets back the response matching its own request.
+// A full batch must run fn once and match every caller.
 func TestCollectorFiresOnMaxBatchSize(t *testing.T) {
 	var callCount int32
 	var mu sync.Mutex
@@ -107,9 +96,7 @@ func TestCollectorFiresOnMaxBatchSize(t *testing.T) {
 	}
 }
 
-// TestCollectorFiresOnMaxWaitWithPartialBatch checks the other
-// trigger: a batch far short of MaxBatchSize must still fire, and
-// still deliver correct results, once MaxWait elapses.
+// A partial batch must fire when MaxWait ends.
 func TestCollectorFiresOnMaxWaitWithPartialBatch(t *testing.T) {
 	var callCount int32
 	var mu sync.Mutex
@@ -136,18 +123,9 @@ func TestCollectorFiresOnMaxWaitWithPartialBatch(t *testing.T) {
 	}
 }
 
-// TestCollectorNeverDoubleFiresWhenCountAndWaitRace races the
-// count-trigger against the deadline-trigger for the same batch: both
-// Adds run concurrently against a MaxWait so small it can plausibly
-// fire before, during, or after the batch-completing Add reaches
-// MaxBatchSize. A tiny MaxWait under concurrent load can legitimately
-// split this into more than one batch (the second Add loses the race
-// for the first batch entirely and opens a fresh one) - that's not a
-// bug, so this test doesn't assert a single fn call. What it does
-// assert is the invariant a double-fire would actually violate: the
-// same batch running fn twice would double-count its own requests, so
-// the total requests processed across every fn call this trial must
-// equal exactly the 2 requests submitted.
+// Size and timeout can race.
+// The race may create one batch or two.
+// Either way, the two requests must each run exactly once.
 func TestCollectorNeverDoubleFiresWhenCountAndWaitRace(t *testing.T) {
 	const trials = 200
 
@@ -180,10 +158,7 @@ func TestCollectorNeverDoubleFiresWhenCountAndWaitRace(t *testing.T) {
 	}
 }
 
-// TestCollectorRollsOverToNewBatchAfterFiring checks that the
-// Collector keeps working indefinitely: three back-to-back batches,
-// each mapping its own callers to its own results without crosstalk
-// with either of the other two.
+// Each new batch must send results only to its own callers.
 func TestCollectorRollsOverToNewBatchAfterFiring(t *testing.T) {
 	const batchSize = 4
 	const batches = 3
@@ -221,10 +196,7 @@ func TestCollectorRollsOverToNewBatchAfterFiring(t *testing.T) {
 	}
 }
 
-// TestCollectorPropagatesErrorToAllCallers checks that when fn fails,
-// every caller in the batch - not just some of them - observes that
-// same error, and none of them get a bogus zero value mistaken for
-// success.
+// When fn fails, every caller must receive the same error.
 func TestCollectorPropagatesErrorToAllCallers(t *testing.T) {
 	const callers = 6
 	wantErr := errors.New("batch API unavailable")
@@ -251,10 +223,7 @@ func TestCollectorPropagatesErrorToAllCallers(t *testing.T) {
 	}
 }
 
-// TestCollectorCloseRejectsSubsequentAdds checks that once Close has
-// returned, every later Add gets ErrCollectorClosed immediately -
-// never silently queued into a batch that will never fire, never a
-// hang.
+// Add after Close must return ErrCollectorClosed.
 func TestCollectorCloseRejectsSubsequentAdds(t *testing.T) {
 	var callCount int32
 	var mu sync.Mutex
@@ -273,10 +242,7 @@ func TestCollectorCloseRejectsSubsequentAdds(t *testing.T) {
 	}
 }
 
-// TestCollectorCloseFlushesPendingPartialBatch checks that Close
-// doesn't abandon whatever's already queued - it fires that partial
-// batch as one last call to fn, and every caller in it still gets a
-// real value back, not an error.
+// Close must flush a partial batch and return real values.
 func TestCollectorCloseFlushesPendingPartialBatch(t *testing.T) {
 	var callCount int32
 	var mu sync.Mutex
@@ -309,10 +275,8 @@ func TestCollectorCloseFlushesPendingPartialBatch(t *testing.T) {
 	}
 }
 
-// TestCollectorCloseConcurrentWithAdd hammers Add and Close from many
-// goroutines at once. Every caller - whether it lands in a batch that
-// fires or arrives too late to be accepted - must get SOME Result
-// within the bound, never a hang, and go test -race must stay clean.
+// Add and Close must be safe together.
+// Every caller must get a Result without hanging.
 func TestCollectorCloseConcurrentWithAdd(t *testing.T) {
 	var callCount int32
 	var mu sync.Mutex
@@ -351,11 +315,8 @@ func TestCollectorCloseConcurrentWithAdd(t *testing.T) {
 	}
 }
 
-// TestCollectorCloseRespectsContextDeadline checks Close's
-// http.Server.Shutdown-style contract: it returns ctx's error the
-// moment ctx expires, rather than blocking until a slow, already
-// in-flight batch finishes on its own - though that batch must still
-// go on to complete in the background regardless.
+// Close must return ctx.Err() when ctx ends first.
+// The running batch must still finish in the background.
 func TestCollectorCloseRespectsContextDeadline(t *testing.T) {
 	batchStarted := make(chan struct{})
 	release := make(chan struct{})
@@ -374,7 +335,7 @@ func TestCollectorCloseRespectsContextDeadline(t *testing.T) {
 	c := NewCollector(Config{MaxBatchSize: 2, MaxWait: time.Hour}, fn)
 
 	ch0 := addWithTimeout(t, c, 1)
-	ch1 := addWithTimeout(t, c, 2) // pushes MaxBatchSize, fn starts running in the background
+	ch1 := addWithTimeout(t, c, 2) // This starts fn in the background.
 
 	select {
 	case <-batchStarted:

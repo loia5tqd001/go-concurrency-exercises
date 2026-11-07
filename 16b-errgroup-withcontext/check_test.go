@@ -16,11 +16,8 @@ import (
 	"time"
 )
 
-// TestGroupRunsAllTasksAndCapturesFirstError is the same correctness
-// baseline as exercise 16: every task registered via Go must run to
-// completion, and Wait must report a non-nil error when at least one
-// task failed. Confirms the WithContext-returned Group still gets the
-// basics right before layering the cancellation checks on top.
+// TestGroupRunsAllTasksAndCapturesFirstError checks every task runs.
+// Wait must return one of the task errors.
 func TestGroupRunsAllTasksAndCapturesFirstError(t *testing.T) {
 	g, _ := WithContext(context.Background())
 
@@ -65,13 +62,8 @@ func TestGroupRunsAllTasksAndCapturesFirstError(t *testing.T) {
 	}
 }
 
-// TestFailFastCancelsSiblingContext is the key test: the moment one
-// task fails, the Context handed to every other task must be
-// cancelled, so a cooperating sibling notices via ctx.Done() and
-// returns early instead of running its full duration. synctest.Test
-// runs the body on a fake clock that jumps forward only once every
-// goroutine in the bubble is durably blocked, so this assertion is
-// exact and doesn't flake on a busy machine.
+// TestFailFastCancelsSiblingContext checks one failure stops siblings.
+// Siblings must return early through ctx.Done().
 func TestFailFastCancelsSiblingContext(t *testing.T) {
 	synctest.Test(t, func(t *testing.T) {
 		g, ctx := WithContext(context.Background())
@@ -111,11 +103,8 @@ func TestFailFastCancelsSiblingContext(t *testing.T) {
 	})
 }
 
-// TestWaitCancelsContextEvenOnSuccess checks the other half: even when
-// every task succeeds, Wait must still cancel the derived Context
-// before returning - otherwise its resources leak for as long as the
-// parent Context stays alive, exactly the mistake go vet's lostcancel
-// check flags in ordinary code.
+// TestWaitCancelsContextEvenOnSuccess checks cancellation after success.
+// Otherwise the derived context leaks.
 func TestWaitCancelsContextEvenOnSuccess(t *testing.T) {
 	g, ctx := WithContext(context.Background())
 
@@ -132,15 +121,8 @@ func TestWaitCancelsContextEvenOnSuccess(t *testing.T) {
 	}
 }
 
-// TestWithContextDerivesFromParent guards against a fix that creates a
-// brand new cancelable Context from context.Background() instead of
-// deriving one from the ctx it was actually given - every other test
-// in this file passes context.Background() as the parent, so a
-// WithContext that silently ignores its argument and calls
-// context.WithCancel(context.Background()) would slip past all of
-// them undetected. Here the parent carries a value and gets cancelled
-// independently, so only a Context genuinely derived from it behaves
-// correctly on both counts.
+// TestWithContextDerivesFromParent checks values and cancellation.
+// The child must inherit the parent values and cancellation.
 func TestWithContextDerivesFromParent(t *testing.T) {
 	type ctxKey string
 	const key ctxKey = "trace-id"
@@ -166,11 +148,8 @@ func TestWithContextDerivesFromParent(t *testing.T) {
 	}
 }
 
-// TestFirstErrorAndCancelRaceSafe stress-tests the "first error wins"
-// bookkeeping (and its accompanying cancel call) with many tasks that
-// all fail immediately, racing to finish and to trigger cancellation
-// at roughly the same time. Run with `go test -race` to catch any
-// unsynchronized access.
+// TestFirstErrorAndCancelRaceSafe makes many tasks fail at once.
+// Run with `-race` to check shared state is safe.
 func TestFirstErrorAndCancelRaceSafe(t *testing.T) {
 	g, ctx := WithContext(context.Background())
 

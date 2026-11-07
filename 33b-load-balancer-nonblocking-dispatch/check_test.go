@@ -13,10 +13,8 @@ import (
 	"time"
 )
 
-// TestWorkerInboxIsUnbuffered guards the exercise's static constraint:
-// Worker.requests must stay unbuffered. This exercise is about making
-// Balance correct without a buffer to lean on - bumping the capacity
-// back up would sidestep the actual task instead of solving it.
+// Worker.requests must stay unbuffered.
+// Adding a buffer would avoid the exercise.
 func TestWorkerInboxIsUnbuffered(t *testing.T) {
 	b := NewBalancer(3)
 	for _, w := range b.pool {
@@ -28,14 +26,8 @@ func TestWorkerInboxIsUnbuffered(t *testing.T) {
 	}
 }
 
-// TestBalancerCompletesABurstNoBiggerThanThePool submits exactly as
-// many requests as there are workers, all at once. Every request gets
-// its own idle worker on the very first round of dispatch - a fresh
-// Worker is always parked on a receive, so even an unbuffered inbox
-// accepts the send immediately. This passes against the naive
-// implementation too; the bug doesn't show up until a Worker that's
-// already busy (or already reporting back on done) needs a second
-// request.
+// A burst no larger than the pool must complete.
+// Each request goes to an idle worker.
 func TestBalancerCompletesABurstNoBiggerThanThePool(t *testing.T) {
 	const numWorkers = 4
 
@@ -73,12 +65,8 @@ func TestBalancerCompletesABurstNoBiggerThanThePool(t *testing.T) {
 	}
 }
 
-// TestBalancerSurvivesBackToBackRequestsOnOneWorker is the key test.
-// A single Worker gets several requests in a row, faster than it can
-// drain them - with a buffered inbox (exercise 33) this just queues;
-// with an unbuffered one, the naive Balance blocks on the very first
-// send to a Worker that isn't parked on a receive yet, and can never
-// reach b.done to unblock it. Every request must still complete.
+// One worker must handle several queued requests.
+// The broken Balance blocks when that worker is busy.
 func TestBalancerSurvivesBackToBackRequestsOnOneWorker(t *testing.T) {
 	const numWorkers = 1
 	const numRequests = 5
@@ -146,9 +134,7 @@ func TestBalancerSurvivesBackToBackRequestsOnOneWorker(t *testing.T) {
 	}
 }
 
-// TestBalancerSurvivesMoreRequestsThanWorkers mirrors 33's own key
-// test at a larger scale, to catch a design that only happens to
-// survive the single-worker case above.
+// Several workers must also handle more requests than they can run.
 func TestBalancerSurvivesMoreRequestsThanWorkers(t *testing.T) {
 	const numWorkers = 3
 	const numRequests = numWorkers * 4
@@ -210,19 +196,9 @@ func TestBalancerSurvivesMoreRequestsThanWorkers(t *testing.T) {
 	}
 }
 
-// TestBalancerQueuesWithoutASeparateGoroutinePerRequest catches the
-// tempting near-miss of "solving" the blocking send by shipping it off
-// to its own goroutine (`go func() { w.requests <- req }()`) instead of
-// queuing inside Balance's own backlog. That dodge never blocks
-// Balance's loop either, and every request still eventually completes -
-// it passes every test above - but it costs one live goroutine per
-// request still waiting for a busy Worker, instead of a plain data
-// structure Balance already owns. A round-robin dispatcher that ignores
-// the heap entirely falls into the same trap for the same reason: with
-// only two Workers and a burst well beyond what either can be running
-// at once, most of the burst has nowhere to live except the queue this
-// exercise asks for - so if goroutine count balloons with the burst
-// size instead of staying flat, the requests aren't actually queued.
+// Waiting requests must be stored in Balance, not one goroutine each.
+// A goroutine per request hides the blocking send but costs too much.
+// A round-robin design that ignores the heap has the same problem.
 func TestBalancerQueuesWithoutASeparateGoroutinePerRequest(t *testing.T) {
 	const numWorkers = 2
 	const numRequests = 50
@@ -234,11 +210,8 @@ func TestBalancerQueuesWithoutASeparateGoroutinePerRequest(t *testing.T) {
 	work := make(chan Request)
 	go b.Balance(work)
 
-	// Hand off all numRequests from this one goroutine, back to back,
-	// with no submitter goroutines of our own to muddy the count.
-	// Balance's `case req := <-work` must always be immediately ready -
-	// that's the whole point of queuing internally - so none of these
-	// sends should need anywhere near the full timeout.
+	// Send from this goroutine so the count stays stable.
+	// Balance must accept queued work without waiting.
 	results := make([]chan int, numRequests)
 	for i := 0; i < numRequests; i++ {
 		i := i
@@ -258,9 +231,7 @@ func TestBalancerQueuesWithoutASeparateGoroutinePerRequest(t *testing.T) {
 		}
 	}
 
-	// Only numWorkers requests can be running at once; with a burst of
-	// numRequests far beyond that, a correct Balance is holding the
-	// rest in its own backlog, not in extra goroutines.
+	// Only workers can run jobs. Balance must hold the rest.
 	time.Sleep(50 * time.Millisecond)
 	if delta := runtime.NumGoroutine() - baseline; delta > numWorkers+10 {
 		t.Fatalf("goroutine count grew by %d while %d requests were queued "+
@@ -277,9 +248,7 @@ func TestBalancerQueuesWithoutASeparateGoroutinePerRequest(t *testing.T) {
 		}
 	}
 
-	// Once every request has actually completed, the only goroutines
-	// left belong to this one Balance and its numWorkers Workers -
-	// nothing should still be parked waiting to send.
+	// After completion, no sender goroutines should remain.
 	time.Sleep(50 * time.Millisecond)
 	if delta := runtime.NumGoroutine() - baseline; delta > numWorkers+10 {
 		t.Fatalf("goroutine count is still %d above baseline after every request "+
@@ -288,9 +257,7 @@ func TestBalancerQueuesWithoutASeparateGoroutinePerRequest(t *testing.T) {
 	}
 }
 
-// TestBalancerConcurrentSafety hammers the balancer with many
-// concurrent submitters to catch data races in the pool's heap and
-// backlog bookkeeping (run with go test -race).
+// Concurrent submitters must not race on heap or backlog data.
 func TestBalancerConcurrentSafety(t *testing.T) {
 	const numWorkers = 5
 	const numRequests = 100

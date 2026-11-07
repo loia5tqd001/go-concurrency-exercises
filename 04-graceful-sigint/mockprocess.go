@@ -13,13 +13,13 @@ import (
 	"time"
 )
 
-// MockProcess for example
+// MockProcess simulates a process and its running state.
 type MockProcess struct {
 	mu        sync.Mutex
 	isRunning bool
 }
 
-// Run will start the process
+// Run marks the process as running, then loops forever.
 func (m *MockProcess) Run() {
 	m.mu.Lock()
 	m.isRunning = true
@@ -32,8 +32,7 @@ func (m *MockProcess) Run() {
 	}
 }
 
-// Stop tries to gracefully stop the process, in this mock example
-// this will not succeed
+// Stop simulates a graceful stop, but never returns in this mock.
 func (m *MockProcess) Stop() {
 	m.mu.Lock()
 	defer m.mu.Unlock()

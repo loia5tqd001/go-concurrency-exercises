@@ -1,8 +1,6 @@
 //////////////////////////////////////////////////////////////////////
 //
-// This file simulates a piece of log-collecting infrastructure and is
-// given to you as-is - you don't need to (and shouldn't) change
-// anything here.
+// This file simulates a log hub. Do not change it.
 //
 
 package main
@@ -12,12 +10,8 @@ import (
 	"time"
 )
 
-// StartLogHub simulates log-collecting infrastructure where new "shard"
-// sources connect over time. It returns a channel-of-channels: each
-// value it emits is itself a channel carrying the log lines from one
-// shard, which closes when that shard is done producing lines.
-// StartLogHub closes the outer channel once numShards shards have been
-// started.
+// StartLogHub emits one channel per shard over time.
+// It closes the outer channel after starting numShards shards.
 func StartLogHub(numShards, linesPerShard int) <-chan (<-chan string) {
 	shardStream := make(chan (<-chan string))
 
@@ -38,7 +32,7 @@ func StartLogHub(numShards, linesPerShard int) <-chan (<-chan string) {
 
 			shardStream <- lines
 
-			// New shards trickle in over time rather than all at once.
+			// Start new shards over time.
 			time.Sleep(5 * time.Millisecond)
 		}
 	}()
