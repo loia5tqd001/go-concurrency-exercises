@@ -1,11 +1,11 @@
-# Batch Collector: A Reusable Batcher With a Deadline and a Real Shutdown — Suggested Solution
+# Batch Collector: A Reusable Batcher With Deadlines and Shutdown — Suggested Solution
 
-> **Spoiler warning.** Try solving it yourself first — come back if you're stuck.
+> **Spoiler warning.** Try the exercise first. Come back if you are stuck.
 
 ## The problem
 
-`Add` doesn't batch anything — it calls `fn` immediately with a batch
-of exactly the one request it was given — and `Close` is a no-op:
+`Add` does not batch anything. It calls `fn` right away with one
+request. `Close` does nothing:
 
 ```go
 func (c *Collector) Add(request int) <-chan Result {
@@ -24,10 +24,10 @@ func (c *Collector) Close(ctx context.Context) error {
 }
 ```
 
-**Verified**, three separate ways:
+The naive code fails in three separate ways.
 
-`fn` runs once per request instead of once per batch — the entire
-point of coalescing never happens:
+`fn` runs once per request instead of once per batch. Batching never
+happens:
 
 ```
 === RUN   TestCollectorFiresOnMaxBatchSize
@@ -35,9 +35,8 @@ point of coalescing never happens:
 --- FAIL: TestCollectorFiresOnMaxBatchSize (0.00s)
 ```
 
-`MaxWait` being ignored isn't visible as a hang here — there's no
-batching to wait for something to join — it shows up as the same
-one-`fn`-call-per-request symptom instead of one-call-per-batch:
+The code ignores `MaxWait`. This does not show up as a hang. There is no
+batch to wait for. It shows the same one-call-per-request symptom:
 
 ```
 === RUN   TestCollectorFiresOnMaxWaitWithPartialBatch
@@ -45,8 +44,8 @@ one-`fn`-call-per-request symptom instead of one-call-per-batch:
 --- FAIL: TestCollectorFiresOnMaxWaitWithPartialBatch (0.00s)
 ```
 
-`Close` never flips anything `Add` checks, so a request made after
-`Close` has already returned still goes through as if nothing happened:
+`Close` does not set anything that `Add` checks. A request can arrive
+after `Close` returns and still go through.
 
 ```
 === RUN   TestCollectorCloseRejectsSubsequentAdds
@@ -58,11 +57,10 @@ one-`fn`-call-per-request symptom instead of one-call-per-batch:
 
 ### Data model: one struct per batch, not scattered fields
 
-A rolling batcher needs each batch to have its own identity — its own
-slice, its own deadline timer, its own "have I already fired" flag —
-so that firing one batch and opening the next doesn't require
-resetting fields out from under whatever the *next* batch has already
-started accumulating:
+A rolling batcher needs a separate record for each batch. Each batch
+needs its own slice, deadline timer, and "already fired" flag. Then one
+batch can fire while the next opens. You do not need to reset shared
+fields under the new batch.
 
 ```go
 type batch struct {
@@ -83,7 +81,7 @@ type Collector struct {
 }
 ```
 
-### Add: open-or-join, fire on count, never touch a closed Collector
+### Add: open or join a batch, fire on count, reject after close
 
 ```go {12,17,37}
 func (c *Collector) Add(request int) <-chan Result {
@@ -129,11 +127,11 @@ func (c *Collector) openBatch() *batch {
 }
 ```
 
-`MaxWait <= 0` deliberately means "no deadline, count-only" — a nice
-real-world default rather than an accidental instant-fire on the first
-request.
+`MaxWait <= 0` means there is no deadline. The collector fires by count
+only. This is a useful default. It avoids an accidental instant fire on
+the first request.
 
-### detach: the one gate all three triggers share
+### detach: the one gate shared by all three triggers
 
 ```go {6,9}
 // detach marks b as fired - idempotent, only the first caller (from
@@ -184,49 +182,40 @@ func (c *Collector) executeBatch(b *batch) {
 }
 ```
 
-Whichever of {count reached inside `Add`, deadline timer, `Close`}
-gets to `detach(b)` first is the only one that ever sees `b.fired ==
-false` — the same "check-and-set as one atomic step under the lock"
-discipline needed any time more than one trigger could plausibly fire
-the same thing. `c.batch == b` guards against a *different* hazard
-covered below — clobbering a newer batch that's already open by the
-time a stale trigger for an old one gets the lock.
+Three triggers can fire a batch: the count in `Add`, the deadline timer,
+and `Close`. The first one to call `detach(b)` sees `b.fired == false`.
+Every other trigger sees `true`. This is a check-and-set step under one
+lock. Use this pattern when more than one trigger can fire the same
+action. The `c.batch == b` check protects a newer batch. A stale trigger
+for an old batch can arrive after that newer batch opens.
 
-`fn` itself runs **outside** the lock, in its own goroutine, so `Add`
-never blocks waiting for a slow `fn` call. This matters specifically
-because the Collector keeps rolling: the whole point of opening a new
-batch the instant the previous one fires is that callers filling the
-*next* batch shouldn't have to wait for the *previous* batch's `fn` to
-finish — holding the lock across that call would serialize every
-future `Add` behind whichever `fn` call happens to be running.
+`fn` runs **outside** the lock in its own goroutine. So `Add` does not
+wait for a slow `fn` call. The Collector keeps rolling. A new batch can
+open as soon as the old one fires. Callers filling the next batch do not
+wait for the previous batch's `fn`. Holding the lock during `fn` would
+delay every future `Add`.
 
-### Why `Timer.Stop()` alone doesn't close the race
+### Why `Timer.Stop()` alone does not close the race
 
-The count-trigger path calls `b.timer.Stop()` the moment it detaches a
-batch — but the Go documentation for `Timer.Stop` is explicit that this
-doesn't guarantee the timer's function isn't *already* running:
+The count path calls `b.timer.Stop()` when it detaches a batch. The
+`Timer.Stop` docs cover timers made with `AfterFunc(d, f)`. If
+`t.Stop()` returns `false`, function `f` may already be running.
+`Stop` does not rule that out.
 
-> For a timer created with `AfterFunc(d, f)`, if `t.Stop()` returns
-> `false`... if the call happens after the current expiration time,
-> `f` has already been started in its own goroutine.
-
-That's exactly why `detach`'s `b.fired` check has to be the real gate,
-not `Stop()`'s return value: even if `Stop()` runs a nanosecond before
-the timer would have fired, the deadline goroutine may already be
-blocked on `c.mu.Lock()` inside `onDeadline`, about to call `detach`
-right after the count-trigger releases it. `detach` seeing `b.fired ==
-true` already set is what turns that into a harmless no-op instead of
-a second `fn` call.
+That is why `detach` uses `b.fired` as the real gate. The return value
+from `Stop()` is not enough. `Stop()` may run just before the timer
+fires. The deadline goroutine may already wait on `c.mu.Lock()` in
+`onDeadline`. It is about to call `detach` after the count path releases
+the lock. `detach` sees `b.fired == true`. It does nothing. There is no
+second `fn` call.
 
 ### The stale-timer-vs-newer-batch trap
 
-A batch's deadline timer captures `b` — the specific batch object — in
-its closure, not "whatever `c.batch` happens to be when the timer
-fires." That matters because by the time a slow-to-fire deadline
-callback finally acquires `c.mu`, the Collector may have already rolled
-over to one, two, or more newer batches. `detach`'s `if c.batch == b`
-check is what prevents a stale timer from clobbering a batch it has
-nothing to do with:
+A batch's deadline timer captures `b` in its closure. It does not use
+whatever `c.batch` is when the timer fires. By the time a late callback
+gets `c.mu`, the Collector may have opened newer batches. The
+`if c.batch == b` check prevents a stale timer from touching an
+unrelated batch.
 
 ```
 batch A opens, timer armed for 50ms
@@ -241,10 +230,9 @@ batch A fires by COUNT after only 5ms - c.batch is now nil, batch B opens
               now batch C's problem entirely
 ```
 
-Without the `c.batch == b` guard, this stale callback would either
-wipe out batch C's in-progress accumulation (if it naively set
-`c.batch = nil` unconditionally) or, worse, fire batch C early using
-batch A's own (unrelated) request slice.
+Without `c.batch == b`, a stale callback could set `c.batch = nil`.
+That would clear batch C's requests. It could also fire batch C with
+batch A's request slice.
 
 ### Close: stop, flush, wait — bounded by ctx
 
@@ -278,29 +266,26 @@ func (c *Collector) Close(ctx context.Context) error {
 }
 ```
 
-Three things happen in order, matching `net/http.Server.Shutdown`'s own
-contract: `closed = true` stops any further `Add` from joining a batch
-that will never be looked at again; detaching-and-firing whatever's
-currently open turns a would-be-abandoned partial batch into one last
-real `fn` call; and `inflight.Wait()`, raced against `ctx.Done()`,
-means `Close` gives up waiting the moment `ctx` expires **without**
-cancelling the batch itself — it keeps running to completion in the
-background regardless, exactly like a slow in-flight HTTP handler
-during `Shutdown`.
+Three steps happen in order. This follows the contract of
+`net/http.Server.Shutdown`. First, `closed = true` stops new `Add` calls
+from joining an old batch. Second, the current batch is detached and
+fired. A partial batch still gets one real `fn` call. Third,
+`inflight.Wait()` runs against `ctx.Done()`. `Close` stops waiting when
+`ctx` expires. It does **not** cancel the batch. The batch keeps running
+in the background. This matches a slow in-flight HTTP handler during
+`Shutdown`.
 
-`Close` is naturally safe to call more than once or concurrently with
-itself: `c.batch` is only ever non-nil for one still-open batch at a
-time, and `detach`'s `b.fired` check means only the very first caller
-(whichever of `Add`, a deadline, or `Close` gets there first) ever
-actually fires it — every other concurrent `Close` just falls through
-to waiting on the same `inflight` WaitGroup.
+`Close` is safe to call twice or concurrently with itself. Only one
+batch can be open at a time. `detach`'s `b.fired` check means only the
+first trigger fires it. Every other concurrent `Close` waits on the
+same `inflight` WaitGroup.
 
 ## The trap that only shows up under `-race`: `wg.Add` after `Unlock`
 
-The most tempting way to write `detach` is to keep the bookkeeping
-(`b.fired = true`, clearing `c.batch`) under the lock, but move
-`c.inflight.Add(1)` down into `startExecute`, right next to the
-`inflight.Done()` it's paired with:
+A tempting version of `detach` keeps bookkeeping under the lock. The
+lock can cover `b.fired = true` and clearing `c.batch`. The code moves
+`c.inflight.Add(1)` into `startExecute`, next to the matching
+`inflight.Done()`:
 
 ```go {2}
 func (c *Collector) startExecute(b *batch) {
@@ -312,16 +297,13 @@ func (c *Collector) startExecute(b *batch) {
 }
 ```
 
-This *looks* harmless — `Add` and `Done` are still paired correctly for
-this batch. The bug is in what it does to `Close`'s ordering guarantee.
-`sync.WaitGroup`'s own docs are explicit: calls to `Add` with a
-positive delta "must happen before" a `Wait` that could observe the
-counter at zero. Once `inflight.Add(1)` moves outside the lock, nothing
-orders it relative to a *different* goroutine's `Close` call — `Close`
-can acquire `c.mu` (seeing `c.batch == nil`, because the firing
-goroutine already cleared it), unlock, and start its own
-`inflight.Wait()` **before** the firing goroutine's `Add(1)` has
-actually executed:
+This looks harmless. `Add` and `Done` still pair for this batch. But it
+breaks `Close`'s ordering guarantee. The `sync.WaitGroup` docs say a
+positive `Add` must happen before a `Wait` that could see zero. If
+`inflight.Add(1)` is outside the lock, another goroutine's `Close` has
+no ordering with it. `Close` can get `c.mu` and see `c.batch == nil`.
+The firing goroutine already cleared it. `Close` unlocks and starts
+`inflight.Wait()` before `Add(1)` runs.
 
 ```
 goroutine A (fires batch b): detach(b) under lock → b.fired=true,
@@ -338,11 +320,10 @@ goroutine B (Close): LOCK → sees c.batch == nil → UNLOCK
                      Close already told its caller everything was done
 ```
 
-**Verified**: forcing exactly this race (many concurrent `Add` calls
-racing a concurrent `Close`, repeated under `-race`) catches it
-directly as a `sync.WaitGroup` misuse — not a hang, not a wrong value,
-a `-race` failure on the very first internal field the runtime uses to
-implement the WaitGroup:
+**Verified**: I forced this race with many concurrent `Add` calls and a
+concurrent `Close`. Repeated `-race` runs catch it as
+`sync.WaitGroup` misuse. It is not a hang or a wrong value. `-race`
+reports a race on an internal WaitGroup field:
 
 ```
 WARNING: DATA RACE
@@ -357,62 +338,52 @@ Previous read at 0x00c0003ac078 by goroutine 90:
 --- FAIL: TestCollectorCloseConcurrentWithAdd (0.00s)
 ```
 
-It reproduced on roughly 1 run in 100 under `-count=100 -race` — rare
-enough to pass a casual `go test -race` a few times in a row and still
-be wrong, which is exactly the kind of bug this exercise's
-`TestCollectorCloseConcurrentWithAdd` (many concurrent `Add`s racing a
-concurrent `Close`, repeated) exists to catch. The fix is simply
-keeping `c.inflight.Add(1)` inside `detach`, still under `c.mu`, as
-shown above — every `Add(1)` this way happens-before the critical
-section of any `Close` call that could ever reach a corresponding
-`Wait()`, because the mutex totally orders the two.
+It reproduced about once in 100 runs with `-count=100 -race`. It can
+pass a casual `go test -race` run and still be wrong.
+`TestCollectorCloseConcurrentWithAdd` exists to catch it. The fix is to
+keep `c.inflight.Add(1)` inside `detach`, under `c.mu`. Then `Add(1)`
+happens before any `Close` critical section that can reach `Wait()`.
+The mutex orders the two.
 
-## A test-design note: a tiny `MaxWait` can legitimately split one intended batch into several
+## A short `MaxWait` can split one intended batch into several
 
-An early version of `TestCollectorNeverDoubleFiresWhenCountAndWaitRace`
-used a very short `MaxWait` (1ms) with several goroutines racing to
-fill one batch, and asserted `fn` ran exactly once. It failed
-constantly — not because of a real double-fire, but because a 1ms
-deadline is often shorter than it takes several goroutines to actually
-get scheduled, so the first request's batch would legitimately fire
-*by itself* before the second request even arrived, opening a second,
-separate (and equally legitimate) batch for it. Two single-request
-batches firing independently isn't a bug; the test's assumption that
-they'd all land in one batch was just wrong for that timing.
+An early version of
+`TestCollectorNeverDoubleFiresWhenCountAndWaitRace` used `MaxWait` of
+1ms. Several goroutines raced to fill one batch. The test asserted that
+`fn` ran exactly once. It failed often. The cause was not a double
+fire. A 1ms deadline can be shorter than the time several goroutines
+need to get scheduled. The first request's batch can fire by itself.
+The next request then opens a separate batch. Two single-request
+batches are valid. The test assumed all requests would share one batch.
+That assumption was wrong for the timing.
 
-The fix was to stop asserting "exactly one `fn` call" and instead
-assert the invariant a *real* double-fire would actually violate: sum
-the number of requests processed across every `fn` call in the trial,
-and check it equals the number of requests submitted. A genuine
-double-fire double-counts one request's batch; a legitimate split into
-several small batches still processes each request exactly once. This
-is a more robust check precisely because it doesn't care how many
-batches the race happened to produce.
+Replace the exact-one-call check with a check that a real double fire
+would fail. Add the number of requests processed across all `fn` calls.
+Check that it equals the number submitted. A double fire counts one
+request's batch twice. A valid split into small batches still processes
+each request once. This check does not care how many batches the race
+creates.
 
 ## Contrast with 35 (singleflight)
 
-[35](../35-singleflight)'s rule is "never hold the mutex across the
-call to `fn`" — unrelated keys must never wait on each other. This
-Collector follows the same rule, for the same underlying reason: `fn`
-runs unlocked, in its own goroutine, precisely because a new batch's
-callers are unrelated work that shouldn't have to wait behind whichever
-`fn` call happens to be running for the previous batch. The general
-principle both exercises share: hold the lock across a slow call only
-when every caller you'd block is already waiting on that exact call
-anyway - never when a *different* caller's unrelated work is what's
-waiting behind the lock.
+[35](../35-singleflight) says never hold the mutex during `fn`.
+Unrelated keys must not wait for each other. This Collector follows the
+same rule. `fn` runs unlocked in its own goroutine. Callers for a new
+batch are unrelated work. They should not wait behind the previous
+batch's `fn`. The shared principle is this. Hold the lock during a slow
+call only when every blocked caller waits for that same call. Never
+hold it when unrelated work waits.
 
 ## Alternative: one owner goroutine instead of a lock
 
-The mutex design above needs a `fired` flag and the WaitGroup-inside-
-the-lock discipline specifically because *three different goroutines*
-(the caller reaching `MaxBatchSize`, the timer's own goroutine, and
-whichever goroutine calls `Close`) can all try to decide "fire this
-batch" at once. [19](../19-actor-model)'s answer to "many goroutines,
-one piece of shared state" applies here too: give one long-lived
-goroutine sole ownership of the batch, and make every trigger - a new
-request, the deadline, `Close` - arrive as a message on a channel
-instead of a lock acquisition.
+The mutex design needs a `fired` flag. It also needs `WaitGroup` updates
+under the lock. Three goroutines can try to fire one batch. The callers
+are the count path in `Add`, the timer goroutine, and `Close`. The
+count path is the caller that reaches `MaxBatchSize`.
+[19](../19-actor-model)'s actor approach also applies. Give one
+long-lived goroutine ownership of the batch. Send every trigger as a
+channel message. A new request, the deadline, and `Close` all use a
+message instead of a lock.
 
 ```go
 type request struct {
@@ -492,62 +463,51 @@ func (c *Collector) run() {
 }
 ```
 
-Both of this exercise's headline traps disappear structurally rather
-than by discipline: there's no `fired` flag because only `run` ever
-decides to fire, and there's no WaitGroup-ordering hazard because
-`inflight.Add(1)` and the "is a batch pending" check both happen inside
-the same goroutine, in program order - nothing to race against.
+Both headline traps disappear by design. There is no `fired` flag
+because only `run` fires. There is no WaitGroup ordering race.
+`inflight.Add(1)` and the batch check both run in `run`, in program
+order.
 
-That's not "no synchronization," though - it's synchronization moved,
-not removed, and it comes with its own cost:
+This is not no synchronization. The synchronization moved, and it has
+costs:
 
-- `Add` still needs a way to fail fast after `Close`: sending on
-  `c.reqs` would block forever once `run` has returned, so `Add` has to
-  race that send against `c.done` closing - the channel equivalent of
-  the mutex version's `if c.closed`.
-- The deadline timer has to be armed exactly on empty→non-empty and
-  cleared on every fire (`deadline = nil` disarms the `<-deadline` case
-  entirely rather than leaving a stale channel to accidentally select
-  on) - get that wrong and either a batch never gets a deadline or an
-  old batch's timer fires into a new one, the same stale-timer hazard
-  as the mutex version, just relocated into the select's bookkeeping
-  instead of a `c.batch == b` check.
-- `Close`'s `ctx` handling (bounding the wait, not `fn`'s runtime) still
-  has to be wired in - omitted above for brevity, but it's the same
-  "race `inflight.Wait()` against `ctx.Done()`" shape as the mutex
-  version, just triggered by the `c.stop` case instead of `Close`
-  itself holding a lock.
-- One extra goroutine lives for the Collector's entire lifetime
-  (`run`), not just for the duration of a batch - `Close` returning
-  must mean it has actually exited, or the "no leaked goroutines" bar
-  this repo holds every solution to slips.
+- `Add` must still fail fast after `Close`. Sending on `c.reqs` can
+  block forever after `run` exits. `Add` must race that send against
+  `c.done`. This is the channel version of `if c.closed`.
+- The deadline timer must start only when the batch goes from empty to
+  non-empty. It must clear on every fire. Set `deadline = nil` to
+  disable the `<-deadline` case. Otherwise, a stale channel can fire
+  into a new batch. This is the same stale-timer hazard as the mutex
+  version.
+- `Close` must still handle `ctx`. It limits the wait, not `fn`'s
+  runtime. This was omitted above for brevity. The shape is the same:
+  race `inflight.Wait()` against `ctx.Done()`. Here the `c.stop` case
+  triggers it.
+- One extra goroutine, `run`, lives for the Collector's lifetime.
+  `Close` must not return until `run` has exited. Otherwise, this repo's
+  no-goroutine-leak rule fails.
 
-Neither design is strictly simpler: the mutex version puts three
-triggers under one flag-and-lock discipline that has to be applied
-correctly in three call sites; the channel version puts them under one
-select loop where the bug moves from "did I check `fired` under the
-lock" to "did I get the timer-arm/disarm bookkeeping right." Pick
-based on which invariant your team finds easier to keep honest under
-review - not because one is "the real concurrent Go way" and the other
-isn't.
+Neither design is clearly simpler. The mutex version uses one
+flag-and-lock rule in three call sites. The channel version uses one
+`select` loop. Its main risk moves from `fired` under the lock to timer
+arm and disarm. Choose the design your team can review more reliably.
+There is no single "real concurrent Go way."
 
 ## Key takeaways
 
-- A rolling batcher needs per-batch identity (a struct, not scattered
-  counter fields) so that firing one batch and opening the next can't
-  corrupt or get corrupted by whichever batch is currently open.
-- Three trigger sources (count, deadline, explicit close) racing to
-  fire the same batch need one shared gate (a `fired` flag, set inside
-  the same critical section that reads it) — not three separate
-  "did I win?" checks that can all say yes.
-- `Timer.Stop()` returning doesn't mean the timer's function isn't
-  already running or about to run; the real gate has to be state
-  checked under the same lock, not the `Stop()` call's return value.
-- `sync.WaitGroup.Add` must happen-before any `Wait` that could
-  observe zero — which in practice means: if `Add` and the code that
-  decides "should I start this work" are on opposite sides of an
-  unlock, move `Add` to the side still holding the lock.
-- `Close` bounded by `context.Context`, modeled on
-  `net/http.Server.Shutdown`, is what makes "wait for graceful
-  shutdown, but not forever" an explicit, testable contract instead of
-  an unbounded `Wait()` a caller has no way to give up on.
+- A rolling batcher needs a record per batch. A struct is safer than
+  scattered counters. Then firing one batch cannot corrupt the next
+  one that opens.
+- Count, deadline, and close can all try to fire the same batch. They
+  need one shared gate. A `fired` flag set under one lock is one option.
+  Do not use three checks that can all succeed.
+- `Timer.Stop()` does not prove the timer function is not running or
+  about to run. Check state under the same lock. Do not rely on the
+  return from `Stop()`.
+- `sync.WaitGroup.Add` must happen before any `Wait` that could see
+  zero. If `Add` and the start decision cross an unlock, move `Add`
+  inside the lock.
+- Bound `Close` with `context.Context`. The
+  `net/http.Server.Shutdown` model defines a clear contract. Wait for
+  graceful shutdown, but not forever. An unbounded `Wait()` gives the
+  caller no way to stop.

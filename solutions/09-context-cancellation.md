@@ -1,22 +1,18 @@
 # Context Cancellation & Propagation: A Request Chain That Ignores Its Deadline — Suggested Solutions
 
-> **Spoiler warning.** This file contains full worked solutions for `09-context-cancellation/`. Try solving it yourself first — come back here if you're stuck or want to compare approaches.
+> **Spoiler warning.** This file contains full worked solutions for `09-context-cancellation/`. Try solving it yourself first. Come back if you are stuck or want to compare approaches.
 
 ## The problem
 
-`HandleRequest` is supposed to call three downstream layers —
-`CallLayerA`, `CallLayerB`, and `CallLayerC` (see `mocklayers.go`) — in
-sequence and concatenate their results, honoring the caller's `ctx` so
-that a cancelled or expired context makes the whole chain give up
-promptly instead of grinding through all three 300ms (`LayerLatency`)
-layers regardless.
+`HandleRequest` calls `CallLayerA`, `CallLayerB`, and `CallLayerC` in
+order. They are in `mocklayers.go`. It joins their results. The caller's
+`ctx` must control the chain. A canceled or expired context must stop the
+work quickly.
 
-Each layer (`callLayer` in `mocklayers.go`) is itself well-behaved and
-context-aware: it `select`s between its own `LayerLatency` timer and
-`ctx.Done()`, and returns early with `ctx.Err()` the instant the
-context it's given is cancelled or times out. That machinery is
-useless, though, if `HandleRequest` never hands the layers the real
-`ctx`:
+Each layer uses `callLayer` in `mocklayers.go`. It waits with `select`
+for `LayerLatency` or `ctx.Done()`. It returns early with `ctx.Err()`
+when the context ends. This only works if `HandleRequest` passes the
+real `ctx`:
 
 ```go {2,7,12}
 func HandleRequest(ctx context.Context) (string, error) {
@@ -39,24 +35,20 @@ func HandleRequest(ctx context.Context) (string, error) {
 }
 ```
 
-The task is to fix `HandleRequest` so it:
+Your task:
 
-1. passes `ctx` (not `context.Background()`) into each layer call, so
-   the caller's deadline/cancellation actually reaches them, and
-2. stops the chain promptly once `ctx` is done or a layer has already
-   failed, instead of continuing on to the next layer regardless.
+1. Pass `ctx` to each layer. Do not pass `context.Background()`.
+2. Stop when `ctx` ends or a layer fails.
 
-The signature — `func HandleRequest(ctx context.Context) (string, error)` —
-must stay exactly the same.
+The signature must stay exactly the same:
+`func HandleRequest(ctx context.Context) (string, error)`.
 
 ## Why the naive version is wrong
 
-Every layer call is hardcoded to `context.Background()`, which is never
-cancelled and has no deadline. So no matter what timeout or
-cancellation the caller attached to `ctx`, each of the three layers
-always runs its full, uninterrupted `LayerLatency` (300ms), and
-`HandleRequest` always takes roughly `3 * LayerLatency` = 900ms end to
-end:
+Every layer gets `context.Background()`. That context never ends and has
+no deadline. The caller's timeout or cancellation cannot reach a layer.
+Each layer runs for `LayerLatency`, 300ms. The full chain takes about
+`3 * LayerLatency`, or 900ms:
 
 ```
 --- FAIL: TestHandleRequestRespectsTimeout (0.00s)
@@ -66,26 +58,16 @@ end:
     check_test.go:117: HandleRequest took 900ms to return after cancellation, want well under 500ms - looks like it kept running later layers instead of giving up promptly once ctx was cancelled
 ```
 
-`TestHandleRequestSucceedsWithAmpleTimeout` still passes against the
-naive version — with a 2s timeout and only 900ms of real work, nothing
-ever actually times out, so the bug doesn't manifest on the happy path.
-That's exactly the trap: code that ignores its context can look correct
-in easy/local testing and only misbehave once something upstream is
-actually slow or a caller sets a tight deadline.
+`TestHandleRequestSucceedsWithAmpleTimeout` still passes. Its 2s timeout
+is longer than the 900ms of work. The bug appears only under a tight
+deadline or cancellation.
 
-There is only one defect, not two: `context.Background()` in place of
-`ctx`. Look again at the naive code — the `if err != nil { return "", err }`
-check after each call is already there, and it's already correct; the
-naive version does *not* actually "press on to the next layer after a
-failure," despite what the exercise's introductory comment and README
-say about it. That description is aspirational about the *symptom*, not
-literally true of this code as written: with every layer pinned to
-`context.Background()`, a layer can never observe a cancelled or
-expired context to fail on in the first place, so the correct
-early-return check simply never has anything to fire on. The one-line
-propagation bug is entirely sufficient to explain both failing tests —
-fixing `context.Background()` → `ctx` is the whole fix, and the
-existing error checks do the rest for free (see Approach 1 below).
+There is only one defect: wrong context. The existing `if err != nil`
+checks already work. They follow
+`if err != nil { return "", err }`. With `context.Background()`, a layer
+never sees a canceled context. The checks never fire. Passing `ctx`
+instead is enough. The extra checks in Approach 1 are optional
+safeguards.
 
 ## Approach 1: Propagate `ctx`, check for done/failure between each layer
 
@@ -122,71 +104,38 @@ func HandleRequest(ctx context.Context) (string, error) {
 }
 ```
 
-Walking through the fix:
+How the fix works:
 
-- **Every layer call gets the real `ctx`**, not `context.Background()`.
-  Since `callLayer` already `select`s on `ctx.Done()` internally, this
-  alone is what lets a timeout or cancellation cut a layer call short
-  instead of it sleeping out its full 300ms regardless.
-- **`if err != nil { return "", err }` after each call** stops the
-  chain the moment a layer itself reports failure (which, once `ctx` is
-  actually propagated, is exactly what happens when `ctx` expires or is
-  cancelled mid-layer: `callLayer` returns `"", ctx.Err()`). This is
-  what turns "layer B failed" into "don't even attempt layer C."
-- **The extra `ctx.Err()` checks between calls** are pure defense in
-  depth, not load-bearing for this exercise: the minimal fix is
-  actually just the three `context.Background()` → `ctx` swaps, with
-  the naive code's error-check structure otherwise untouched — that
-  alone passes the full suite (`if err != nil` after each call is
-  already correct; it just needed a `ctx` capable of ever producing an
-  error to check). The extra checks catch the narrow window *between*
-  one layer finishing and the next one starting, before that next
-  layer's own internal `select` would have caught it — worth having in
-  a longer or more complex chain, where that window matters more, and
-  it's exactly what the exercise description calls out as the
-  general technique: "check `ctx.Err()` (or the error returned by the
-  previous layer) between calls." Here, they're a robustness habit
-  layered on top of a fix that would work without them.
-- Returning immediately with `err` (which, when it originates from a
-  timed-out/cancelled `ctx`, is `ctx.Err()` — `context.DeadlineExceeded`
-  or `context.Canceled`) is what satisfies
-  `TestHandleRequestRespectsTimeout`'s `errors.Is(err, context.DeadlineExceeded)`
-  check.
+- Each layer gets the real `ctx`, not `context.Background()`. The layer
+  checks `ctx.Done()`, so a timeout can stop it early.
+- The `if err != nil { return "", err }` check stops the chain after a
+  failure. When a layer times out, `callLayer` returns `"", ctx.Err()`.
+  Later layers do not start.
+- The extra `ctx.Err()` checks also catch a context that ends between
+  calls. The three context swaps alone pass the suite. These checks add
+  safety.
+- Returning `err` gives `ctx.Err()` for a timeout or cancel. This gives
+  `context.DeadlineExceeded` or `context.Canceled`.
+- `TestHandleRequestRespectsTimeout` checks
+  `errors.Is(err, context.DeadlineExceeded)`.
 
-This is a strictly sequential chain — each layer's result feeds into
-the final concatenation only after the previous one has completed —
-and the fix is correspondingly simple: thread the one `ctx` through
-every call, and stop as soon as anything says "done." There isn't a
-meaningfully different second approach worth shipping here: a
-fan-out/`errgroup`-style design that kicked off `CallLayerA`,
-`CallLayerB`, and `CallLayerC` concurrently would change the exercise's
-actual semantics (three independent, concurrently-run layers instead
-of a sequential chain) and would break `TestHandleRequestCancelledMidway`,
-which specifically expects layer B to still be in flight — not already
-finished — 350ms in; running everything concurrently would let all
-three complete in a single `LayerLatency` (300ms) window, before the
-test's cancellation at 350ms ever fires.
+The chain is sequential. Join a layer result only after the previous
+layer finishes. Pass one `ctx` through all calls. Stop when work ends or
+fails.
+
+Do not run all three layers at once. That changes the exercise. A
+fan-out with `errgroup` would also break
+`TestHandleRequestCancelledMidway`. That test expects layer B to still
+run at 350ms. All three would finish in one 300ms `LayerLatency` window.
 
 ## Key takeaways
 
-- Passing `context.Background()` (or any context you constructed
-  yourself) instead of a received `ctx` is a common, easy-to-miss way
-  to silently break cancellation — the function *looks* context-aware
-  (it takes a `ctx` parameter) while actually ignoring it completely.
-  Grep for `context.Background()` deep inside a function that also
-  takes a `ctx` argument; it's almost always a bug.
-- A context-aware dependency only helps if the context it's *given* is
-  the real one. `callLayer`'s own `select` on `ctx.Done()` was already
-  correct and unchanged throughout this exercise — the entire bug was
-  one layer up, in what `HandleRequest` chose to pass down.
-- Checking `ctx.Err()` (or the previous call's error) between
-  sequential dependent calls, and returning immediately, is what turns
-  "the deadline expired" into "stop doing further work," rather than
-  merely "notice the deadline expired after the fact."
-- A test that passes on the happy path (ample timeout, nothing actually
-  slow) doesn't prove context propagation is correct —
-  `TestHandleRequestSucceedsWithAmpleTimeout` passed against the fully
-  broken naive version. The real test is a tight deadline or a
-  cancellation mid-chain, which is exactly what
-  `TestHandleRequestRespectsTimeout` and `TestHandleRequestCancelledMidway`
-  exercise.
+- Do not pass `context.Background()` when the function already has a
+  `ctx`. The function looks context-aware but ignores the caller.
+- A context-aware layer needs the real context. `callLayer` was correct.
+  `HandleRequest` passed the wrong context.
+- Check `ctx.Err()` or the previous error between calls. Return at once.
+  This stops more work after a deadline.
+- A passing happy-path test does not prove context handling.
+  `TestHandleRequestSucceedsWithAmpleTimeout` passes while the code is
+  broken. Use a tight deadline or a mid-chain cancel.

@@ -1,29 +1,24 @@
 # Pub-Sub: In-Memory Event Bus — Suggested Solutions
 
-> **Spoiler warning.** This file contains full worked solutions for `12-pub-sub/`. Try solving it yourself first — come back here if you're stuck or want to compare approaches.
+> **Spoiler warning.** This file contains full worked solutions for `12-pub-sub/`. Try solving it yourself first. Come back if you are stuck or want to compare approaches.
 
 ## The problem
 
-`EventBus` is supposed to let any number of independent subscribers listen for
-events published to it, with `Subscribe`, `Unsubscribe`, and `Publish` all safe
-to call concurrently from any number of goroutines. Two things need fixing:
+`EventBus` lets many independent subscribers receive events.
+`Subscribe`, `Unsubscribe`, and `Publish` must be safe to call at the
+same time. Two things need fixing:
 
-1. There is no way to unsubscribe at all — a caller that's done listening has
-   no way to tell the bus "stop sending to me, forget my channel," so it leaks
-   inside the bus forever.
-2. `Publish` sends to every subscriber with a blocking, unbuffered send. One
-   slow or stalled subscriber freezes delivery to everyone else, and every
-   future `Publish` call, for as long as it never reads.
+1. There is no way to unsubscribe. The bus keeps every channel forever.
+2. `Publish` uses a blocking send to each subscriber. One slow subscriber
+   can stop all delivery and every future `Publish` call.
 
-The starting `main.go` doesn't even compile against `check_test.go` — there's
-no `Unsubscribe` method yet. That's by design: writing it is exactly the
-missing half of the task, not a "make the tests pass" afterthought.
+The starting `main.go` does not compile against `check_test.go`. The
+`Unsubscribe` method is missing. Writing it is part of the task.
 
 ## Why the naive version is wrong
 
-The two bugs named in the file comment are real, but there's a third,
-sharper one underneath them: the blocking send happens **while holding
-`b.mu`**.
+The file comment names two bugs. A third problem makes them worse. The
+blocking send runs while holding `b.mu`:
 
 ```go {6}
 func (b *EventBus) Publish(e Event) {
@@ -36,43 +31,33 @@ func (b *EventBus) Publish(e Event) {
 }
 ```
 
-So a stalled subscriber doesn't just freeze `Publish` — it freezes the entire
-bus. Any other goroutine calling `Subscribe` (or, once it exists,
-`Unsubscribe`) blocks trying to acquire `b.mu`, which `Publish` is holding
-forever waiting on a channel nobody reads. One stuck reader deadlocks every
-public method on the type.
+A stalled reader stops `Publish`. It also holds `b.mu` forever.
+`Subscribe` and `Unsubscribe` then block too. One stuck reader can stop
+every public method.
 
-The general lesson: **never perform a potentially-blocking operation inside a
-critical section.** The fix below keeps the lock (state still needs
-protecting) but makes every send inside it non-blocking, so the critical
-section's duration no longer depends on subscriber behavior.
+Do not block inside a critical section. Keep the lock for shared state.
+Make every send non-blocking. Then subscriber speed cannot control the
+lock duration.
 
-One more wrinkle worth naming up front: `Unsubscribe` takes a `<-chan Event`
-(receive-only), but `Subscribe` necessarily creates and stores a bidirectional
-`chan Event` (it needs to send on it). Go won't let you convert a
-receive-only channel back to bidirectional, so you can't index a
-`map[chan Event]...` directly with the `<-chan Event` you're given — both
-approaches below deal with this by linear-scanning the subscriber set and
-comparing with `==`, which Go permits here because a `chan Event` value is
-assignable to `<-chan Event` (comparing values of assignable-but-different
-channel types is legal). If this were a hot path at scale, keying the map by
-the receive-only view instead — `map[<-chan Event]chan Event`, storing
-`subs[(<-chan Event)(ch)] = ch` — would make removal O(1); it's not needed for
-this exercise's scale, so the verified code below keeps the simpler scan.
+`Unsubscribe` takes `<-chan Event`. `Subscribe` creates and stores
+`chan Event`, because it must send. Go cannot turn a receive-only channel
+back into a two-way channel. You cannot index `map[chan Event]...`
+directly with `<-chan Event`. Both designs compare channels with `==`
+instead.
 
-Also worth calling out: `Unsubscribe` deliberately does **not** close `ch`.
-The contract only requires the bus to forget about the channel, not close it
-— closing is a natural first instinct, but it's wrong here, since nothing
-guarantees no other code path might still try to send to it.
+At higher scale, use `map[<-chan Event]chan Event` and
+`subs[(<-chan Event)(ch)] = ch` for O(1) removal. This exercise does not
+need it. A simple scan is fine.
+
+`Unsubscribe` does not close `ch`. The bus only needs to forget the
+channel. Another path may still send to it.
 
 ## Approach 1: buffered channels + non-blocking `Publish`, mutex-protected registry
 
-The subscriber set is a `map[chan Event]struct{}` guarded by a plain
-`sync.Mutex`. Each subscriber gets a buffered channel (buffer size 8);
-`Publish` does a non-blocking `select`/`default` send to each one, so a full
-buffer just drops that one event for that one subscriber instead of blocking
-anything else. `Unsubscribe` takes the same lock and deletes the entry
-directly.
+The subscriber set is `map[chan Event]struct{}`. A plain `sync.Mutex`
+protects it. Each channel has a buffer of 8. `Publish` uses
+`select`/`default`, so a full buffer drops one event for one subscriber.
+`Unsubscribe` takes the same lock and deletes the entry.
 
 ```go {38,68-69}
 package main
@@ -149,30 +134,22 @@ func (b *EventBus) Publish(e Event) {
 }
 ```
 
-Why this satisfies the requirements:
+Why this works:
 
-- The buffer (8) absorbs short bursts so a briefly-slow subscriber doesn't
-  lose events, but a permanently stalled one (like `chStalled` in
-  `TestPublishNeverBlocksOnStalledSubscriber`) just fills up and every
-  subsequent event for it gets dropped via the `default` case — `Publish`
-  itself never blocks on it.
-- `Subscribe`/`Unsubscribe`/`Publish` all take the same mutex for the
-  minimal duration needed to mutate the map or iterate it with non-blocking
-  sends — never for a blocking operation — so none of them can freeze the
-  others.
-- Once `Unsubscribe` returns, `sub` has been deleted from the map under the
-  same lock `Publish` uses, so no future `Publish` call can observe it.
+- The buffer handles short bursts. A stalled subscriber, such as
+  `chStalled` in `TestPublishNeverBlocksOnStalledSubscriber`, fills its
+  buffer. Later events use `default` and drop. `Publish` does not block.
+- All three methods take the lock only for map changes or non-blocking
+  sends.
+- `Unsubscribe` deletes `sub` under the same lock as `Publish`. No later
+  publish can see it.
 
 ## Approach 2: actor/monitor — single goroutine owns the state, no mutex
 
-A genuinely different way to get the same safety: instead of a mutex guarding
-shared state that any goroutine can touch, a single dedicated goroutine
-(`run`) owns the subscriber map outright, and `Subscribe`/`Unsubscribe`/
-`Publish` interact with it only by sending commands over channels — "share
-memory by communicating" instead of "share memory, protect it with a lock."
-There is no `sync.Mutex` anywhere in this version; serialization is
-structural (only one goroutine ever touches the map), not enforced by lock
-discipline.
+This design uses one goroutine, `run`, to own the subscriber map.
+`Subscribe`, `Unsubscribe`, and `Publish` send commands over channels.
+There is no `sync.Mutex`. Only one goroutine touches the map, so the code
+does not need lock discipline.
 
 ```go {74,101}
 package main
@@ -286,41 +263,25 @@ func (b *EventBus) Publish(e Event) {
 }
 ```
 
-A couple of details that make this work correctly rather than just look
-clever:
+Important details:
 
-- `Unsubscribe` doesn't just fire a request and return — it waits on `done`,
-  which `run` only closes *after* it has actually deleted the entry. Without
-  that handshake, `Unsubscribe` could return before the owner goroutine got
-  around to processing the deletion, which would violate "the bus must no
-  longer send to that channel" the instant the call returns.
-- `Publish` and `Subscribe` both look like they "block" on a channel send,
-  but `run`'s `select` loop is always ready to receive one of its three
-  request channels — it never blocks inside a case body — so those sends
-  complete promptly regardless of subscriber behavior.
-- The same `sub == req.ch` comparison trick from Approach 1 is needed here
-  too, for the same reason (receive-only vs. bidirectional channel types).
+- `Unsubscribe` waits on `done`. `run` closes `done` only after deleting
+  the entry. Without this handshake, removal could finish after
+  `Unsubscribe` returns.
+- `Publish` and `Subscribe` send on channels. `run` is always ready. It
+  does not block inside a case, so those sends finish quickly.
+- This version also needs the `sub == req.ch` comparison.
 
-Trade-off versus Approach 1: this buys nothing observable — same behavior,
-same guarantees — at the cost of an extra goroutine and three extra channels
-per `EventBus`. It's worth knowing as a pattern (no lock to misuse, no risk of
-holding it across a blocking call by accident, since the design makes that
-mistake structurally harder), but for this exercise's scale, Approach 1's
-mutex is simpler and does the same job.
+Tradeoff: this has the same behavior as Approach 1. It adds one goroutine
+and three channels. It removes lock misuse by design. Approach 1 is
+simpler at this scale.
 
 ## Key takeaways
 
-- Never hold a lock across a potentially-blocking operation — the naive bug
-  here isn't just "`Publish` can stall," it's "`Publish` can stall *while
-  holding the mutex*," which freezes every other method on the type too.
-- Bounded per-subscriber buffers plus a non-blocking `select`/`default` send
-  is the standard way to make "broadcast to N readers" resilient to any one
-  reader being slow, without penalizing the others.
-- A receive-only channel (`<-chan Event`) can't be converted back to
-  bidirectional, so identifying "this is the same channel I handed out
-  earlier" has to go through `==` comparison (or by keying maps on the
-  receive-only view) rather than a direct type conversion.
-- Mutex-protected shared state and single-goroutine-owns-the-state (actor)
-  designs can implement the exact same contract; picking between them is
-  about which failure modes you want to make structurally impossible, not
-  about one being more "correct."
+- Do not hold a lock while waiting. A stalled `Publish` holds the mutex
+  and stops every other method.
+- Buffered channels and `select`/`default` let one slow reader fail alone.
+- A `<-chan Event` cannot become a two-way channel. Compare channels with
+  `==`, or key the map by the receive-only view.
+- A mutex design and a single-owner goroutine design can meet the same
+  contract. Choose based on which mistakes you want to prevent.

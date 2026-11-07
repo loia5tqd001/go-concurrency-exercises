@@ -43,7 +43,7 @@ const N = K.callers.value;
 const dedupeTests: Record<string, TestDef> = {
   dedupe: {
     name: "TestDoDedupesConcurrentCallers",
-    short: "1 call, 1 leader",
+    short: "one shared call",
     judge: (run: RunSummary) =>
       run.vars.callCount === K.one.value && run.vars.notShared === K.one.value && run.vars.sharedCount === N - K.one.value,
   },
@@ -52,7 +52,7 @@ const dedupeTests: Record<string, TestDef> = {
 const forgetTests: Record<string, TestDef> = {
   forget: {
     name: "TestDoForgetsAfterCompletion",
-    short: "2 calls, fresh",
+    short: "fresh call",
     judge: (run: RunSummary) => run.vars.callCount === K.forgetCalls.value && run.vars.notShared === K.forgetCalls.value,
   },
 };
@@ -60,7 +60,7 @@ const forgetTests: Record<string, TestDef> = {
 const errorTests: Record<string, TestDef> = {
   error: {
     name: "TestDoPropagatesErrorToAllWaiters",
-    short: "20 same errors",
+    short: "same error",
     judge: (run: RunSummary) => run.vars.callCount === K.one.value && run.vars.errCount === N,
   },
 };
@@ -217,7 +217,7 @@ export default defineViz({
       id: "today",
       chip: "Today",
       tier: "today",
-      summary: `All ${N} callers enter Do with the same key and every one runs fn itself, so Call runs ${N} times.`,
+      summary: `All ${N} callers use the same key. Each caller runs fn itself. Call runs ${N} times.`,
       model: {
         nodes: {
           test: testRunner(N),
@@ -233,10 +233,10 @@ export default defineViz({
           Call: callCount(),
           shareds: sharedSlice(),
         },
-        insight: `All ${N} Do calls overlap, so there is no in-flight result to join. Each caller runs fn and returns shared=false: Call reaches ${N} instead of ${K.one.value}.`,
+        insight: `All ${N} Do calls overlap. There is no in-flight result to join. Each caller runs fn and returns shared=false. Call reaches ${N} instead of ${K.one.value}.`,
         stops: [
-          { when: { op: "work", g: "caller", nth: N }, say: `All ${N} callers are running fn at once. Nothing waits for another caller's result.` },
-          { when: { op: "end" }, say: `Every entry in shareds is F and Call reached ${N}. The test wants one F and one Call.` },
+          { when: { op: "work", g: "caller", nth: N }, say: `All ${N} callers run fn at once. No caller waits for another result.` },
+          { when: { op: "end" }, say: `Every shareds entry is F and Call reaches ${N}. The test wants one F and one Call.` },
         ],
         tests: dedupeTests,
         clock: { unit: "ms" },
@@ -255,7 +255,7 @@ export default defineViz({
       id: "goal",
       chip: "Goal",
       tier: "goal",
-      summary: `One caller runs fn while the other ${N - K.one.value} wait, then everyone receives the same result with the correct shared flag.`,
+      summary: `One caller runs fn. The other ${N - K.one.value} wait. Everyone then gets the same result with the correct shared flag.`,
       model: {
         nodes: {
           caller: goroutine({
@@ -276,11 +276,11 @@ export default defineViz({
           Call: callCount(),
           shared: fact({ label: "shared", pos: [1, 1], value: "pending" }),
         },
-        insight: `One caller runs fn while the other ${N - K.one.value} wait. When that result is ready, all ${N} return: one reports shared=false and ${N - K.one.value} report shared=true.`,
+        insight: `One caller runs fn. The other ${N - K.one.value} wait. When the result is ready, all ${N} return. One reports shared=false and ${N - K.one.value} report shared=true.`,
         stops: [
           { when: { op: "work", g: "caller", nth: K.one.value }, say: "One caller runs fn. Every duplicate waits instead of starting another backend call." },
           { when: { op: "set", node: "wait" }, say: `The result releases all ${N - K.one.value} waiters together. They share the same value and error.` },
-          { when: { op: "set", node: "shared" }, say: "The result flags are one false for the leader and true for every caller that joined it." },
+          { when: { op: "set", node: "shared" }, say: "The leader gets shared=false. The joiners get shared=true." },
         ],
         tests: dedupeTests,
         clock: { unit: "ms" },
@@ -295,7 +295,7 @@ export default defineViz({
       id: "admit",
       chip: "Admit",
       tier: "inside",
-      summary: `The mutex admits one caller to insert g.m[key]. That caller runs fn while every joiner waits on c.wg.`,
+      summary: `The mutex lets one caller insert g.m[key]. That caller runs fn while every joiner waits on c.wg.`,
       model: {
         nodes: {
           test: testRunner(N),
@@ -307,11 +307,11 @@ export default defineViz({
           Call: callCount(),
           shareds: sharedSlice(),
         },
-        insight: `The leader inserts one call and unlocks before fn runs. Joiners find that entry, wait on its WaitGroup, and later return shared=true; the leader alone returns shared=false.`,
+        insight: `The leader inserts one call and unlocks before fn runs. Joiners find the entry and wait on its WaitGroup. They return shared=true. Only the leader returns shared=false.`,
         stops: [
-          { when: { op: "set", node: "entry" }, say: "The first caller inserted the in-flight call. It owns the single fn call and releases g.mu." },
-          { when: { op: "block", g: "caller" }, say: "Duplicate callers found the entry and block on c.wg instead of entering fn." },
-          { when: { op: "done", node: "callwg" }, say: "The leader publishes the result, then deletes the entry before it returns." },
+          { when: { op: "set", node: "entry" }, say: "The first caller inserts the in-flight call. It owns the single fn call and releases g.mu." },
+          { when: { op: "block", g: "caller" }, say: "Duplicate callers find the entry. They block on c.wg instead of entering fn." },
+          { when: { op: "done", node: "callwg" }, say: "The leader publishes the result. It then deletes the entry before returning." },
         ],
         tests: dedupeTests,
         clock: { unit: "ms" },
@@ -323,7 +323,7 @@ export default defineViz({
       id: "forget",
       chip: "Forget",
       tier: "inside",
-      summary: `Two sequential Do calls for the same key each create a new entry: the first deletes it before returning, so the second runs fn again.`,
+      summary: `Two sequential Do calls use the same key. Each one creates a new entry. The first deletes it, so the second runs fn again.`,
       model: {
         nodes: {
           caller: goroutine({
@@ -359,10 +359,10 @@ export default defineViz({
           Call: fact({ label: "Call", pos: [2, 0], value: 0 }),
           shared: fact({ label: "shared", pos: [2, 1], value: "false", states: ["true", "false"] }),
         },
-        insight: `Deleting the entry before return makes the sharing window exactly the in-flight call. The second Do is sequential, finds no entry, and starts a genuinely new ${K.latency.value} ms call.`,
+        insight: `The code deletes the entry before return. Sharing lasts only while a call is in flight. The second Do is sequential, finds no entry, and starts a new ${K.latency.value} ms call.`,
         stops: [
-          { when: { op: "set", node: "entry", nth: 2 }, say: "The first call finished and deleted its entry. No result was cached." },
-          { when: { op: "work", g: "caller" }, say: "The next Do starts as a new leader. Call runs a second time and shared is false again." },
+          { when: { op: "set", node: "entry", nth: 2 }, say: "The first call finishes and deletes its entry. No result is cached." },
+          { when: { op: "work", g: "caller" }, say: "The next Do starts as a new leader. Call runs again and shared is false again." },
         ],
         tests: forgetTests,
         clock: { unit: "ms" },
@@ -378,7 +378,7 @@ export default defineViz({
       id: "error",
       chip: "Error",
       tier: "inside",
-      summary: `One leader's Call(err-k3) returns ErrUnavailable. The joiner path waits for the same call and returns the same error.`,
+      summary: `One leader's Call(err-k3) returns ErrUnavailable. Joiners wait for the same call and return the same error.`,
       model: {
         nodes: {
           test: testRunner(N),
@@ -391,9 +391,9 @@ export default defineViz({
           Call: fact({ label: "Call", pos: [3, 1], value: 0, limit: K.one.value }),
           errs: errSlice(),
         },
-        insight: `The leader stores the error beside the value in the same call, then releases c.wg. All ${N} callers return ErrUnavailable, and Call still runs exactly once.`,
+        insight: `The leader stores the error beside the value in the same call. It then releases c.wg. All ${N} callers return ErrUnavailable. Call still runs once.`,
         stops: [
-          { when: { op: "set", node: "ErrUnavailable" }, say: "The failed fn returned through the same result field. Success and error use one path." },
+          { when: { op: "set", node: "ErrUnavailable" }, say: "The failed fn returns through the same result field. Success and error use one path." },
           { when: { op: "put", node: "errs", nth: N }, say: `All ${N} callers now carry the shared error; Call stayed at ${K.one.value}.` },
         ],
         tests: errorTests,

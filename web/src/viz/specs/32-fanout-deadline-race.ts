@@ -261,7 +261,7 @@ export default defineViz({
       id: "today",
       chip: "Today",
       tier: "today",
-      summary: `The ${K.deadlineMs.value} ms deadline passes while history runs for ${K.historyMs.value} ms. Construct ignores ctx and waits anyway.`,
+      summary: `The ${K.deadlineMs.value} ms deadline passes while history runs for ${K.historyMs.value} ms. Construct ignores ctx and keeps waiting.`,
       model: {
         nodes: {
           ...components(K.historyMs.value),
@@ -288,15 +288,15 @@ export default defineViz({
           }),
           ctx: context({ label: "ctx", pos: [3, 4], deadline: K.deadlineMs.value }),
         },
-        insight: `Construct fans out correctly, but wg.Wait() never reads ctx. The ${K.deadlineMs.value} ms deadline passes while history keeps running, and Construct returns only after ${K.historyMs.value} ms with a non-nil result.`,
+        insight: `Construct starts every component. wg.Wait() never reads ctx. The ${K.deadlineMs.value} ms deadline passes while history runs. Construct returns only after ${K.historyMs.value} ms with a result.`,
         stops: [
           {
             when: { op: "fire", node: "ctx" },
-            say: `At ${K.deadlineMs.value} ms the deadline passes. Construct is still blocked in wg.Wait(); the context has no effect.`,
+            say: `At ${K.deadlineMs.value} ms the deadline passes. Construct is still blocked in wg.Wait(). ctx has no effect.`,
           },
           {
             when: { op: "fail" },
-            say: `At ${K.historyMs.value} ms the last component finishes. The test now sees no error and a non-nil result, far past its ${K.budgetMs.value} ms budget.`,
+            say: `At ${K.historyMs.value} ms the last component finishes. The test sees no error and a result instead of nil. This is far past its ${K.budgetMs.value} ms budget.`,
           },
         ],
         tests,
@@ -309,7 +309,7 @@ export default defineViz({
       id: "goal",
       chip: "Goal",
       tier: "goal",
-      summary: `Completion races the ${K.deadlineMs.value} ms deadline. The deadline wins, so Construct returns nil and ctx.Err() while history keeps writing.`,
+      summary: `Completion races the ${K.deadlineMs.value} ms deadline. The deadline wins. Construct returns nil and ctx.Err() while history keeps writing.`,
       model: {
         nodes: {
           ...components(K.historyMs.value, { signal: "finished", withWG: false }),
@@ -353,15 +353,15 @@ export default defineViz({
             deadline: K.deadlineMs.value,
           }),
         },
-        insight: `All four components must finish, or the deadline ends the wait. Here three finish at ${K.fastMs.value} ms, but history is still running at ${K.deadlineMs.value} ms. Construct returns nil, ctx.Err(); history keeps running until ${K.historyMs.value} ms.`,
+        insight: `All four components must finish, or the deadline ends the wait. Three finish at ${K.fastMs.value} ms. The history component still runs at ${K.deadlineMs.value} ms. Construct returns nil, ctx.Err(). The history component runs until ${K.historyMs.value} ms.`,
         stops: [
           {
             when: { op: "fire", node: "ctx" },
-            say: `At ${K.deadlineMs.value} ms the wait ends with ctx.Err(). The result is still incomplete because history is still running.`,
+            say: `At ${K.deadlineMs.value} ms the wait ends with ctx.Err(). The result is incomplete because the history component still runs.`,
           },
           {
             when: { op: "put", g: "history" },
-            say: `History writes its field at ${K.historyMs.value} ms, after Construct has returned nil. The caller must not read result now.`,
+            say: `The history component writes its field at ${K.historyMs.value} ms, after Construct returns nil. The caller must not read result.`,
           },
         ],
         tests,
@@ -373,7 +373,7 @@ export default defineViz({
       id: "no-stop",
       chip: "No stop",
       tier: "inside",
-      summary: `The ${K.deadlineMs.value} ms deadline cannot stop the components. Three finish at ${K.fastMs.value} ms; history keeps working for ${K.historyMs.value} ms.`,
+      summary: `The ${K.deadlineMs.value} ms deadline cannot stop the components. Three finish at ${K.fastMs.value} ms. history keeps working for ${K.historyMs.value} ms.`,
       model: {
         nodes: {
           ...components(K.historyMs.value, { countFact: "completed", withWG: false }),
@@ -413,15 +413,15 @@ export default defineViz({
             unit: "calls",
           }),
         },
-        insight: `ctx expires at ${K.deadlineMs.value} ms, but the components never read it. Three have already completed; history keeps its progress and writes result at ${K.historyMs.value} ms.`,
+        insight: `ctx expires at ${K.deadlineMs.value} ms, but the components never read it. Three have finished. The history component keeps its progress and writes result at ${K.historyMs.value} ms.`,
         stops: [
           {
             when: { op: "fire", node: "ctx" },
-            say: `At ${K.deadlineMs.value} ms ctx is done. History is still inside Component(); cancellation cannot reach it.`,
+            say: `At ${K.deadlineMs.value} ms ctx is done. The history component is still inside Component(). Cancellation cannot reach it.`,
           },
           {
             when: { op: "put", g: "history" },
-            say: `At ${K.historyMs.value} ms history finishes its call and writes its field. Abandoning the wait did not cancel the work.`,
+            say: `At ${K.historyMs.value} ms the history component finishes its call and writes its field. Leaving the wait did not cancel the work.`,
           },
         ],
         tests,
@@ -433,14 +433,14 @@ export default defineViz({
       id: "deadline",
       chip: "Deadline",
       tier: "inside",
-      summary: `The waiter closes done only after all four finish. At ${K.deadlineMs.value} ms ctx wins, so Construct returns nil while history keeps writing.`,
+      summary: `The waiter closes done only after all four finish. At ${K.deadlineMs.value} ms ctx wins. Construct returns nil while history keeps writing.`,
       model: {
         ...solved({
           historyMs: K.historyMs.value,
           deadlineMs: K.deadlineMs.value,
           ample: false,
         }),
-        insight: `The caller races done against ctx.Done(). At ${K.deadlineMs.value} ms ctx wins and Construct returns nil, ctx.Err(). History is still running and writes result at ${K.historyMs.value} ms, so the pointer would not be safe to return.`,
+        insight: `The caller races done against ctx.Done(). At ${K.deadlineMs.value} ms ctx wins. Construct returns nil, ctx.Err(). The history component still runs and writes result at ${K.historyMs.value} ms. Returning the pointer would be unsafe.`,
         stops: [
           {
             when: { op: "fire", node: "ctx" },
@@ -448,7 +448,7 @@ export default defineViz({
           },
           {
             when: { op: "put", g: "history" },
-            say: `History is still writing at ${K.historyMs.value} ms. Returning result here would expose a struct that is changing without synchronization.`,
+            say: `The history component is still writing at ${K.historyMs.value} ms. Returning result here would expose a struct without synchronization.`,
           },
         ],
         tests,
@@ -461,22 +461,22 @@ export default defineViz({
       id: "ample",
       chip: "Ample",
       tier: "inside",
-      summary: `With a ${K.ampleDeadlineS.value} s deadline, all four components finish at ${K.fastMs.value} ms. done wins, so returning the completed result is safe.`,
+      summary: `With a ${K.ampleDeadlineS.value} s deadline, all four components finish at ${K.fastMs.value} ms. The done channel wins, so returning the result is safe.`,
       model: {
         ...solved({
           historyMs: K.fastMs.value,
           deadlineMs: K.ampleDeadlineS.value * 1000,
           ample: true,
         }),
-        insight: `All four writers finish at ${K.fastMs.value} ms. The waiter closes done after wg.Wait() returns, so this is the completed-result branch where returning &result is safe.`,
+        insight: `All four writers finish at ${K.fastMs.value} ms. The waiter closes done after wg.Wait() returns. This is the success path. Returning &result is safe.`,
         stops: [
           {
             when: { op: "close", g: "waiter" },
-            say: `At ${K.fastMs.value} ms wg.Wait() returns and done closes. All four result fields have been written.`,
+            say: `At ${K.fastMs.value} ms wg.Wait() returns and done closes. All four result fields are written.`,
           },
           {
             when: { op: "cancel", g: "caller" },
-            say: `done won, so the caller takes the completed-result branch. The test's deferred cancel then expires ctx.`,
+            say: `The done channel wins, so the caller takes the success path. The test's deferred cancel then ends ctx.`,
           },
         ],
         tests: ampleTests,

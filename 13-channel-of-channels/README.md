@@ -1,19 +1,15 @@
 # Channel of Channels (Bridge Pattern)
 
-Given is a `LogHub` (see `mockloghub.go`) that simulates log-collecting
-infrastructure where new "shard" sources connect over time. Instead of
-handing you a single channel of log lines, `StartLogHub` returns a
-channel of channels: every value it emits is itself a channel carrying
-the log lines from one shard, which closes once that shard is done.
-`StartLogHub` closes the outer channel once all of its shards have
-been started - but by then, the shards themselves may still be
-producing lines.
+`LogHub` (see `mockloghub.go`) simulates a log system. New shard
+sources connect over time. `StartLogHub` returns a channel of channels.
+Each inner channel carries one shard's log lines. It closes when that
+shard finishes. The outer channel closes after all shards start. The
+shards may still send lines at that point.
 
-The naive `Bridge` function in `main.go` is supposed to flatten this
-channel-of-channels into a single stream of log lines that `main` can
-simply range over. It doesn't: it only ever looks at the very first
-inner channel it receives, forwards its lines, and then stops -
-silently dropping every log line produced by every other shard.
+`Bridge` should merge all log lines into one stream. The current
+version in `main.go` reads only the first inner channel. `main` then
+stops. Lines from other shards are dropped, and those hub goroutines
+can block forever.
 
 ```
 Today - naive Bridge: 1 goroutine, reads only shard-0
@@ -34,21 +30,16 @@ Goal - fan-in: shards arrive every 5 ms, a line every 10 ms
                              a stuck shard stalls only its own fwd
 ```
 
-Your task is to fix `Bridge` so that it flattens **every** inner
-channel it ever receives from `chanStream` into the single output
-stream - a fan-in over a dynamically arriving, unbounded set of
-channels. The output channel must close once `chanStream` itself has
-been closed **and** every inner channel it ever produced has been
-fully drained. `Bridge` must also stop promptly - closing its output
-and abandoning any further reads - as soon as `done` is closed.
+Your task is to fix `Bridge`. It must merge every inner channel from
+`chanStream` into one output stream. Shards can arrive at any time.
+The final number is not known in advance. Close the output after `chanStream`
+closes and every inner channel is fully drained. If `done` closes,
+stop sooner. Close the output and stop reading.
 
-That fan-in must also be genuinely concurrent: a shard that stalls (or
-never closes) must not delay lines from any other shard, whether
-already open or still to arrive on `chanStream`. It's not enough to
-drain each inner channel to completion before going back to
-`chanStream` for the next one - that satisfies every requirement above
-while still letting one stuck shard starve every shard behind it,
-including ones `Bridge` hasn't even read off `chanStream` yet. The
+The merge must run at the same time. A stuck shard must not delay other
+shards, whether they are open now or arrive later. Reading one shard
+fully before the next is not enough. It can block every shard behind
+the stuck one, including shards still waiting on `chanStream`. The
 function signature must stay the same:
 
 ```go
@@ -64,8 +55,7 @@ go test
 go test --race
 ```
 
-This includes `TestBridgeDoesNotStarveOnSlowShard`, which opens a shard
-that never sends and never closes alongside a shard with a line
-already waiting, and expects that line promptly regardless - a
-sequential "finish this shard, then read the next one off chanStream"
-`Bridge` passes every other test here but times out on this one.
+`TestBridgeDoesNotStarveOnSlowShard` adds two shards. One never sends
+or closes. The other already has a waiting line. The test expects
+that line quickly. A `Bridge` that finishes one shard before reading
+the next fails this test, even if it passes the others.

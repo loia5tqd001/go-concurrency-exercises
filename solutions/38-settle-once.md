@@ -1,10 +1,10 @@
-# Settle Once: CompareAndSwap Between a Timeout and a Completion — Suggested Solution
+# Settle Once: Compare and Swap a Timeout and a Completion — Suggested Solution
 
-> **Spoiler warning.** Try solving it yourself first — come back if you're stuck.
+> **Spoiler warning.** Try the exercise first. Come back if you are stuck.
 
 ## The problem
 
-`Complete` and `Timeout` both guard `notify` with a plain `bool`:
+`Complete` and `Timeout` both check `notify` with a plain `bool`:
 
 ```go {2,5,11,14}
 func (r *Responder) Complete(result string) bool {
@@ -33,8 +33,8 @@ goroutine B (deadline fires): reads settled (false) ──▶ notify("timed out"
 ```
 
 **Verified**: `TestSettleRaceExactlyOneWinner` fails within the first
-few dozen rounds (200 simultaneous `Complete`/`Timeout` calls against
-one `Responder`, 500 rounds):
+few dozen rounds. It runs 200 simultaneous `Complete` and `Timeout`
+calls against one `Responder` for 500 rounds.
 
 ```
 === RUN   TestSettleRaceExactlyOneWinner
@@ -42,18 +42,17 @@ one `Responder`, 500 rounds):
 --- FAIL: TestSettleRaceExactlyOneWinner (0.00s)
 ```
 
-`go test --race` doesn't even need the timing to line up — it flags
-the raw unsynchronized read/write on `r.settled` outright, on the very
-first `Complete`/`Timeout` pair it schedules concurrently, independent
-of whether `notify` visibly double-fires that run.
+`go test --race` does not need the timing to line up. It reports the
+unsynchronized read and write on `r.settled`. It does this on the first
+concurrent `Complete` and `Timeout` pair. It does not matter whether
+`notify` visibly fires twice in that run.
 
-With only *two* real contenders per request (one `Complete`, one
-`Timeout`), this bug is much narrower than it looks: a plain `go run`
-of `main.go`'s demo will almost always print a clean `0/30`, because
-the unsynchronized window is a handful of nanoseconds wide. That's why
-the test stresses 200 simultaneous callers per round instead of two —
-same underlying bug, opened up statistically until it's reliable to
-catch without `-race` at all.
+The bug is rarer than it looks. Each request has only two real
+contenders: one `Complete` and one `Timeout`. A plain `go run` of
+`main.go`'s demo will usually print a clean `0/30`. The unsynchronized
+window is only nanoseconds wide. The test uses 200 simultaneous callers
+per round for this reason. The bug is the same. The test opens it
+statistically so it can fail without `-race`.
 
 ## The fix: a single CompareAndSwap, no retry loop needed
 
@@ -80,29 +79,25 @@ func (r *Responder) Timeout() bool {
 }
 ```
 
-`settled` becomes an `int32` used purely as a two-state flag: `0`
-(pending) and `1` (settled). `CompareAndSwapInt32(&r.settled, 0, 1)`
-atomically checks "is this still 0?" and, only if so, installs `1` —
-in one indivisible step, with no window between the read and the
-write for a second caller to slip through. Whichever of `Complete` or
-`Timeout` gets there first wins the swap and calls `notify`; the other
-sees `settled` already `1`, the swap fails, and it returns `false`
-immediately — no lock, no waiting on the winner, no retry loop,
-because the state only ever moves one way.
+`settled` becomes an `int32` used as a two-state flag. `0` means
+pending. `1` means settled. `CompareAndSwapInt32(&r.settled, 0, 1)`
+checks whether the value is still `0` and installs `1` only if it is.
+The check and write happen in one step. No second caller can slip
+through between them. The first of `Complete` or `Timeout` wins the
+swap and calls `notify`. The other sees `1`, fails the swap, and
+returns `false` at once. There is no lock, no wait for the winner, and
+no retry loop. The state only moves one way.
 
-Unlike the flash-sale-style claim this exercise used to be, there's no
-retry here: a CAS retry loop exists for when you need to recompute a
-*new value* from a value that might have changed underneath you (a
-decrement, a running max, a version bump). Here the desired new value
-is always the same constant, `1` — if the swap fails, that means
-someone else already won, and there is nothing left to retry for.
+Unlike the old flash-sale version, this has no retry. A CAS retry loop
+is for computing a new value from one that might change. Examples are a
+decrement, a running maximum, or a version bump. Here the new value is
+always `1`. A failed swap means another caller already won. There is
+nothing to retry.
 
-This is also why `sync.Once` would be the wrong tool despite doing the
-"runs exactly once" part correctly: `Once.Do`'s losing path blocks on
-an internal mutex until the winner's function returns, which is
-precisely backwards for a timeout path whose whole point is to bail
-out immediately rather than wait on the winner's `notify` call, however
-long that happens to take.
+`sync.Once` would be the wrong tool. It does run the winner once. But
+the losing `Once.Do` path waits on an internal mutex until the winner's
+function returns. A timeout path must return at once. Waiting on the
+winner's `notify` call is the opposite of that.
 
 ## Test your solution
 

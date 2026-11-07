@@ -46,7 +46,7 @@ const BUDGET = 4 * K.interval.value;
 const tests: Record<string, TestDef> = {
   closes: {
     name: "TestTeeClosesEachOutputAsSoonAsItIsFullyDelivered",
-    short: "closes fast",
+    short: "both close",
     judge: (run) => run.vars.fast === N && run.vars.slow === N && run.vars.fastClosed === 1 && run.vars.slowClosed === 1,
   },
 };
@@ -142,10 +142,10 @@ function today(): Model {
       out2: channel({ label: "out2", pos: [3, 2], cap: 0 }),
     },
     insight:
-      "The test reads out1. After out1 takes one value, tee is blocked trying to hand the same value to untouched out2, so it cannot read the next sensor value and out1 never closes.",
+      "The test reads out1 first. After one value, tee is stuck sending the same value to out2. out2 has no reader. So tee stops reading in, and out1 never closes.",
     stops: [
-      { when: { op: "select", g: "tee" }, say: "out1 receives a value, but tee still owes it to out2." },
-      { when: { op: "block", g: "tee" }, say: "out2 is never read. tee waits there and abandons the rest of the stream." },
+      { when: { op: "select", g: "tee" }, say: "out1 gets one value. tee still needs to send it to out2." },
+      { when: { op: "block", g: "tee" }, say: "No one reads out2. tee waits there and stops reading the sensor." },
     ],
     tests,
     clock: { unit: "ms", budget: { at: BUDGET, label: "receive budget" } },
@@ -218,10 +218,10 @@ function independent(fastIndex: number): Model {
       out1: channel({ label: "out1", pos: [3, 0], cap: N }),
       out2: channel({ label: "out2", pos: [3, 2], cap: N }),
     },
-    insight: `Each output has enough independent buffering for the bounded sensor stream. ${fast} receives and closes without ${slow} being read; only then does the test drain ${slow}.`,
+    insight: `Each output has its own buffer. ${fast} gets every value and closes before anyone reads ${slow}. The test then drains ${slow}.`,
     stops: [
-      { when: { op: "close", node: fast }, say: `${fast} has every value and closes without waiting for ${slow}.` },
-      { when: { op: "recv", node: slow }, say: `Only after ${fast} is closed and verified does the test start reading ${slow}.` },
+      { when: { op: "close", node: fast }, say: `${fast} has every value. It closes without waiting for ${slow}.` },
+      { when: { op: "recv", node: slow }, say: `The test checks ${fast} first. Only then does it read ${slow}.` },
     ],
     tests,
     clock: { unit: "ms", budget: { at: BUDGET, label: "receive budget" } },
@@ -293,11 +293,11 @@ function queueScene(): Model {
       out: channel({ label: "out", pos: [3, 1], cap: 0 }),
     },
     insight:
-      "pusher appends under qmu and signals ready. forward waits on ready, then shifts the FIFO head before unlocking. After the last push, Broadcast wakes it so an empty closed queue makes next return false and out close.",
+      "pusher adds values under qmu and signals ready. forward waits on ready and removes the FIFO head before unlocking. After the last push, Broadcast wakes it. The empty closed queue makes next return false and out close.",
     stops: [
-      { when: { op: "condWait" }, say: "forward releases qmu and waits until pusher appends a value." },
-      { when: { op: "condSignal" }, say: "After appending, pusher signals one waiter. The woken forwarder must reacquire qmu before next returns." },
-      { when: { op: "condBroadcast" }, say: "Closing the queue broadcasts to every waiter so the forwarder can observe the closed state." },
+      { when: { op: "condWait" }, say: "forward releases qmu and waits for a value." },
+      { when: { op: "condSignal" }, say: "pusher signals one waiter after adding a value. The waiter must get qmu back before next returns." },
+      { when: { op: "condBroadcast" }, say: "Closing the queue wakes every waiter. forward can then see that the queue is closed." },
     ],
     clock: { unit: "ms" },
     expect: { outcome: "ok", t: N * K.interval.value },
@@ -361,14 +361,14 @@ export default defineViz({
       id: "today",
       chip: "Today",
       tier: "today",
-      summary: `out1 receives a value, but tee is parked on untouched out2 and cannot read the next sensor value; the ${BUDGET} ms receive budget expires.`,
+      summary: `out1 gets a value. tee then waits to send it to untouched out2. The ${BUDGET} ms receive budget expires.`,
       model: today(),
     },
     {
       id: "goal",
       chip: "Goal",
       tier: "goal",
-      summary: "Each output has independent delivery and completion tracking, so the fast output closes before the slow output is read.",
+      summary: "Each output delivers and closes on its own. The fast output can close before anyone reads the slow output.",
       knobs: [{ key: "fastIndex", label: "fast output", options: [0, 1], value: 0 }],
       model: (P) => independent(Number(P.fastIndex)),
     },
@@ -376,7 +376,7 @@ export default defineViz({
       id: "queue",
       chip: "Queue",
       tier: "inside",
-      summary: "The worked solution stores each output's values in a FIFO guarded by sync.Cond and removes the head with next.",
+      summary: "The solution stores each output in a FIFO guarded by sync.Cond. next removes the head.",
       model: queueScene(),
     },
   ],

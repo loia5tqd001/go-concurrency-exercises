@@ -144,7 +144,7 @@ function useMediaQuery(query: string): boolean {
 function ToolchainStatus({ state }: { state: ToolchainState }) {
   if (state.phase === "ready") {
     return (
-      <span className="tc-status ready" title={`The Go ${site.goVersion} toolchain is loaded`}>
+      <span className="tc-status ready" title={`Go ${site.goVersion} is ready`}>
         <span className="dot" /> Go {site.goVersion}
       </span>
     );
@@ -159,7 +159,7 @@ function ToolchainStatus({ state }: { state: ToolchainState }) {
   const pct = state.total ? Math.floor((state.loaded / state.total) * 100) : 0;
   const mb = (n: number) => (n / (1 << 20)).toFixed(1);
   return (
-    <span className="tc-status loading" title={`Downloading the Go toolchain: ${mb(state.loaded)} of ${mb(state.total)} MB. Later visits load it from the cache.`}>
+    <span className="tc-status loading" title={`Loading Go: ${mb(state.loaded)} of ${mb(state.total)} MB. Later visits use the cache.`}>
       <span className="bar" role="progressbar" aria-valuemin={0} aria-valuemax={100} aria-valuenow={pct} aria-label="Go toolchain download">
         <span style={{ width: `${pct}%` }} />
       </span>

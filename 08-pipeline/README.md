@@ -1,17 +1,11 @@
 # Pipeline: Multi-Stage Number Processing
 
-Given is a numeric processing pipeline with three conceptual stages:
-`generator`, which produces a sequence of numbers, `square`, which
-squares each number, and `keepEven`, which keeps only the even
-results. These are supposed to be independent pipeline stages, each
-running concurrently and connected by channels, but the naive
-`Pipeline` materializes the entire input as a slice and runs each
-stage to completion, one at a time, before starting the next. Nothing
-overlaps - `square` doesn't start on item 1 until `generator` has
-produced every item, and `keepEven` doesn't start until `square` has
-finished squaring every item - and there is no way to stop early: even
-a caller that only wants the first result still pays for every item to
-be pushed through every stage.
+The pipeline has three stages. `generator` makes numbers. `square`
+squares them. `keepEven` keeps only even results.
+
+Right now each stage finishes before the next one starts. The stages
+do not overlap. `done` is ignored. The caller must wait for every item
+even if it only needs one.
 
 ```
 TODAY - batch per stage: every stage finishes before the next starts
@@ -33,16 +27,12 @@ GOAL - 3 goroutines, unbuffered channels, one item at a time
   closing done unblocks each stage on its next send or receive
 ```
 
-Your task is to turn `generator`, `square`, and `keepEven` into true
-pipeline stages that operate on channels instead of slices, each
-running in its own goroutine, so that a downstream stage can start
-working on an item while an upstream stage is still producing the
-next one. Every stage must also respect the `done` channel: once
-`done` is closed, every stage still running must stop promptly instead
-of blocking forever on a send nobody will ever receive, and every
-stage must close its output channel once its input is exhausted so
-that downstream stages (and the caller) know there's nothing more
-coming. The new stage signatures must be:
+Make `generator`, `square`, and `keepEven` work on channels. Run each
+stage in its own goroutine. A downstream stage should start before the
+upstream stage ends.
+
+Every stage must watch `done`. When `done` closes, stop it. Close each
+output when its input ends. Use these signatures:
 
 ```go
 func generator(done <-chan struct{}, nums ...int) <-chan int
@@ -50,10 +40,8 @@ func square(done <-chan struct{}, in <-chan int) <-chan int
 func keepEven(done <-chan struct{}, in <-chan int) <-chan int
 ```
 
-`Pipeline` composes the three stages (`generator` -> `square` ->
-`keepEven`) and drains the final stage's channel into a slice to
-return. Its own signature must stay the same, since it's the one thing
-callers/tests depend on:
+`Pipeline` connects the stages and collects the results. Keep its
+signature:
 
 ```go
 func Pipeline(done <-chan struct{}, nums ...int) []int
@@ -61,7 +49,7 @@ func Pipeline(done <-chan struct{}, nums ...int) []int
 
 ## Test your solution
 
-To complete this exercise, you must pass the tests:
+Pass these tests:
 
 ```
 go test

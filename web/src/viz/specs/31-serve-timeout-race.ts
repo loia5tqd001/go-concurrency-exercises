@@ -119,7 +119,7 @@ export default defineViz({
       id: "today",
       chip: "Today",
       tier: "today",
-      summary: `Serve calls the handler inline and never reads ctx. The deadline passes at ${K.deadlineMs.value} ms, but Serve returns at ${K.handlerMs.value} ms with no error.`,
+      summary: `Serve calls the handler inline and never reads ctx. The deadline passes at ${K.deadlineMs.value} ms. Serve returns at ${K.handlerMs.value} ms with no error.`,
       model: {
         nodes: {
           ctx: context({ label: "ctx", pos: [0, 0], deadline: K.deadlineMs.value }),
@@ -135,15 +135,15 @@ export default defineViz({
             },
           }),
         },
-        insight: `Serve takes ctx but never reads it, so the caller waits inside handler() for the full ${K.handlerMs.value} ms. The ${K.deadlineMs.value} ms deadline passes with nobody watching, and Serve returns no error, long past the ${K.budgetMs.value} ms budget.`,
+        insight: `Serve receives ctx but never reads it. The caller waits inside handler() for ${K.handlerMs.value} ms. The ${K.deadlineMs.value} ms deadline passes with no watcher. Serve returns no error, long after the ${K.budgetMs.value} ms budget.`,
         stops: [
           {
             when: { op: "fire", node: "ctx" },
-            say: `The ${K.deadlineMs.value} ms deadline passes, but Serve never looks at ctx. The caller is still inside handler().`,
+            say: `The ${K.deadlineMs.value} ms deadline passes. Serve never checks ctx. The caller is still inside handler().`,
           },
           {
             when: { op: "fail" },
-            say: `handler() returns at ${K.handlerMs.value} ms with no error, far past the ${K.budgetMs.value} ms budget. The test fails.`,
+            say: `handler() returns at ${K.handlerMs.value} ms with no error. This is far past the ${K.budgetMs.value} ms budget. The test fails.`,
           },
         ],
         tests,
@@ -162,7 +162,7 @@ export default defineViz({
       id: "goal",
       chip: "Goal",
       tier: "goal",
-      summary: `Serve returns at the ${K.deadlineMs.value} ms deadline. The handler runs on its own and finishes at ${K.handlerMs.value} ms, with nobody listening.`,
+      summary: `Serve returns at the ${K.deadlineMs.value} ms deadline. The handler runs alone and finishes at ${K.handlerMs.value} ms. No one is listening.`,
       model: {
         nodes: {
           ctx: context({ label: "ctx", pos: [0, 0], deadline: K.deadlineMs.value }),
@@ -188,15 +188,15 @@ export default defineViz({
             },
           }),
         },
-        insight: `The handler runs on its own goroutine, so the caller is free to watch ctx. At ${K.deadlineMs.value} ms the deadline passes and Serve returns ctx.Err() in time. The handler cannot be stopped, so it runs on to ${K.handlerMs.value} ms with nobody listening.`,
+        insight: `The handler runs on its own goroutine. The caller can watch ctx. At ${K.deadlineMs.value} ms the deadline passes. Serve returns ctx.Err() in time. The handler cannot be stopped. It runs to ${K.handlerMs.value} ms with no listener.`,
         stops: [
           {
             when: { op: "fire", node: "ctx" },
-            say: `At ${K.deadlineMs.value} ms the deadline passes. Serve stops waiting and returns ctx.Err(); the handler keeps running.`,
+            say: `At ${K.deadlineMs.value} ms the deadline passes. Serve stops waiting and returns ctx.Err(). The handler keeps running.`,
           },
           {
             when: { op: "return", g: "handler" },
-            say: `At ${K.handlerMs.value} ms the handler finishes on its own, with nobody left listening. The test waits for this.`,
+            say: `At ${K.handlerMs.value} ms the handler finishes alone. The test waits for this.`,
           },
         ],
         tests,
@@ -208,14 +208,14 @@ export default defineViz({
       id: "handler",
       chip: "Handler",
       tier: "inside",
-      summary: `With a ${K.ampleDeadlineS.value} s deadline, the handler's result lands at ${K.ampleHandlerMs.value} ms, first. Serve returns the handler's own value and error.`,
+      summary: `With a ${K.ampleDeadlineS.value} s deadline, the handler result arrives first at ${K.ampleHandlerMs.value} ms. Serve returns the handler's value and error.`,
       model: {
         ...inside({ cap: K.resultCap.value, handlerMs: K.ampleHandlerMs.value, deadlineMs: K.ampleDeadlineS.value * 1000, ample: true }),
-        insight: `The ${K.ampleHandlerMs.value} ms handler lands long before the ${K.ampleDeadlineS.value} s deadline. The select takes resCh, and Serve returns the handler's value and error. The test's deferred cancel then ends ctx.`,
+        insight: `The ${K.ampleHandlerMs.value} ms handler finishes well before the ${K.ampleDeadlineS.value} s deadline. The select takes resCh. Serve returns the value and error. After the handler returns, the test calls cancel. That ends ctx.`,
         stops: [
           {
             when: { op: "send", g: "handler" },
-            say: `At ${K.ampleHandlerMs.value} ms the handler's result reaches the select first, so Serve returns it.`,
+            say: `At ${K.ampleHandlerMs.value} ms the handler's result reaches the select first. Serve returns it.`,
           },
         ],
         tests: ampleTests,
@@ -228,10 +228,10 @@ export default defineViz({
       id: "deadline",
       chip: "Deadline",
       tier: "inside",
-      summary: `The deadline wins at ${K.deadlineMs.value} ms. At ${K.handlerMs.value} ms the handler's late send fills resCh's one slot, so the handler returns.`,
+      summary: `The deadline wins at ${K.deadlineMs.value} ms. At ${K.handlerMs.value} ms the late send fills resCh's one slot. The handler returns.`,
       model: {
         ...inside({ cap: K.resultCap.value, handlerMs: K.handlerMs.value, deadlineMs: K.deadlineMs.value, ample: false }),
-        insight: `The select races resCh against ctx.Done(). The deadline wins, and Serve returns at ${K.deadlineMs.value} ms. Nobody will read resCh again, but its one slot takes the late send, so the handler goroutine ends.`,
+        insight: `The select races resCh against ctx.Done(). The deadline wins at ${K.deadlineMs.value} ms. Serve returns. No one reads resCh again. Its one slot takes the late send, so the handler ends.`,
         stops: [
           {
             when: { op: "fire", node: "ctx" },
@@ -239,7 +239,7 @@ export default defineViz({
           },
           {
             when: { op: "send", g: "handler" },
-            say: `At ${K.handlerMs.value} ms the handler's send fills the free slot in resCh. Nobody reads it, but the handler returns.`,
+            say: `At ${K.handlerMs.value} ms the handler's send fills the free resCh slot. No one reads it, but the handler returns.`,
           },
         ],
         tests,
@@ -252,19 +252,19 @@ export default defineViz({
       id: "leak",
       chip: "Leak",
       tier: "inside",
-      summary: `The same race with an unbuffered resCh. Serve returns at ${K.deadlineMs.value} ms; at ${K.handlerMs.value} ms the handler's send has no receiver and blocks forever.`,
+      summary: `This is the same race with an unbuffered resCh. Serve returns at ${K.deadlineMs.value} ms. At ${K.handlerMs.value} ms the handler's send has no receiver and blocks.`,
       model: {
         ...inside({ cap: 0, handlerMs: K.handlerMs.value, deadlineMs: K.deadlineMs.value, ample: false }),
         insight:
-          "Without the buffer, the losing send needs a receiver, and Serve has already gone. The handler blocks on resCh forever, and synctest fails the test because a goroutine is still blocked when the test ends.",
+          "Without the buffer, the losing send needs a receiver. Serve has already gone. The handler blocks on resCh forever. synctest fails because a goroutine is still blocked.",
         stops: [
           {
             when: { op: "fire", node: "ctx" },
-            say: `At ${K.deadlineMs.value} ms ctx.Done() closes, and Serve returns. Nobody will receive from resCh again.`,
+            say: `At ${K.deadlineMs.value} ms ctx.Done() closes, and Serve returns. No one will read resCh again.`,
           },
           {
             when: { op: "block", g: "handler" },
-            say: `At ${K.handlerMs.value} ms the handler sends on resCh, which has no buffer and no receiver. It blocks forever.`,
+            say: `At ${K.handlerMs.value} ms the handler sends on resCh. It has no buffer and no receiver, so it blocks forever.`,
           },
         ],
         tests,

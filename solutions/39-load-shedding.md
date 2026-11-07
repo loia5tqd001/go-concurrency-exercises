@@ -1,10 +1,10 @@
 # Load Shedding: Reject Fast Instead of Blocking the Hot Path — Suggested Solution
 
-> **Spoiler warning.** Try solving it yourself first — come back if you're stuck.
+> **Spoiler warning.** Try the exercise first. Come back if you are stuck.
 
 ## The problem
 
-`Submit` is a plain blocking send:
+`Submit` uses a plain blocking send:
 
 ```go
 func (q *Queue) Submit(job Job) error {
@@ -13,8 +13,8 @@ func (q *Queue) Submit(job Job) error {
 }
 ```
 
-`jobs` is a real bounded channel (capacity `capacity`). Once it and
-every worker are all busy, this send has nowhere to go:
+`jobs` is a real bounded channel with capacity `capacity`. Once the
+channel and every worker are busy, the send has nowhere to go.
 
 ```
 jobs: FULL, every worker: busy
@@ -32,8 +32,8 @@ next Submit(job) ──▶ q.jobs <- job ──▶ blocks (not a deadlock - work
 --- FAIL: TestSubmitFailsFastWhenQueueIsFull (0.20s)
 ```
 
-The other two tests pass against the naive scaffold — this is the only
-thing broken, and check_test.go catches exactly that.
+The other two tests pass with the naive scaffold. This is the only
+broken part. `check_test.go` catches it directly.
 
 ## The fix: `select` + `default`
 
@@ -48,40 +48,33 @@ func (q *Queue) Submit(job Job) error {
 }
 ```
 
-`select` + `default` tries the send once, immediately; if `jobs` has no
-room *right now*, `default` fires instead of waiting. That's the whole
-fix — the rest of `Queue` (spawn `workers` goroutines, each pulling off
-one shared bounded channel) is the same pattern [11](../11-worker-pool)
-already teaches, reused here rather than re-derived, since this
-exercise's lesson is specifically about what `Submit` does when the
-queue's full, not about how to build a worker pool.
+`select` + `default` tries the send once, right away. If `jobs` has no
+room *right now*, `default` runs instead of waiting. That is the whole
+fix. The rest of `Queue` is the same worker-pool pattern as
+[11](../11-worker-pool). It starts `workers` goroutines, and each reads
+from one shared bounded channel. The exercise is about what `Submit`
+does when the queue is full. It does not ask you to rebuild the pool.
 
-**Verified**: `gofmt`/`vet` clean, `go test -race -count=10` passes
-10/10 with no flakes.
+**Verified**: `gofmt` and `vet` are clean. `go test -race -count=10`
+passed 10 of 10 runs without flakes.
 
 ## Why blocking is wrong here specifically
 
-[18](../18-bounded-pipeline-backpressure) uses the exact same shape — a
-bounded channel feeding a fixed pool of consumers — and blocks the
-producer on purpose. The difference is who's on the other end of
-`Submit`. In 18, the producer's whole job *is* to feed the pipeline, so
-slowing it down when the pipeline is full is the correct, intended
-backpressure. Here, `Submit` is called from the middle of unrelated
-work (the thing actually being measured) — blocking it doesn't relieve
-any pressure, it just makes the real work slower for a reason that has
-nothing to do with the real work. The fix isn't "the mechanism 18 uses,
-done better" - it's a fundamentally different answer to "what should
-happen when a bounded queue is full," each correct for its own kind of
-caller.
+[18](../18-bounded-pipeline-backpressure) uses the same shape. A
+bounded channel feeds a fixed pool. It blocks the producer on purpose.
+The difference is who calls `Submit`. In 18, the producer's job is to
+feed the pipeline. Slowing it when the pipeline is full is correct
+backpressure. Here, unrelated work calls `Submit`. Blocking it does not
+reduce pressure on that work. It only makes the work slower for an
+unrelated reason. This is not a better version of 18's mechanism. It is
+a different answer to a different saturation case.
 
 ## Alternative: an atomic counter as the admission gate
 
-The channel's own buffer isn't the only way to answer "is there room
-right now?" A second, genuinely different design tracks admitted-but-
-not-yet-finished jobs with an `atomic.Int64` and a
-`CompareAndSwap`-based admission check — the same idiom
-[38](../38-settle-once) teaches for check-then-act races on a
-plain counter:
+The channel buffer is not the only way to check for room. A second
+design tracks admitted jobs that are not finished yet. It uses an
+`atomic.Int64` and a `CompareAndSwap` admission check. This is the same
+check-then-act idea that [38](../38-settle-once) teaches.
 
 ```go {10,13,24}
 type Queue struct {
@@ -112,35 +105,32 @@ func (q *Queue) worker() {
 }
 ```
 
-This is a real tradeoff, not a rename of the same idea:
+This is a real tradeoff, not a rename of the same idea.
 
-- The channel-buffer version's capacity *is* the channel's buffer size
-  - simple, and the buffer itself provides the queueing, with nothing
-    else to keep in sync.
-- The counter version decouples "how many are logically admitted" from
-  "how big is the channel's buffer" — useful if admission needs to
-  span more than one channel or resource, or if you want to reject
-  *before* even constructing the (possibly expensive) `Job` value being
-  enqueued, rather than after. The cost is a second piece of state
-  (`inFlight`) that must be kept consistent with reality — every path
-  that admits a job must eventually decrement it exactly once, which
-  the channel-buffer version gets for free from the channel itself.
+- **Channel capacity:** The channel-buffer version uses the buffer size
+  as capacity. It is simple. The buffer does the queueing. No other
+  state needs to stay in sync.
+- **Separate admission:** The counter version separates logical
+  admission from channel buffer size. This helps when admission covers
+  more than one channel or resource. It also lets you reject before
+  building a possibly expensive `Job` value. The cost is a second
+  piece of state, `inFlight`. Every admission path must eventually
+  decrement it exactly once. The channel version gets this from the
+  channel.
 
-For this exercise's shape — one queue, one resource, nothing to
-construct before enqueuing — `select`+`default` is the simpler, more
-idiomatic answer, which is why it's the one `main.go` is scaffolded
-around. The counter version is worth knowing as the pattern to reach
-for once admission control needs to answer to more than a single
-channel's buffer.
+For this exercise, use one queue and one resource. Nothing expensive is
+built before enqueue. `select`+`default` is simpler and more idiomatic.
+That is why `main.go` is scaffolded around it. The counter version is
+useful when admission control must cover more than one channel's
+buffer.
 
 ## Key takeaways
 
-- `select`+`default` answers "is anyone ready for this send *right
-  now*?" — the standard idiom for "try, don't wait."
-- A bounded queue plus fail-fast rejection isn't a strict improvement
-  over blocking (18's approach) — it trades "the caller might wait"
-  for "the caller might have to handle failure," which only wins when
-  the caller has somewhere better to go with that failure.
-- The same "bounded channel feeding a fixed worker pool" shape can
-  correctly demand opposite behavior on saturation, depending entirely
-  on whether the caller is meant to feel the slowdown.
+- `select`+`default` asks whether anyone is ready for this send right
+  now. It is the standard "try, do not wait" idiom.
+- A bounded queue with fail-fast rejection is not always better than
+  blocking, as in 18. It trades a possible wait for a possible failure.
+  It wins only when the caller can use that failure well.
+- One bounded channel feeding a fixed worker pool can need opposite
+  behavior when full. It depends on whether the caller should feel the
+  slowdown.

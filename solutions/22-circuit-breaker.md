@@ -1,10 +1,10 @@
-# Protect a Flaky Payment Gateway with a Circuit Breaker — Suggested Solutions
+# Protect a flaky payment gateway with a circuit breaker
 
-> **Spoiler warning.** This file contains full worked solutions for `22-circuit-breaker/`. Try solving it yourself first — come back here if you're stuck or want to compare approaches.
+> **Spoiler warning.** This file has full solutions for `22-circuit-breaker/`. Try the exercise first. Come back if you get stuck.
 
 ## The problem
 
-The starting point is a `CircuitBreaker` that wraps a flaky `PaymentGateway` (see `mockgateway.go`) and does no protection at all:
+The starter `CircuitBreaker` wraps a flaky `PaymentGateway`. See `mockgateway.go`. It does no protection:
 
 ```go
 type CircuitBreaker struct {
@@ -16,23 +16,28 @@ func (cb *CircuitBreaker) Execute(amountCents int) error {
 }
 ```
 
-`CircuitBreaker` must implement the classic three-state pattern, safe for concurrent use:
+`CircuitBreaker` must use the three-state pattern. It must be safe for concurrent calls:
 
-- **Closed** (initial state): calls pass through to `gateway.Charge`. Each failure increments a consecutive-failure counter; a success resets it to 0. After **5 consecutive failures**, the breaker trips to **Open**.
-- **Open**: calls fail immediately with `ErrCircuitOpen`, without touching the gateway at all, for a cooldown of **2 seconds**. After the cooldown elapses, the breaker moves to **Half-Open**.
-- **Half-Open**: exactly one trial call is let through. Success resets fully to **Closed** (failure counter back to 0). Failure sends it back to **Open** and restarts the cooldown.
+- Closed is the first state. Calls go to `gateway.Charge`. A failure adds to a consecutive-failure count. A success resets the count to 0.
+- After 5 consecutive failures, the breaker moves to Open.
+- Open rejects calls at once with `ErrCircuitOpen`. It does not touch the gateway. This lasts for a 2-second cooldown.
+- After the cooldown, the breaker moves to Half-Open. The code names these states `stateOpen` and `stateHalfOpen`.
+- Half-Open lets in one trial call. Success returns to Closed and resets the failure count to 0.
+- A failed trial returns to Open and starts a new cooldown.
 
-The `CircuitBreaker` type and the `Execute(amountCents int) error` signature must stay identical, and a sentinel `var ErrCircuitOpen = errors.New(...)` must exist for callers to check against with `errors.Is`.
+Keep the `CircuitBreaker` type and `Execute(amountCents int) error` signature. Do not change the method.
+
+Also provide `var ErrCircuitOpen = errors.New(...)`. Callers must be able to test it with `errors.Is`.
 
 ## Why the naive version is wrong
 
-`Execute` is a pure pass-through: it never looks at how many times the gateway has recently failed, and never remembers that it's supposed to be protecting anything. Concretely:
+`Execute` only passes the call through. It never counts recent failures. It remembers no protection state.
 
-- There is no failure counter, no state, and no cooldown deadline anywhere in `CircuitBreaker` — just a `gateway` field.
-- Every single call reaches `gateway.Charge`, whether the gateway is healthy or has been failing for the last hour. A struggling downstream service never gets any relief; it keeps getting hammered at exactly the moment it can least handle it.
-- `ErrCircuitOpen` is declared but never returned by anything.
+- `CircuitBreaker` has only a `gateway` field. It has no state, failure count, or cooldown time.
+- Every call reaches `gateway.Charge`, even after an hour of failures. A struggling service gets no rest.
+- The code declares `ErrCircuitOpen`, but nothing returns it.
 
-Verified: running the current `check_test.go` against this naive `main.go` fails three of the five tests:
+I ran `check_test.go` against the naive `main.go`. Three of five tests fail:
 
 ```
 === RUN   TestCircuitOpensAfterThreshold
@@ -51,7 +56,15 @@ Verified: running the current `check_test.go` against this naive `main.go` fails
 FAIL
 ```
 
-`TestCircuitClosedDoesNotSerializeOnGatewayCall` and `TestCircuitConcurrentSafety` happen to pass even against the naive version: the former because a plain pass-through never holds any lock at all (so it can't serialize anyone), and the latter because it only asserts a loose upper bound on gateway call count, which a plain pass-through trivially satisfies. The whole suite fails fast, in well under 3 seconds — `check_test.go` guards every blocking wait on `Execute` (`waitWithTimeout`, `executeWithTimeout`) so a self-deadlocking attempt doesn't hang the run instead of failing it.
+`TestCircuitClosedDoesNotSerializeOnGatewayCall` and `TestCircuitConcurrentSafety` pass by accident.
+
+The first passes because a pass-through holds no lock. It cannot serialize calls.
+
+The second only checks a loose upper bound on gateway calls. A pass-through always meets that bound.
+
+The whole suite fails in under 3 seconds. `check_test.go` puts a timeout around every blocking `Execute` wait.
+
+It uses `waitWithTimeout` and `executeWithTimeout`. A self-deadlocking version fails instead of hanging the run.
 
 ## Approach 1: mutex-protected state machine
 
@@ -197,16 +210,30 @@ func main() {
 
 Design notes:
 
-- **One mutex guards the whole state machine** — `state`, `consecutiveFails`, `openedAt`, and `halfOpenInFlight` are only ever read or written while `cb.mu` is held. That makes every transition (checking the counter *and* flipping the state *and* stamping the deadline) a single indivisible step, which is exactly what a compound state machine like this needs.
-- **`allow()` does double duty**: besides gatekeeping, it's also where the Open → Half-Open transition and the half-open trial-slot reservation happen, both under the same lock acquisition — there's no window where two goroutines could both observe "cooldown elapsed" and both think they got the one trial slot.
-- **The gateway call itself happens outside the lock.** `Execute` calls `cb.gateway.Charge` between `allow()` and `afterCall()`, neither of which holds `cb.mu` while the (potentially slow) network call is in flight. This is important: holding the breaker's own lock across the call to the wrapped service would serialize *all* callers on the breaker itself, defeating half of the point of a circuit breaker (letting healthy-state traffic run concurrently).
-- **`afterCall`'s `default` branch relies on a real invariant, not just tidiness**: a call can only reach `afterCall` having been let through by `allow()`, and `allow()` only returns `true` for `stateClosed` or `stateHalfOpen` — never `stateOpen`. So the `switch` only needs to distinguish "was this the half-open trial" from "was this an ordinary closed-state call"; there's no third case to handle.
+- One mutex protects the whole state machine. `state`, `consecutiveFails`, `openedAt`, and `halfOpenInFlight` change only under `cb.mu`.
+- This makes each transition one step. The code checks the counter, changes state, and records the deadline together.
+- `allow()` acts as a gate and as the transition point. It changes Open to Half-Open and claims the trial slot under one lock.
+- Two goroutines cannot both see the cooldown end and both take the trial.
+- `Execute` calls `cb.gateway.Charge` outside the lock. It runs between `allow()` and `afterCall()`.
+- Holding `cb.mu` during a slow network call would serialize all callers. Healthy traffic must still run at the same time.
+- The `default` branch in `afterCall` relies on a rule. `allow()` returns `true` only for Closed or Half-Open calls. It never lets through Open.
+- The `switch` separates a half-open trial from a normal closed call. No third case can reach it.
 
-**Verified**: copied the exercise into a throwaway scratch directory, confirmed the naive `main.go` fails the three tests shown above, then dropped in this solution. `go test -race -count=5 ./...` passes with no flakes — including `TestCircuitHalfOpenRecovery`, which runs inside `synctest.Test` and sleeps past the 2-second cooldown, `TestCircuitHalfOpenTrialFailsFastForOthers`, which relies on real wall-clock timing to catch a concurrent trial slot leak, and `TestCircuitConcurrentSafety`, which hammers `Execute` from 50 goroutines at once under `-race`.
+I tested this in a scratch copy. The naive `main.go` fails the three tests above. The solution passes `go test -race -count=5 ./...` with no flakes.
+
+This includes `TestCircuitHalfOpenRecovery`, which uses `synctest.Test` and sleeps past the 2-second cooldown.
+
+It also includes `TestCircuitHalfOpenTrialFailsFastForOthers`, which uses real time to catch a trial-slot leak.
+
+`TestCircuitConcurrentSafety` calls `Execute` from 50 goroutines under `-race`.
 
 ## Approach 2: lock-free state machine with `sync/atomic` (alternative)
 
-A genuinely different primitive choice: represent `state` as an `int32`, the failure counter as an `int32`, the cooldown deadline as an `int64` (UnixNano), and the half-open trial guard as an `int32` flag — all independent atomics, no `sync.Mutex` anywhere.
+This uses different primitives. `state` and the failure counter are `int32`.
+
+The cooldown deadline is an `int64` in Unix nanoseconds. The half-open trial guard is an `int32` flag.
+
+Each field is an independent atomic. No `sync.Mutex` is used.
 
 ```go {71,74,102,103,104,118,119}
 package main
@@ -347,18 +374,40 @@ func main() {
 }
 ```
 
-Design notes and honest tradeoffs versus Approach 1:
+Design notes and tradeoffs:
 
-- **This is meaningfully trickier to get right than the mutex version, and that's the real point of comparing them.** With a mutex, "check the cooldown, flip the state, stamp the deadline" is one critical section — there's no way for another goroutine to observe a half-finished transition. With independent atomics, every one of those compound transitions has to be manually decomposed into an ordering that never lets another goroutine see, e.g., the new `state` without the `openedAtNano` that's supposed to go with it, or a released trial-slot flag before the state it was guarding has actually settled. Each of the three code comments in `allow`/`afterCall` above marks a spot where getting the write order backwards silently reintroduces a race — a second concurrent "trial", or a spuriously-early Half-Open transition — that plain `go test -race` is not guaranteed to catch, since it only flags actual concurrent read/write races, not logic bugs in what order two atomics get published.
-- **Retrying via a spin loop (`for { ... continue }`) replaces blocking.** `allow()` never calls anything that sleeps or parks; on the rare contended transition boundary (the instant the cooldown expires with more than one caller present) a goroutine just re-reads and retries. That window is tiny in practice, but it is genuinely a busy-wait, unlike the mutex version where a blocked goroutine yields the CPU via `sync.Mutex.Lock`.
-- **No fundamental correctness gap remains once the ordering rules above are followed** — every compound transition here was deliberately built store-before-publish (deadline before state, flag-claim before state-flip, state-settle before flag-release) specifically to close the gaps a naive atomic port would have. But that's exactly the caveat: it took three separate, easy-to-miss ordering decisions to get there, versus zero for the mutex, which gets all of this for free from a single `Lock()`/`Unlock()` pair.
-- **When it's worth it:** atomics avoid lock contention and OS-level blocking/wakeup entirely, which can matter under very high call rates. For a breaker like this — where `allow()`/`afterCall()` are already cheap, uncontended in the common (`stateClosed`) case, and the actual expensive work (`gateway.Charge`) happens outside any lock either way — the mutex version's simplicity is very likely the better default; reach for the atomic version only if profiling actually shows lock contention on the breaker itself.
+- This version is harder to get right. That is the main lesson.
+- A mutex makes "check cooldown, change state, set deadline" one critical section. No goroutine sees half a transition.
+- Independent atomics need a manual write order. A goroutine must not see new `state` before `openedAtNano`.
+- It must not see a free trial flag before the guarded state settles.
+- The three comments in `allow` and `afterCall` mark these ordering points.
+- A reversed write order can create a second trial or an early Half-Open move.
+- `go test -race` may miss these logic bugs. It finds conflicting memory access, not bad ordering between atomics.
+- The `for { ... continue }` loop retries instead of blocking. `allow()` never sleeps or parks.
+- When the cooldown ends and callers compete, a goroutine reads again and retries.
+- That window is small, but this is a busy-wait. A waiter in `sync.Mutex.Lock` yields the CPU.
+- All compound transitions use store-before-publish order.
+- Set the deadline before state, claim the flag before changing state, and settle state before releasing the flag.
+- These rules close the gaps a simple atomic port would have.
+- They need three separate, easy-to-miss decisions. A mutex needs none of them.
+- Atomics avoid lock contention and OS wakeups. This can help at very high call rates.
+- Here, `allow()` and `afterCall()` are cheap. The common `stateClosed` path has no contention.
+- `gateway.Charge` runs outside either lock. The mutex version is usually the better default.
+- Use atomics only when profiling shows lock contention on the breaker.
 
-**Verified**: same scratch-directory protocol as Approach 1 — dropped this version into the same throwaway copy in place of the mutex version, confirmed `go build ./...` is clean, and ran `go test -race -count=5 ./...` with no flakes, covering the same tests (including the `synctest`-driven half-open recovery test, the wall-clock-timed trial-exclusivity test, and the 50-goroutine concurrent-safety test).
+I tested this in the same scratch copy. I replaced the mutex version with this code. `go build ./...` is clean.
+
+`go test -race -count=5 ./...` passed with no flakes. It covered the same tests, including the `synctest` recovery test, the real-time trial test, and the 50-goroutine safety test.
 
 ## Key takeaways
 
-- A circuit breaker's state (current phase, failure counter, cooldown deadline, and the half-open trial guard) is a single **compound** piece of state — every transition needs to change more than one of these fields together, consistently. A `sync.Mutex` guarding all of them gives you that atomicity for free, in one critical section per call.
-- Keep the (potentially slow) call to the wrapped service **outside** the lock. The breaker's own lock should only ever be held for the cheap bookkeeping (`allow`/`afterCall`), never for however long `gateway.Charge` takes — otherwise the breaker itself becomes the new global bottleneck it was meant to prevent.
-- `sync/atomic` can replace a mutex for this kind of state machine, but only if you're deliberate about *publish order* for every compound transition — deadline before state, flag-claim before state-flip, state-settle before flag-release. Getting any one of those backwards reopens exactly the kind of race a mutex closes automatically, and `-race` will not point you at the bug because it's a logic-ordering issue, not a raw unsynchronized-access issue.
-- When in doubt for a small, infrequently-contended state machine like this one, prefer the mutex: it is easier to read, easier to review, and easier to prove correct than an equivalent hand-rolled atomic version — reach for atomics only when there's a measured reason to.
+- A breaker's state is one compound value. It includes phase, failure count, cooldown, and trial guard.
+- Every transition changes several fields together. A mutex gives that atomicity for free.
+- Keep the slow wrapped-service call outside the lock. Hold the breaker lock only for `allow` and `afterCall`.
+- Holding it during `gateway.Charge` makes the breaker the new bottleneck.
+- `sync/atomic` can replace the mutex only with careful publish order.
+- Set deadline before state, claim the flag before state change, and settle state before flag release.
+- One reversed step opens the race a mutex closes.
+- `-race` will not find this bug because the problem is operation order, not raw unsynchronized access.
+- For a small, low-contention state machine, prefer the mutex. A `Lock()` and `Unlock()` pair is easier to read, review, and prove.
+- Use atomics only when measurements show a reason.

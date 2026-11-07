@@ -49,17 +49,17 @@ const passed = (run: RunSummary, condition: boolean): boolean => run.outcome ===
 const tests: Record<string, TestDef> = {
   late: {
     name: "TestSubmitAfterCloseIsRejectedNotPanicked",
-    short: "late submit",
+    short: "late Submit",
     judge: (run) => passed(run, (run.vars.rejected ?? 0) === POSTCLOSE && (run.vars.ran ?? 0) === PRECLOSE),
   },
   drain: {
     name: "TestSubmitRunsAllJobsSequentially",
-    short: "accepted ran",
+    short: "jobs finish",
     judge: (run) => passed(run, (run.vars.accepted ?? 0) === K.jobs.value && (run.vars.ran ?? 0) === K.jobs.value),
   },
   race: {
     name: "TestConcurrentSubmitDuringCloseNeverPanics",
-    short: "submit/close",
+    short: "close race",
     judge: (run) => passed(run, (run.vars.closed ?? 0) === 1 && (run.vars.ran ?? 0) === 1),
   },
 };
@@ -115,9 +115,9 @@ const today = {
     ran: fact({ label: "ran", pos: [2, 1], value: 0 }),
   },
   insight:
-    "Close has already run, but Submit still sends unconditionally. The recovered panic fails the test; it never has an accepted=false path.",
+    "Close has already run. Submit still sends with no check. The test recovers the panic and fails. There is no accepted=false path.",
   stops: [
-    { when: { op: "close", node: "jobs" }, say: "Close closes jobs without waiting for the accepted work that is still running." },
+    { when: { op: "close", node: "jobs" }, say: "Close closes jobs now. It does not wait for accepted work that is still running." },
     { when: { op: "panic", g: "submit" }, say: "Submit reaches the closed channel. The test recovers the panic, reports it, and fails." },
   ],
   tests: { late: tests.late! },
@@ -204,10 +204,10 @@ const goal = {
     closed: fact({ label: "closed", pos: [2, 2], value: "open", states: ["open", "closed"] }),
   },
   insight:
-    "Watch accepted and ran meet before jobs closes. The later Submit calls see closed and return false without running a job or touching jobs.",
+    "Watch accepted and ran meet before jobs closes. Later Submit calls see closed and return false. They do not run a job or touch jobs.",
   stops: [
-    { when: { op: "set", node: "closed" }, say: "Close has stopped admission. The jobsWG drain still has to wait for every accepted job to finish." },
-    { when: { op: "close", node: "jobs" }, say: "Only after the drain reaches zero does jobs close and the workers exit." },
+    { when: { op: "set", node: "closed" }, say: "Close stops new work. The jobsWG drain still waits for every accepted job to finish." },
+    { when: { op: "close", node: "jobs" }, say: "After the drain reaches zero, Close closes jobs. The workers exit." },
     { when: { op: "inc", node: "rejected" }, say: `All ${POSTCLOSE} late Submit calls return accepted=false without sending.` },
   ],
   tests: { late: tests.late! },
@@ -336,10 +336,10 @@ const admit = {
     closeDone: channel({ label: "closeDone", pos: [4, 2], cap: 0 }),
   },
   insight:
-    "Submit keeps the admission lock through the send. Close can take the write lock only after Submit releases the read lock; then it marks the pool closed.",
+    "Submit keeps the admission lock through the send. Close can take the write lock only after Submit releases the read lock. Close then marks the pool closed.",
   stops: [
-    { when: { op: "lock", g: "submit", node: "mu" }, say: "Submit takes the read lock before checking the flag or adding the job." },
-    { when: { op: "lock", g: "closer", node: "mu" }, say: "Close reaches the write lock only after Submit releases its read lock; then it can set closed." },
+    { when: { op: "lock", g: "submit", node: "mu" }, say: "Submit takes the read lock before it checks the flag or adds the job." },
+    { when: { op: "lock", g: "closer", node: "mu" }, say: "Close reaches the write lock only after Submit releases its read lock. It can then set closed." },
     { when: { op: "wait", g: "closer", node: "wg" }, say: "Admission has stopped. Close now waits for the accepted job to finish." },
   ],
   tests: { race: tests.race! },
@@ -399,10 +399,10 @@ const drain = {
     ran: fact({ label: "ran", pos: [3, 0], value: 0 }),
     closed: fact({ label: "closed", pos: [2, 1], value: "open", states: ["open", "closed"] }),
   },
-  insight: `Twenty Add calls pair with twenty Done calls. Close changes wg from ${K.jobs.value} to 0 before closing jobs, so no accepted job can still be running when it returns.`,
+  insight: `Twenty Add calls pair with twenty Done calls. Close changes wg from ${K.jobs.value} to 0 before it closes jobs. No accepted job can still run when Close returns.`,
   stops: [
     { when: { op: "wait", g: "test", node: "wg" }, say: `The counter still has accepted jobs to finish, so Close waits instead of returning early.` },
-    { when: { op: "close", node: "jobs" }, say: "The counter reached 0. Only now does Close close jobs, and the workers' range loops end." },
+    { when: { op: "close", node: "jobs" }, say: "The counter reaches 0. Now Close closes jobs, and the worker loops end." },
   ],
   tests: { drain: tests.drain! },
   code: {
@@ -463,9 +463,9 @@ const reject = {
     rejected: fact({ label: "rejected", pos: [3, 1], value: 0 }),
     closed: fact({ label: "closed", pos: [2, 1], value: "open", states: ["open", "closed"] }),
   },
-  insight: `After Close returns, accepted and ran both equal ${PRECLOSE}. The ${POSTCLOSE} late calls see p.closed == true and return accepted=false without sending on jobs.`,
+  insight: `After Close returns, accepted and ran both equal ${PRECLOSE}. The ${POSTCLOSE} late calls see p.closed == true. They return accepted=false without sending on jobs.`,
   stops: [
-    { when: { op: "set", node: "closed" }, say: "The write lock makes closed visible before the drain begins." },
+    { when: { op: "set", node: "closed" }, say: "The write lock makes closed visible before the drain starts." },
     { when: { op: "close", node: "jobs" }, say: "Close has drained every accepted job. It is now safe to close jobs." },
     { when: { op: "inc", node: "rejected" }, say: `All ${POSTCLOSE} late calls are rejected; ran remains ${PRECLOSE}.` },
   ],
@@ -492,35 +492,35 @@ export default defineViz({
       chip: "Today",
       tier: "today",
       summary:
-        "Close closes jobs immediately; a late Submit reaches the closed channel and the test recovers the panic but still fails.",
+        "Close closes jobs at once. A late Submit reaches the closed channel. The test recovers the panic but still fails.",
       model: today,
     },
     {
       id: "goal",
       chip: "Goal",
       tier: "goal",
-      summary: `Every accepted job runs before Close returns, and the ${POSTCLOSE} Submit calls after it return accepted=false without running.`,
+      summary: `Every accepted job finishes before Close returns. The ${POSTCLOSE} Submit calls after Close return accepted=false and run nothing.`,
       model: goal,
     },
     {
       id: "admit",
       chip: "Admit",
       tier: "inside",
-      summary: "Submit holds the read lock across its send, so Close's write lock cannot close jobs underneath it.",
+      summary: "Submit holds the read lock during its send. Close must wait before it can close jobs.",
       model: admit,
     },
     {
       id: "drain",
       chip: "Drain",
       tier: "inside",
-      summary: `Close waits for all ${K.jobs.value} accepted jobs to call Done before it closes jobs and lets the workers return.`,
+      summary: `Close waits for all ${K.jobs.value} accepted jobs to call Done. Then it closes jobs and lets the workers return.`,
       model: drain,
     },
     {
       id: "reject",
       chip: "Reject",
       tier: "inside",
-      summary: `After the drain, ${POSTCLOSE} late Submit calls see closed and return false without touching jobs.`,
+      summary: `After the drain, ${POSTCLOSE} late Submit calls see closed. They return false without touching jobs.`,
       model: reject,
     },
   ],

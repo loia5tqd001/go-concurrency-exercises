@@ -423,9 +423,9 @@ export function CodePane({ summary, exercise, status, onStatus, openFile }: Prop
     if (hasViz(id) && spec === null) return;
     if (!consoleModel.empty) return;
     if (summary.unsupported) {
-      const action = vizLink === null ? undefined : { label: "Watch it instead ▸", run: openToday };
-      consoleModel.note(`This exercise's tests cannot run in a browser: ${summary.unsupported}.`, "err", action);
-      consoleModel.note(`Edit main.go here and press ${modKey}+Enter to compile it, then run the tests locally: go test -race ./${id}`, "dim");
+      const action = vizLink === null ? undefined : { label: "Watch the animation", run: openToday };
+      consoleModel.note(`The browser cannot run these tests. ${summary.unsupported}.`, "err", action);
+      consoleModel.note(`Press ${modKey}+Enter to build the code. Then run go test -race ./${id} on your computer.`, "dim");
     } else {
       consoleModel.note(`Press ${modKey}+Enter to run the tests (go test -v), or ${modKey}+Shift+Enter to run main().`, "dim");
     }
@@ -496,7 +496,8 @@ export function CodePane({ summary, exercise, status, onStatus, openFile }: Prop
         <div className="banner local-banner" role="status">
           <InfoIcon />
           <span>
-            <strong>Local tests required.</strong> This page can compile the exercise, but it cannot run its tests: {summary.unsupported}.
+            <strong>Run the tests on your computer.</strong> The browser can build this exercise, but not run its tests.{" "}
+            {summary.unsupported}.
           </span>
         </div>
       )}
@@ -556,19 +557,18 @@ export function CodePane({ summary, exercise, status, onStatus, openFile }: Prop
               </summary>
               <div className="popover">
                 <p>
-                  <strong>Real Go {site.goVersion}.</strong> The actual Go compiler and linker run in your browser as WebAssembly. Your
-                  code never leaves this tab.
+                  <strong>Real Go {site.goVersion}.</strong> The Go compiler runs in this tab. Your code stays in this browser.
                 </p>
                 <p>
-                  <strong>No race detector.</strong> <code>-race</code> needs ThreadSanitizer, which WebAssembly cannot host. Run{" "}
-                  <code>go test -race ./{id}</code> locally to rule out data races.
+                  <strong>No race detector.</strong> The browser cannot run <code>-race</code>. Run{" "}
+                  <code>go test -race ./{id}</code> on your computer.
                 </p>
                 <p>
-                  <strong>One thread.</strong> <code>runtime.NumCPU()</code> and <code>GOMAXPROCS</code> are 1. Goroutines switch when one
-                  blocks (channel, lock, sleep), so a busy loop can starve the others.
+                  <strong>One thread.</strong> <code>GOMAXPROCS</code> is 1. A goroutine runs until it blocks. A busy loop can stop the
+                  other goroutines.
                 </p>
                 <p>
-                  <strong>No processes or signals.</strong> <code>os/exec</code> and <code>os/signal</code> do nothing here.
+                  <strong>No processes or signals.</strong> <code>os/exec</code> and <code>os/signal</code> cannot work here.
                 </p>
               </div>
             </details>

@@ -35,10 +35,10 @@ function collect(vars: Self["vars"], v: unknown): void {
 const right = (run: RunSummary): boolean => run.vars.got === evenSquares.length && run.vars.wrong === undefined;
 
 const tests: Record<string, TestDef> = {
-  correctness: { name: "TestPipelineCorrectness", short: "correctness", judge: right },
+  correctness: { name: "TestPipelineCorrectness", short: "correct", judge: right },
   overlap: {
     name: "TestPipelineStagesOverlap",
-    short: `under ${K.budget.value} ms`,
+    short: "time limit",
     judge: (run) => right(run) && run.t < K.budget.value,
   },
 };
@@ -105,7 +105,7 @@ export default defineViz({
       id: "today",
       chip: "Today",
       tier: "today",
-      summary: `One goroutine squares all ${N} numbers, then filters all ${N}, so the run takes ${2 * N * W} ms and misses the ${K.budget.value} ms budget.`,
+      summary: `One goroutine squares all ${N} numbers. Then it filters all ${N}. The run takes ${2 * N * W} ms, past the ${K.budget.value} ms budget.`,
       model: {
         nodes: {
           // One column, so the 20 cells of squares stay readable on a phone.
@@ -132,11 +132,11 @@ export default defineViz({
             },
           }),
         },
-        insight: `One goroutine runs square over all ${N} numbers, then keepEven over all ${N}. Neither stage starts until the one before has finished the whole batch, so the clock reaches ${2 * N * W} ms, past the ${K.budget.value} ms budget.`,
+        insight: `One goroutine runs square over all ${N} numbers. Then it runs keepEven over all ${N}. Each stage finishes the whole batch before the next starts. The clock reaches ${2 * N * W} ms, past the ${K.budget.value} ms budget.`,
         stops: [
           {
             when: { op: "put", node: "squares", nth: N },
-            say: `At ${N * W} ms square has squared all ${N} numbers. Only now does keepEven start on the first one.`,
+            say: `At ${N * W} ms square has finished all ${N} numbers. keepEven starts only now.`,
           },
         ],
         tests,
@@ -175,7 +175,7 @@ export default defineViz({
       id: "goal",
       chip: "Goal",
       tier: "goal",
-      summary: `Three stage goroutines pass the ${N} numbers along unbuffered channels one at a time, so the run ends at ${N * W + 2 * W} ms.`,
+      summary: `Three stage goroutines pass ${N} numbers along unbuffered channels. The run ends at ${N * W + 2 * W} ms.`,
       model: {
         nodes: {
           ...flow,
@@ -194,15 +194,15 @@ export default defineViz({
           }),
         },
         routes,
-        insight: `Each stage takes the next number as soon as it has passed the last one on, so all three work at once. The run costs one stage over ${N} numbers plus two hand-offs: ${N * W + 2 * W} ms. Each stage closes its channel when its input runs dry.`,
+        insight: `Each stage passes a number on and takes the next. All three work at once. The run costs one stage plus two hand-offs: ${N * W + 2 * W} ms. Each stage closes its channel when its input runs out.`,
         stops: [
           {
             when: { op: "work", t: 2 * W, nth: 3 },
-            say: `At ${2 * W} ms all three stages work at once: generator on 3, square on 2, keepEven on 1.`,
+            say: `At ${2 * W} ms all three stages work at once. generator handles 3, square handles 2, and keepEven handles 1.`,
           },
           {
             when: { op: "close", node: "evens" },
-            say: `The closes cascade: nums, squares, then evens. The caller's range ends at ${N * W + 2 * W} ms, under the budget.`,
+            say: `nums, squares, then evens close in turn. The caller's range ends at ${N * W + 2 * W} ms, under the budget.`,
           },
         ],
         tests,
@@ -214,7 +214,7 @@ export default defineViz({
       id: "stop",
       chip: "Stop",
       tier: "inside",
-      summary: `A test goroutine closes done after ${W} ms; every stage leaves through its done case, and Pipeline returns at ${W} ms.`,
+      summary: `A test goroutine closes done after ${W} ms. Every stage exits through its done case. Pipeline returns at ${W} ms.`,
       model: {
         nodes: {
           // TestPipelineStopsEarly: 100 numbers, done closed after WorkLatency.
@@ -293,18 +293,18 @@ export default defineViz({
           done: channel({ label: "done", pos: [2, 0], cap: 0 }),
         },
         routes: { ...routes, "caller>closer": "below", "closer>done": "above" },
-        insight: `Every stage selects on done at each send and receive, and closes its channel on every way out. One close(done) frees all three stages, and the closes reach the caller's range at once.`,
+        insight: `Every stage checks done on each send and receive. It also closes its channel on every exit path. One close(done) frees all three stages. The closes reach the caller's range at once.`,
         stops: [
           {
             when: { op: "close", node: "done" },
-            say: `At ${W} ms the test closes done. Each stage leaves at its next select, through the done case.`,
+            say: `At ${W} ms the test closes done. Each stage exits at its next select.`,
           },
           {
             when: { op: "close", node: "evens" },
-            say: `keepEven's deferred close ends the caller's range. Pipeline returns at ${W} ms, far under ${K.earlyBudget.value} ms.`,
+            say: `keepEven closes its channel, so the caller's range ends. Pipeline returns at ${W} ms, under ${K.earlyBudget.value} ms.`,
           },
         ],
-        tests: { stops: { name: "TestPipelineStopsEarly", short: `under ${K.earlyBudget.value} ms` } },
+        tests: { stops: { name: "TestPipelineStopsEarly", short: "stops early" } },
         clock: { unit: "ms", budget: { at: K.earlyBudget.value, label: "budget" } },
         // keepEven runs the same loop as square; only its filter and the
         // value it sends differ, so it shares square's lines but the n * n send.

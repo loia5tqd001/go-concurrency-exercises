@@ -1,87 +1,58 @@
 # Clean Inactive Sessions to Prevent Memory Overflow — Suggested Solutions
 
-> **Spoiler warning.** This file contains full worked solutions for `05-session-cleaner/`. Try solving it yourself first — come back here if you're stuck or want to compare approaches.
+> **Spoiler warning.** This file contains full worked solutions for `05-session-cleaner/`. Try solving it yourself first. Come back if you are stuck or want to compare approaches.
 
 ## The problem
 
-`SessionManager` stores sessions in a plain `map[string]Session` with no
-synchronization and no expiry. Two things need fixing:
+`SessionManager` stores sessions in `map[string]Session`. It has no lock
+and no expiry. You must fix two issues:
 
-1. **Memory growth.** Sessions are added but never removed, so a
-   long-running process eventually runs out of memory. You need a
-   cleaner that removes any session that hasn't been touched (created
-   or updated) for more than 5 seconds — and the exercise explicitly
-   asks for it to happen "anytime between 5 and 7 seconds" after the
-   last update, i.e. it doesn't have to be instant, but it can't be
-   indefinitely delayed either.
-2. **Races.** `CreateSession`, `GetSessionData`, and
-   `UpdateSessionData` all read/write the shared `sessions` map with
-   no locking at all. Under concurrent access (see
-   `TestSessionManagerConcurrentAccess` in `check_test.go`, which
-   hammers all three methods from many goroutines under `-race`)
-   that's an immediate data race — and once you add a background
-   cleaner goroutine into the mix, it becomes a *third* uncoordinated
-   writer to the same map.
+1. **Memory growth.** Sessions are never removed. A long process will run
+   out of memory. Remove a session 5 to 7 seconds after its last create or
+   update. It does not need to be instant, but it must not wait forever.
+2. **Races.** `CreateSession`, `GetSessionData`, and `UpdateSessionData`
+   read and write `sessions` without a lock. `TestSessionManagerConcurrentAccess`
+   calls all three methods from many goroutines under `-race`. This causes
+   a data race. A background cleaner would add a third writer.
 
 ## Why the naive version is wrong
 
-Running the untouched starting `main.go` against the current
-`check_test.go`:
+The starting `main.go` fails the current `check_test.go`:
 
-- `TestSessionManagersCleaner` and `TestSessionManagersCleanerAfterUpdate`
-  fail outright — nothing ever removes an old session, so
-  `GetSessionData` keeps returning it forever instead of
-  `ErrSessionNotFound`.
-- `TestSessionManagerConcurrentAccess` fails under `go test -race`
-  with a concurrent map read/write data race — `CreateSession` and
-  `UpdateSessionData` both do unsynchronized `m.sessions[id] = ...`
-  from different goroutines.
+- `TestSessionManagersCleaner` and
+  `TestSessionManagersCleanerAfterUpdate` fail. Nothing removes an old
+  session, so `GetSessionData` never returns `ErrSessionNotFound`.
+- `TestSessionManagerConcurrentAccess` fails under `go test -race`.
+  `CreateSession` and `UpdateSessionData` both change
+  `m.sessions[id] = ...` without a lock.
 
 ## A constraint you can't design around: `testing/synctest`
 
-The current `check_test.go` uses Go's `testing/synctest` package to
-run the timing-sensitive tests (`TestSessionManagersCreationAndUpdate`,
-`TestSessionManagersCleaner`, `TestSessionManagersCleanerAfterUpdate`)
-on a fake clock inside a "bubble", so `time.Sleep(7 * time.Second)`
-finishes instantly instead of taking 7 real seconds.
+`check_test.go` uses Go's `testing/synctest` package. It runs
+`TestSessionManagersCreationAndUpdate`, `TestSessionManagersCleaner`, and
+`TestSessionManagersCleanerAfterUpdate` on a fake clock. A call to
+`time.Sleep(7 * time.Second)` finishes at once.
 
-`synctest.Test` has a hard rule: when the function passed to it
-returns, **every goroutine it spawned (transitively) must also have
-exited.** If any goroutine spawned inside the bubble is still alive —
-even if it's just quietly blocked waiting on a channel or a ticker —
-`synctest.Test` panics:
+`synctest.Test` has a strict rule. Every goroutine in the test bubble
+must exit before the test function returns. A goroutine still blocked on
+a channel or ticker causes a panic:
 
 ```
 panic: deadlock: main bubble goroutine has exited but blocked goroutines remain
 ```
 
-This matters a lot for this exercise, because the "obvious" design —
-start a `time.Ticker`-driven goroutine in `NewSessionManager` that
-loops forever, sweeping expired sessions every couple of seconds — is
-exactly the shape that trips this rule. None of the three
-`synctest`-based tests ever calls a `Stop()`/`Close()` on the
-manager, so a forever-running sweeper goroutine is still alive (durably
-blocked on the ticker's channel) when the test function returns, and
-the whole test panics rather than just failing an assertion. This was
-verified directly: a ticker-based sweeper (Approach 2 below) makes
-`TestSessionManagersCreationAndUpdate` panic with exactly that message,
-even though the sweeper's own logic is otherwise correct.
+This matters here. A `time.Ticker` loop in `NewSessionManager` starts a
+long-lived goroutine. The committed tests never call `Close` or `Stop`.
 
-So for *this* test suite, the cleaner can't be an unconditional,
-never-exiting background goroutine — it has to be something that
-either doesn't spawn a persistent goroutine at all, or bounds each
-goroutine's lifetime to a single session's timeout. Approach 1 below
-does the latter and is the recommended solution.
+Use no persistent goroutine for this suite. Approach 1 uses one-shot
+timers. Approach 2 shows why a ticker sweeper does not fit.
 
 ## Approach 1: per-session `time.AfterFunc` timer (recommended)
 
-Instead of one long-lived sweeper goroutine, give each session its
-own timer that fires once, exactly 5 seconds after the session was
-last touched. `UpdateSessionData` resets (not replaces) that same
-timer, so there is at most one pending callback per session — and,
-crucially, each callback's underlying goroutine is only alive for the
-`AfterFunc`'s own duration, so nothing outlives a `synctest` bubble
-that never advances the clock again.
+Give each session its own one-shot timer. It fires 5 seconds after the
+last update. `UpdateSessionData` resets that same timer. It does not
+replace it. Each session then has at most one pending callback. The
+callback goroutine lives only for the `AfterFunc` duration.
 
 ```go {53,73,109}
 package main
@@ -227,64 +198,49 @@ func main() {
 }
 ```
 
-**Why this satisfies the exercise:**
+**Why this works:**
 
-- **Actually reclaims memory in the background**, independent of
-  whether anyone ever calls `GetSessionData` again — unlike a design
-  that only checks expiry lazily on read (which would never free a
-  session nobody looks at again, defeating the whole point of the
-  exercise).
-- **A single mutex** (`m.mu`) guards every read and write of
-  `m.sessions`, including inside the `expire` callback, so there's no
-  race between a timer firing and a concurrent `Create`/`Update`/`Get`.
-- **Preserving the same `*time.Timer` pointer** across
-  `UpdateSessionData` calls (via `session.timer.Reset(...)`) matters:
-  if you instead replaced it with a brand new timer on every update,
-  the *old* timer would still fire on schedule, and its callback would
-  correctly decline to delete (thanks to the `time.Since(...) <
-  sessionTTL` guard) — but nothing would ever reschedule a new check
-  for the session's *new* deadline, silently reintroducing the memory
-  leak the exercise is about, while every existing test still passes.
-  This is the kind of bug that's easy to write and easy to miss.
-- **The 5–7 second window** is satisfied trivially: the timer fires
-  at exactly `lastUpdated + 5s`, which is always inside `[5s, 7s]`.
-- **No goroutine outlives the `synctest` bubble** in a way the
-  bubble's leak check can see: each `AfterFunc` timer's callback
-  goroutine only exists momentarily when it fires (or not at all, if
-  it never fires within the test), so there's no persistent
-  goroutine blocking on a channel when the test function returns.
-
-**Verified:** copied into a scratch directory (never touching the
-live `05-session-cleaner/`), run against the repo's current
-`check_test.go` — `go vet ./...` clean, `go test -race ./...` and
-`go test -race -count=3 ./...` both pass all four tests:
+- It frees memory even if nobody calls `GetSessionData`.
+- One mutex, `m.mu`, protects every use of `m.sessions`. It also protects
+  `expire`. A timer cannot race with `Create`, `Update`, or `Get`.
+- Keep the same `*time.Timer` and call `session.timer.Reset(...)` on
+  update. A new timer leaves the old one running. The old callback sees
+  `time.Since(...) < sessionTTL`, so it does nothing. Nothing then checks
+  the new deadline. Every test can still pass while the leak returns.
+- The timer fires at `lastUpdated + 5s`. That is always within `[5s, 7s]`.
+- The `AfterFunc` callback goroutine is short-lived. It does not leave a
+  goroutine blocked in the `synctest` bubble.
+**Verified:** in a scratch directory, not the live `05-session-cleaner/`.
+`go vet ./...` is clean. `go test -race ./...` and
+`go test -race -count=3 ./...` pass all four tests:
 `TestSessionManagersCreationAndUpdate`, `TestSessionManagersCleaner`,
-`TestSessionManagersCleanerAfterUpdate`, and the heavy concurrent
-`-race` stress test (`TestSessionManagerConcurrentAccess`, 20
-sessions × 3 goroutines × 2000 iterations each).
+`TestSessionManagersCleanerAfterUpdate`, and
+`TestSessionManagerConcurrentAccess`. The last test uses 20 sessions, 3
+goroutines, and 2000 iterations.
 
-## Approach 2: `time.Ticker`-driven background sweeper (classic design — fails *this* test suite)
+## Approach 2: `time.Ticker`-driven background sweeper
 
-This is the design most people reach for first, and it's the
-textbook-correct way to build a session cleaner in a real service: one
-goroutine, started once in `NewSessionManager`, wakes up on a ticker
-every couple of seconds, takes the lock, and deletes anything past its
-TTL:
+This is the common textbook design. Start one goroutine in
+`NewSessionManager`. It wakes on a ticker every few seconds. It takes the
+lock and removes old sessions:
 
-```go {15}
+```go {8,9,25,44,47}
 const sessionTTL = 5 * time.Second
 const cleanupInterval = 2 * time.Second
 
 type SessionManager struct {
-	mu       sync.Mutex
-	sessions map[string]Session
-	stop     chan struct{}
+	mu        sync.Mutex
+	sessions  map[string]Session
+	stop      chan struct{}
+	done      chan struct{}
+	closeOnce sync.Once
 }
 
 func NewSessionManager() *SessionManager {
 	m := &SessionManager{
 		sessions: make(map[string]Session),
 		stop:     make(chan struct{}),
+		done:     make(chan struct{}),
 	}
 	go m.cleanupLoop()
 	return m
@@ -293,6 +249,7 @@ func NewSessionManager() *SessionManager {
 func (m *SessionManager) cleanupLoop() {
 	ticker := time.NewTicker(cleanupInterval)
 	defer ticker.Stop()
+	defer close(m.done)
 	for {
 		select {
 		case <-ticker.C:
@@ -310,92 +267,53 @@ func (m *SessionManager) cleanupLoop() {
 	}
 }
 
-// Stop terminates the background sweeper so the manager (and its
-// goroutine) can be cleanly torn down, e.g. in a real server's
-// shutdown path, or in a test that calls it explicitly.
-func (m *SessionManager) Stop() {
-	close(m.stop)
+// Close stops the sweeper and waits for cleanupLoop to exit.
+func (m *SessionManager) Close() {
+	m.closeOnce.Do(func() {
+		close(m.stop)
+		<-m.done
+	})
 }
 ```
 
-This one goroutine per manager, plus a bounded 2-second sweep
-interval, is arguably *simpler* to reason about than per-session
-timers, and it's the shape you'd want in production if you also wire
-up `Stop()` to your service's graceful-shutdown path.
+This uses one goroutine per manager and a 2 second sweep. It is simpler
+than many timers. `Close` can stop the sweeper and wait for it to exit.
 
-**The real tradeoff between the two designs** is timer-count versus
-sweep-latency, not correctness: Approach 1 keeps one live
-`*time.Timer` per session, so N concurrent sessions means N entries in
-the runtime's timer heap, and a burst of sessions expiring together
-produces a burst of callback goroutines all contending for the same
-mutex (the concurrency stress test alone creates roughly 40,000 such
-timers in well under a second — they simply never fire because the
-test finishes and the process exits first). Approach 2 holds exactly
-one goroutine and one ticker no matter how many sessions exist, at the
-cost of up to `cleanupInterval` (here, 2s) of extra retention latency
-beyond the TTL before a stale session is actually removed. For a
-handful of sessions the per-session-timer cost is negligible and you
-get tighter expiry; at very high session counts the flat one-goroutine
-sweep cost of Approach 2 (in a context where you control the test
-harness and can call `Stop()`) may be preferable.
+The real tradeoff is timer count versus cleanup delay. Approach 1 has one
+live `*time.Timer` per session. N sessions means N timers. Many sessions
+can expire together and contend for one mutex. The stress test has 20
+sessions, so it keeps 20 timers even across 2000 updates per session.
 
-**It does not pass this repository's `check_test.go` as written,
-verified directly:** none of the `synctest`-based tests ever call
-`Stop()`, so `cleanupLoop`'s goroutine is still alive — durably
-blocked in the `select` — when the test function returns. That trips
-`synctest`'s leak check and the test panics:
+Approach 2 has one goroutine and one ticker. It can keep a stale session
+for up to `cleanupInterval` beyond the TTL, here 2s. It fits very high
+session counts when the API can call `Close`.
 
-```
---- FAIL: TestSessionManagersCreationAndUpdate (0.00s)
-panic: deadlock: main bubble goroutine has exited but blocked goroutines remain [recovered, repanicked]
-...
-goroutine NN [select (durable), synctest bubble 1]:
-    SessionManager.cleanupLoop(...)
-```
+This design does not fit the committed tests. They have no `Close` call.
+The sweeper still runs when a fake-clock test returns. `synctest` then
+panics.
 
-This is included specifically because it's an instructive contrast:
-the ticker design isn't *wrong* in general, but it's incompatible with
-being spawned unconditionally inside a test that uses `synctest.Test`
-and never tears the manager down. If you use this shape in your own
-solution, either don't run it under `synctest`, or make sure every
-test that constructs a `SessionManager` also calls `Stop()` before
-returning.
-
-(You may also notice a comment in `check_test.go` — `// Note that the
-cleaner is only running every 5s` — inside `TestSessionManagersCleaner`.
-Checking `git show HEAD:5-session-cleaner/check_test.go` confirms this
-comment predates the `synctest` conversion: it's already present in
-the version of the test that uses real `time.Sleep` calls instead of
-a fake clock, i.e. it was written with a ticker-based sweeper in mind.
-It no longer describes a hard requirement of the current, `synctest`-based
-assertions — per-session `time.AfterFunc` timers, as in Approach 1,
-satisfy those assertions without running afoul of `synctest`'s
-goroutine-leak check.)
+`check_test.go` has this comment inside `TestSessionManagersCleaner`:
+`// Note that the cleaner is only running every 5s`.
+`git show HEAD:05-session-cleaner/check_test.go` shows the comment is
+older than the `synctest` change. It was written for real `time.Sleep`
+calls and a ticker sweeper. It is not a current test rule. Both one-shot
+timers fit the current tests. The ticker needs a stop call that the tests
+do not have.
 
 ## Key takeaways
 
-- A cleaner that only expires sessions **lazily, on read** (e.g.
-  checking `lastUpdated` inside `GetSessionData` and deleting if
-  stale) will pass simple tests that always re-fetch the session
-  afterward, but it never frees memory for sessions nobody looks at
-  again — which is the exact problem the exercise exists to solve.
-  Don't mistake "passes the assertions" for "solves the stated
-  problem."
-- Any code path that touches the shared `sessions` map —
-  `CreateSession`, `GetSessionData`, `UpdateSessionData`, *and* your
-  cleaner's own delete logic — must go through the same
-  `sync.Mutex`/`sync.RWMutex`. A cleaner that isn't synchronized with
-  the rest of the manager just adds a third unsynchronized writer.
-- When resetting a per-session timer on update, reuse the existing
-  `*time.Timer` via `Reset` rather than discarding it for a new one —
-  otherwise the orphaned old timer still fires, the "already renewed,
-  ignore" guard correctly no-ops it, and nothing takes its place,
-  silently breaking cleanup for that session.
-- If your test suite uses `testing/synctest`, a goroutine that runs
-  forever (a `time.Ticker` loop with no exit condition, started
-  in a constructor and never stopped by the test) will panic the
-  bubble with `deadlock: main bubble goroutine has exited but blocked
-  goroutines remain` — even though the logic inside that goroutine is
-  perfectly correct. Bound each goroutine's lifetime (e.g. one-shot
-  `time.AfterFunc` timers) or give the caller an explicit way to stop
-  it and make sure every test that spawns one uses it.
+- Do not remove sessions only on read. A cleaner can check `lastUpdated`
+  inside `GetSessionData`. A simple test passes if it reads again. But a
+  session nobody reads stays in memory. This defeats the exercise.
+- Every path that uses `sessions` needs the same lock. This includes
+  `CreateSession`, `GetSessionData`, `UpdateSessionData`, and cleanup.
+  Use `sync.Mutex` or `sync.RWMutex`. A cleaner without the lock adds
+  another unsafe writer.
+- Reuse one `*time.Timer` with `Reset`. Do not replace it. A new timer
+  leaves the old one running. Its renewal guard does nothing, and cleanup
+  silently stops working.
+- `testing/synctest` panics if a goroutine remains after the test. A
+  `time.Ticker` loop with no stop causes
+  `deadlock: main bubble goroutine has exited but blocked goroutines remain`.
+  Use short-lived timers such as `time.AfterFunc`. A persistent worker
+  needs an API stop call, and every test must call it.

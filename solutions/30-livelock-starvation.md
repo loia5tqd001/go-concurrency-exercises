@@ -1,20 +1,18 @@
-# Livelock & Starvation - Suggested Solution
+# Livelock and Starvation - Suggested Solution
 
-> **Spoiler warning.** Try solving it yourself first — come back if you're stuck.
+> **Spoiler warning.** Try the exercise first. Come back if you are stuck.
 
 ## The bug, and the fix
 
-**Livelock.** Both workers back off for the identical fixed `10ms` on
-collision, and the announce/settle protocol keeps their rounds aligned, so a
-collision reproduces every round forever. Fix: jitter the backoff
-independently per worker, using a seeded `*rand.Rand` per worker (not a
-shared/global source) so the run stays reproducible.
+**Livelock.** Both workers use the same fixed `10ms` backoff after a collision. The announce/settle protocol keeps their rounds aligned. They collide again every round.
 
-**Starvation.** `RunDispatchCycles` drains high-priority first, full stop,
-so a non-emptying high backlog starves low-priority forever. Fix: weighted
-round-robin — reserve every `agingPeriod`-th cycle for a waiting
-low-priority job, checked *before* the high-priority branch (checking it
-after would make it just as unreachable as the original bug).
+The fix uses a seeded `*rand.Rand` per worker for independent jitter. Do not use one shared source. A fixed seed keeps the run reproducible.
+
+**Starvation.** `RunDispatchCycles` always drains high priority first. A high-priority backlog that never empties therefore blocks low priority forever.
+
+The fix uses weighted round-robin. Every `agingPeriod` cycles, it serves one waiting low-priority job. Check this before the high-priority branch. Checking after would make it unreachable.
+
+`check_test.go` checks both the livelock fix and the fairness policy.
 
 ```go {36,37,41,42,79,81}
 package main
@@ -123,51 +121,19 @@ func (d *Dispatcher) RunDispatchCycles(n int) (highCompleted, lowCompleted int) 
 
 ## Why this works
 
-- **Livelock fix is a one-line change in kind, not degree**: only step 5's
-  backoff source changes (shared fixed duration → per-worker jittered). The
-  announce/settle protocol itself is required scaffolding, not something to
-  simplify away — a bare `TryLock` loop or plain blocking `Mutex` would
-  trivially clear the progress-floor check without ever exercising real
-  contention, which is exactly what `check_test.go`'s minimum-elapsed-time
-  check is there to catch.
-- **Per-worker seeded RNGs, not a shared global source**: two things ride on
-  this. First, if the workers do land on the same round again, their next
-  jittered delays have no reason to re-align, so any repeat collision is a
-  one-off, not a new lockstep. Second, fixed seeds keep the demo
-  deterministic and reproducible under `synctest`'s fake clock.
-- **`agingPeriod = 5` bounds the wait exactly**: any waiting low-priority
-  job is serviced within `agingPeriod` cycles of reaching the head of its
-  queue, regardless of backlog depth, because the aging check runs
-  unconditionally *before* the high-priority check. Any period from 3 to 10
-  keeps both guarantees `check_test.go` checks satisfied (`agingPeriod=2`
-  fails the two-thirds share at 50/50; `agingPeriod=11+` misses the
-  10-cycle bound) - smaller favors fairness, larger favors high-priority
-  throughput.
-- **Two starvation tests catch different failure modes**: a policy that
-  simply inverts priority (drains low first) passes the bounded-wait test
-  trivially but fails the majority-share test — that's why both exist.
+- **The livelock fix changes one source, not the protocol.** Only step 5's backoff changes. Use per-worker jitter instead of one fixed duration.
+- **Keep the announce/settle protocol.** A bare `TryLock` loop or blocking `Mutex` would pass the progress test without real contention. The minimum elapsed-time check catches that.
+- **Use per-worker seeded RNGs.** If workers meet again, their next delays should differ. Fixed seeds also keep `synctest` runs reproducible.
+- **`agingPeriod = 5` gives a fixed wait bound.** A waiting low-priority job runs within `agingPeriod` cycles after reaching the queue head. The aging check runs before the high-priority check.
+- **Periods from 3 to 10 pass both guarantees.** `agingPeriod=2` gives a 50/50 share and fails the two-thirds test. `agingPeriod=11+` misses the 10-cycle bound.
+- **Two starvation tests catch different bugs.** Draining low first passes bounded wait but fails majority share. Keep both tests.
 
 ## Key takeaways
 
-- Deadlock: stuck, blocked, doing nothing. Livelock: busy, executing,
-  still making zero net progress because actions keep canceling each other
-  out. Starvation: system-wide progress is fine, one participant's requests
-  are never selected. All three look identical on a "is anything crashing?"
-  dashboard.
-- Backoff-and-retry isn't automatically a livelock fix — it reproduces the
-  livelock if every retrier uses the same deterministic delay. The fix is
-  jitter whose *timing isn't shared* across contenders, not just "some
-  randomness somewhere."
-- A progress-floor test alone can pass on implementations that fix nothing,
-  if the property being tested is about timing and the test doesn't force
-  the timing conditions that expose it — pair it with a minimum-elapsed-time
-  check grounded in the protocol's mandatory cost.
-- A fairness policy needs a provable worst-case bound, not just "check the
-  other queue sometimes" — and needs to be tested from both directions
-  (bounded wait *and* majority share), since a naive fix can satisfy one by
-  simply starving the other queue instead.
+- Deadlock means blocked and idle. Livelock means busy but making no progress. Starvation means the system progresses while one participant waits forever.
+- All three problems can look the same on an availability dashboard.
+- A retry with the same delay can recreate a livelock. Use jitter that differs between contenders.
+- A progress-floor test can pass a broken timing fix. Also check the minimum elapsed time.
+- A fairness policy needs a worst-case bound. Test both bounded wait and majority share.
 
-**Verified**: naive `main.go` fails `TestLivelockBothWorkersMakeProgress`,
-`TestDispatcherLowPriorityBoundedWait`, `TestDispatcherHighPriorityKeepsMajorityShare`
-(passes only the no-backlog sanity check). The fix above is `gofmt`/`vet`
-clean and passes `go test -race -count=5` with no flakes.
+**Verified:** The naive `main.go` fails `TestLivelockBothWorkersMakeProgress`, `TestDispatcherLowPriorityBoundedWait`, and `TestDispatcherHighPriorityKeepsMajorityShare`. It passes only the no-backlog sanity check. The fix is `gofmt`/`vet` clean and passes `go test -race -count=5` every time.

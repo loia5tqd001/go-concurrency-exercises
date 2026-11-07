@@ -1,10 +1,10 @@
 # Non-Blocking Dispatch: A Load Balancer That Can't Depend on a Buffer
 
-This exercise picks up right where [33](../33-load-balancer) left off.
-Given is a `Balancer` whose `Balance` already does everything 33
-asked for — it drains both `work` and `b.done` in the same `select`,
-and keeps the pool ordered with `heap.Fix`, exactly as 33's own fix
-does:
+This exercise follows [33](../33-load-balancer).
+
+`Balancer` already has everything exercise 33 asked for. `Balance`
+drains both `work` and `b.done` in one `select`. It keeps the pool
+ordered with `heap.Fix`, just like the fix in 33:
 
 ```go {6}
 func (b *Balancer) Balance(work <-chan Request) {
@@ -24,28 +24,25 @@ func (b *Balancer) Balance(work <-chan Request) {
 }
 ```
 
-What's new: every `Worker`'s inbox (`w.requests`) is **unbuffered** —
-`NewBalancer` makes it with `make(chan Request)`, capacity `0`. That's
-a fixed constraint of this exercise (a test checks it directly), not a
-knob you can turn back up.
+Every `Worker` inbox (`w.requests`) is **unbuffered**. `NewBalancer`
+creates it with `make(chan Request)`, capacity `0`. This is a fixed
+rule. A test checks it directly. You cannot turn the buffer back on.
 
 ## The bug
 
-That one change is enough to wedge the `Balance` above, even though
-its `done`-handling is exactly what fixed 33. Trace it:
+That one change can wedge `Balance`, even with correct `done` handling.
+Follow the steps:
 
-1. `Balance` picks the least-loaded `Worker` and does
-   `w.requests <- req` — synchronously, inside its own single
-   goroutine, before it can loop back around to `select` again.
-2. If that `Worker` isn't parked on a receive right now — it's mid-job,
-   or itself blocked trying to send its *own* completion on `b.done` —
-   nobody's listening, so the send blocks.
-3. `Balance`'s one goroutine is now stuck on that send. It can no
-   longer reach its own `done` case, for *any* `Worker` — not just the
-   one it's stuck sending to.
-4. Every other `Worker` that finishes a job and tries to report back on
-   `done` piles up behind that same block, and every later request
-   piles up behind `work`.
+1. `Balance` picks the least loaded `Worker`. It sends with
+   `w.requests <- req`. That send runs inside its only goroutine. It
+   happens before the next `select`.
+2. The `Worker` may not be waiting on a receive. It may be running a
+   job. It may be blocked sending its completion on `b.done`. Then the
+   send blocks.
+3. `Balance` is now stuck on that send. It cannot reach its own `done`
+   case for any `Worker`.
+4. Every other `Worker` that finishes a job piles up behind the same
+   block. Every later request piles up behind `work`.
 
 ```
 Balance picks Worker w (heap.Pop), blocks on w.requests <- req
@@ -60,27 +57,25 @@ Balance picks Worker w (heap.Pop), blocks on w.requests <- req
      now queue up behind that one stuck send - forever
 ```
 
-Against 33's buffered inbox, this needed a burst bigger than the whole
-pool before it showed up. Here it can happen on the very next request
-after the very first one, because there's no buffer standing between
-"not receiving yet" and "send blocks."
+With 33's buffer, it took a larger burst to fill the per-worker buffers.
+Here, the next request can block on a `Worker` that is not receiving.
+There is no buffer between "not receiving yet" and "send blocks."
 
 ## Your task
 
-> **Static constraint:** `Worker.requests` must stay unbuffered
-> (capacity `0`) — a test asserts this directly. The fix has to make
-> `Balance` correct *without* a buffer to lean on, not quietly restore
-> one.
+> **Static constraint:** `Worker.requests` must stay unbuffered. Its
+> capacity must stay `0`. A test asserts this. Fix `Balance` without a
+> buffer. Do not quietly restore one.
 
-Rewrite `Balance` so it never blocks trying to send to any one
-`Worker`, no matter how backed up that `Worker` is — a request that
-can't be handed off immediately must queue *inside* `Balance`, in a
-data structure the loop itself owns, not one goroutine parked per
-waiting request. Every request submitted must still eventually
-complete, and the least-loaded `Worker` must still get first claim on
-whatever's queued once it has room.
+Rewrite `Balance`. It must never block while sending to one `Worker`.
+This must hold even when that worker is backed up. A request that
+cannot be handed off at once must wait inside `Balance`. The data
+structure belongs to its loop. Do not park one goroutine per waiting
+request.
 
-Exported surface stays the same:
+Every request must still finish. The least loaded `Worker` must get
+first claim on queued work once it has room. Keep the exported surface
+the same:
 
 ```go
 func NewBalancer(numWorkers int) *Balancer
@@ -91,13 +86,12 @@ You should not need to change `Request`, `Worker`, or `Pool`.
 
 ## Hint, if you're stuck
 
-The classic Go idiom for "conditionally enable a `select` case" is a
-`nil` channel: a `nil` channel is never ready, so a `case` that
-sends or receives on one simply never fires. Use that to make "there's
-a request queued *and* its target `Worker` can take it right now" a
-third case living in the *same* `select` as `work` and `done` — instead
-of a send you make outside the `select`, which is exactly what let one
-`Worker` block the whole loop above.
+The standard Go idiom uses a `nil` channel to turn a `select` case on or
+off. A `nil` channel is never ready, so its `case` never fires. Use
+this for the dispatch case. Enable it when a request is queued and its
+target `Worker` can take it now. Keep it in the same `select` as `work`
+and `done`. Do not send outside the `select`. That is what let one
+`Worker` block the loop.
 
 ## Test your solution
 

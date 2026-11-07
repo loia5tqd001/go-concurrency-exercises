@@ -1,10 +1,10 @@
-# Pipeline Error Handling: Result Values Instead of Aborting — Suggested Solutions
+# Pipeline Errors: Return Results Instead of Stopping - Suggested Solutions
 
-> **Spoiler warning.** This file contains full worked solutions for `26-pipeline-error-handling/`. Try solving it yourself first — come back here if you're stuck or want to compare approaches.
+> **Spoiler warning.** This file has the full solution for `26-pipeline-error-handling/`. Try the exercise first. Come back if you are stuck or want to compare approaches.
 
 ## The problem
 
-The starting point is a two-stage pipeline, `parse -> reciprocal`, wired together by `ProcessReadings`:
+The starting code is a two-stage pipeline: `parse -> reciprocal`. `ProcessReadings` connects the stages:
 
 ```go
 type Result struct {
@@ -17,11 +17,15 @@ func reciprocal(done <-chan struct{}, in <-chan Result) <-chan Result
 func ProcessReadings(done <-chan struct{}, readings []string) []Result
 ```
 
-`parse` is supposed to convert every reading to an int and emit one `Result` per reading, success or failure, never stopping early. `reciprocal` is supposed to pass through any `Result` that already carries an error unchanged, and otherwise validate `Value != 0`, setting `Err` to the exported sentinel `ErrDivideByZero` when it is. Either way, both stages must keep processing every remaining reading no matter what they just saw, and `ProcessReadings` must always return exactly one `Result` per input reading, in order.
+`parse` must convert every reading to an int. It must emit one `Result` per reading, even when that reading fails.
+
+`reciprocal` must pass through a `Result` that already has an error. Otherwise, it checks `Value != 0`. If the value is zero, it sets `Err` to `ErrDivideByZero`.
+
+Both stages must keep processing after a bad item. `ProcessReadings` must return one `Result` for each input, in input order.
 
 ## Why the naive version is wrong
 
-Both stages currently `return` from their goroutine — closing their output channel — the instant they hit a single bad reading, instead of reporting the problem on that one `Result` and moving on to the rest of the batch:
+Both stages `return` as soon as they find a bad reading. That closes the output channel. They should report the error on one `Result` and continue instead:
 
 ```go {8}
 func parse(done <-chan struct{}, readings []string) <-chan Result {
@@ -44,9 +48,11 @@ func parse(done <-chan struct{}, readings []string) <-chan Result {
 }
 ```
 
-`reciprocal` has the same shape, `return`-ing the moment it sees a `Value` of `0`. The `Err` field on `Result` is declared but never actually set by either stage — a bad reading doesn't get reported, it just makes everything after it vanish.
+`reciprocal` also returns when it sees `res.Value == 0`. Neither stage sets the `Err` field. A bad reading is not reported. Every later reading disappears.
 
-Verified: running `go test -v ./...` (with `GOROOT` pointed at the go1.25.6 toolchain the repo's `go.mod` requires) against this naive `main.go` fails the four tests that exercise per-item error handling, and the failure messages are diagnostic about exactly what's wrong. The suite also has two tests dedicated to `done`-cancellation (`TestPipelineStopsPromptlyOnDone` and `TestPipelineNoGoroutineLeakRace`); those pass even against the naive version below, because its bug is confined to aborting on a *bad item* - the `select { case <-done: ...; case out <- res: }` send guard on every good item is already correct and unaffected by the bug this exercise is about:
+Verified with the `go1.25.6` toolchain from the repo's `go.mod`. Set `GOROOT` to that toolchain. `go test -v ./...` fails four per-item error tests against the naive `main.go`.
+
+The two `done`-cancellation tests still pass: `TestPipelineStopsPromptlyOnDone` and `TestPipelineNoGoroutineLeakRace`. The bug only affects bad items. The `select` send guard, `select { case <-done: ...; case out <- res: }`, is already correct for good items.
 
 ```
 === RUN   TestAllReadingsProduceResults
@@ -68,13 +74,15 @@ Verified: running `go test -v ./...` (with `GOROOT` pointed at the go1.25.6 tool
 FAIL
 ```
 
-(`TestBadReadingsCarryErrors` iterates over the `parseErrIndex`/`divZeroIndex` maps, so which specific bad index it names first can vary run to run since Go map iteration order is randomized - the diagnostic message and outcome are identical regardless of which index happens to be reported.)
+`TestBadReadingsCarryErrors` loops over the `parseErrIndex` and `divZeroIndex` maps. Go map order changes between runs. The first reported index can therefore change. The outcome and message format stay the same.
 
-With `readings := []string{"10", "abc", "5", "0", "-3", "xyz", "0", "7"}`, `parse` converts `"10"` fine, then hits `"abc"` at index 1 and gives up — `reciprocal` never even sees indices 2 through 7. `go run .` against the naive version confirms it: `got 1 results for 8 readings`.
+`check_test.go` includes `TestProcessingContinuesPastBadReadings`. That test checks the main fix.
+
+The input is `readings := []string{"10", "abc", "5", "0", "-3", "xyz", "0", "7"}`. The `readings` slice has eight values. `parse` converts `"10"`, then hits `"abc"` at index 1 and stops. `reciprocal` never sees indices 2 through 7. `go run .` prints `got 1 results for 8 readings`.
 
 ## Approach: emit a `Result` for every item, keep the loop running
 
-The fix removes the early `return` from each stage's failure branch and replaces it with "build the right `Result`, then keep looping":
+The fix removes each failure-path `return`. Each stage builds the right `Result`, then continues:
 
 ```go {30-35,56}
 package main
@@ -176,18 +184,29 @@ func main() {
 
 Design notes:
 
-- **Why `Result{Value, Err}` on a single channel, not a second `<-chan error` or a batch-level `error`.** A parallel error channel would split what is really one fact ("reading #3 is bad") into two independently-arriving values on two independently-closing channels, and the consumer would have to `select` over both to reassemble which error belongs to which value - exactly the kind of accidental complexity `select` in a hot loop invites bugs into. Collapsing failures into a single `error` returned by `ProcessReadings` is worse for this exercise's purpose: it can only report "the batch had at least one problem," which is the *aborting* failure mode in a different costume - the caller still can't tell "reading #2 was garbage" from "reading #500 was garbage" or how many succeeded. Keeping `Value` and `Err` paired in one struct riding one channel makes "one `Result` per input, in order" a property of the type itself, not something the consumer has to reconstruct.
-- **The `for _, reading := range readings` and `for res := range in` loops never `return` on a bad item anymore — only on `<-done`.** That single change is the entire fix: once neither stage treats "this item is bad" as a reason to stop, `len(results) == len(readings)` falls out automatically, because every iteration of every loop either sends exactly one `Result` downstream or observes `done` and stops *both* stages together (a closed `done` still short-circuits the whole pipeline on purpose — it's the caller's own signal, not an error condition).
-- **`reciprocal`'s guard is `res.Err == nil && res.Value == 0`, not just `res.Value == 0`.** A `Result` that already failed to parse always has `Value == 0` (the zero value), so checking `Value` alone without also checking that `Err` is still `nil` would silently overwrite a parse error with `ErrDivideByZero` — exactly the "never overwrite an existing error" rule the exercise calls out. `res` is a local copy pulled off the channel; mutating that copy in place and resending it keeps this a single send path instead of two near-duplicate branches (one for "pass through untouched", one for "pass through with `Err` set").
-- **The naive bug is really two walls, and a partial fix only clears the first one.** Against the shipped `readings`, `parse` aborts at index 1 (`"abc"`) before `reciprocal` ever gets a chance to see a `Value` of `0` and abort on its own - so a student who fixes only `parse` and leaves `reciprocal`'s early `return` in place still only gets 1 result back, now for a different underlying reason. Both stages need the same treatment.
-- **Errors are attached with `%w`, not just formatted into a string**, so a caller of `ProcessReadings` could still `errors.Is`/`errors.As` down to the original `*strconv.NumError` if they cared to, even though the exercise itself only asserts `Err != nil` for parse failures.
-- **The pipeline shape itself (one goroutine per stage, connected by an unbuffered channel, each respecting `done` on both the receive and the send side) is unchanged from the naive version** — this exercise isn't about the concurrency plumbing, which was already correct; it's specifically about not treating a bad *item* the same way as a cancellation signal.
+- **Keep `Value` and `Err` in one `Result{Value, Err}` on one channel.** A second `<-chan error` would split one fact across two channels. The consumer would have to match values and errors.
+- **Do not return one batch-level `error`.** That only says "some item failed." It does not name the bad item. It does not say how many items passed.
+- **Do not return from either loop for a bad item.** The loops are `for _, reading := range readings` and `for res := range in`. Return only when `<-done` fires. Each good iteration sends one `Result`. A closed `done` stops both stages on purpose.
+- **The output count must match the input count.** The target is `len(results) == len(readings)`.
+- **Check `res.Err == nil && res.Value == 0`.** A parse failure also leaves `Value == 0`. Check `res.Value == 0` only when `Err` is `nil`. Checking only `Value` would replace the parse error with `ErrDivideByZero`.
+- **A parse failure uses `0` as its default.** It must keep its real error.
+- **Use the local `res` copy.** Change that copy and send it again. This keeps one send path instead of two almost identical branches.
+- **Fix both stages.** The supplied input makes `parse` stop before `reciprocal` reaches a zero value. Fixing only `parse` still produces one result. Both stages need the same change.
+- **Wrap errors with `%w`.** A caller can then use `errors.Is` or `errors.As` to find the original `*strconv.NumError`. The exercise only checks `Err != nil`.
+- **Do not use `panic` or `log.Fatal` for one bad item.** Send a failed `Result` and continue.
+- **Keep the pipeline shape.** It already has one goroutine per stage and an unbuffered channel. Both stages honor `done` on receive and send. The bug is how they treat a bad item, not the concurrency setup.
 
-**Verified**: dropped this `main.go` into a throwaway scratch module (stdlib-only, no dependency on this repo's `go.mod`) alongside the real `check_test.go`, and ran `go build ./...`, `go vet ./...`, then `go test -race -count=5 ./...` — clean, no flakes, across all six tests, including the crux `TestProcessingContinuesPastBadReadings` and the `done`-cancellation pair (`TestPipelineStopsPromptlyOnDone`, `TestPipelineNoGoroutineLeakRace`), which stall both stages mid-send with nobody draining the output before closing `done`, so a `select` that dropped the `case <-done:` arm on the send (or dropped `done`-handling entirely) would hang or run the batch to completion instead of stopping promptly - either way the test fails fast rather than hanging, since every blocking read on the test side is itself guarded by a timeout. Confirmed separately that the *un-fixed* naive `main.go` in `26-pipeline-error-handling/` fails the four error-handling tests with the messages quoted above (the two `done`-cancellation tests pass against it, as expected), and that `go build .`, `go vet .`, and `gofmt -l .` are clean against the naive version too (the exercise must compile and run before a student touches it — it just has to be wrong).
+**Verified:** The naive `main.go` passes `go build .`, `go vet .`, and `gofmt -l .`.
+The fix passes `go build ./...`, `go vet ./...`, and `go test -race -count=5 ./...`.
+All six tests passed every time.
+
+The cancellation tests block both stages while sending. No receiver drains the output before `done` closes. Removing `case <-done:` would hang or run the whole batch. A timeout makes that failure return instead of hanging forever.
+
+The naive version still builds. It passes `go vet` and `gofmt`. It fails only the four error tests. The exercise must compile before a learner starts.
 
 ## Key takeaways
 
-- **A pipeline stage that can fail per-item should never let a bad item cancel the batch.** The book's `Result{Value, Err}` pattern turns "this item failed" into a value flowing down the same channel as everything else, instead of a control-flow event (`return`, `panic`, `log.Fatal`) that the stage's own goroutine reacts to. Only the code that started the pipeline — the one place that actually knows what "acceptable failure rate" or "what to do with a bad reading" means for its use case — gets to decide what happens next.
-- **`done` and "this item is bad" are two completely different signals and must stay that way.** `done` means "the consumer stopped caring, stop everything now." A parse failure means "this one item is bad, tell me about it and keep going." Naive code that funnels both into the same `return` conflates them; the fix is exactly to stop doing that for the second case while keeping it for the first.
-- **When a later stage's "is this valid" check could be confused by an earlier stage's failure sentinel values (like a parse failure's `Value` defaulting to `0`, the same value that's *also* invalid for a real reason), check the upstream `Err` field first.** Downstream stages must treat an already-failed `Result` as opaque and pass it through, not re-validate fields that were never meaningful in the first place.
-- **A single `Result` per input item, always, is what makes a batch pipeline usable at scale.** As soon as the count of outputs can silently drop below the count of inputs, callers lose the ability to tell "item N failed" apart from "item N was never looked at" — which is precisely what the naive version's missing tail of results does.
+- A bad item should not cancel the whole batch. Send an error value on the same channel. Let the caller decide what to do.
+- `done` and a bad item mean different things. `done` means stop now. A bad item means report this item and continue.
+- Check an upstream error before checking zero values. A parse failure may also use zero as its default value.
+- Always return one `Result` per input. Otherwise, the caller cannot tell a failure from a missing item.

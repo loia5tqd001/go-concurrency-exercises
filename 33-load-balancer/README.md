@@ -1,9 +1,8 @@
 # Load Balancer: Self-Scheduling Workers That Report Their Own Load
 
-Modeled on Rob Pike's 2012 "Go Concurrency Patterns" talk: a `Pool` of
-`Worker`s kept as a min-heap ordered by `pending` (current load), so
-`heap.Pop(&pool)` always hands back whichever `Worker` is least loaded
-right now.
+This exercise follows Rob Pike's 2012 Go Concurrency Patterns talk. A
+`Pool` holds `Worker`s in a min-heap ordered by `pending`, the current
+load. `heap.Pop(&pool)` returns the least loaded `Worker` at that moment.
 
 ```
                 dispatch: heap.Pop → least-loaded Worker
@@ -15,14 +14,13 @@ work ─▶ Balance ◀──────────── done ◀────
                                            back on done)
 ```
 
-`Worker.work` (already correct — do not touch) runs requests off its
-own inbox one at a time, then sends itself on `done` to say "I just
-freed up."
+`Worker.work` is already correct. Do not change it. It runs one request
+at a time from its own inbox. It then sends itself on `done` to report
+that it is free.
 
 ## The bug
 
-`Balance`'s select loop only has a `work` case — it never reads
-`b.done`:
+`Balance` only listens on `work`. It never reads `b.done`:
 
 ```go
 func (b *Balancer) Balance(work <-chan Request) {
@@ -33,10 +31,9 @@ func (b *Balancer) Balance(work <-chan Request) {
 }
 ```
 
-That's invisible for a first burst of up to `numWorkers` requests —
-every `Worker` is fresh and nobody needs `done` yet. It wedges the
-instant a request has to route to a `Worker` that already finished its
-first job:
+That is invisible at first. With up to `numWorkers` fresh workers,
+nobody needs `done` yet. The loop wedges when a request goes to a
+`Worker` that has already finished a job.
 
 ```
 Worker finishes 1st request ──▶ done <- w blocks forever (nobody's listening)
@@ -51,16 +48,15 @@ Balance later dispatches a 2nd request to that same Worker:
 
 ## Your task
 
-> **Heads up:** this one also tests `container/heap` at usage level, not
-> just concurrency. "Updates the pool accordingly" means calling
-> `heap.Fix` on the `Worker` that just changed load — not
-> `Pop`+`Push`, and not touching `Pool`'s own methods. If `heap.Fix`
-> is new to you, skim [`container/heap`'s
-> docs](https://pkg.go.dev/container/heap) first; you're using the
-> heap, not reimplementing one.
+> **Heads up:** this exercise also tests `container/heap` at usage level,
+> not just concurrency. "Updates the pool accordingly" means calling
+> `heap.Fix` on the `Worker` whose load changed. Do not use `Pop`+`Push`,
+> and do not change `Pool`'s methods. If `heap.Fix` is new, read
+> [`container/heap`'s docs](https://pkg.go.dev/container/heap). You are
+> using the heap, not rebuilding one.
 
-Fix `Balance` so it also drains `b.done` and updates the pool
-accordingly. Exported surface stays the same:
+Fix `Balance` so it also drains `b.done` and updates the pool. Keep the
+exported surface the same:
 
 ```go
 func NewBalancer(numWorkers int) *Balancer
@@ -71,21 +67,23 @@ You should not need to change `Request`, `Worker`, or `Pool`.
 
 ## A note on `requestBacklogPerWorker`
 
-That constant isn't just a performance knob — it's load-bearing for
-correctness, and its value (`16`) is sized for this exercise's own
-traffic (a burst of a few times `numWorkers`), not derived from
-anything. Shrink it enough relative to the load thrown at a single
-`Worker` and the *fixed* `Balance` above wedges again, in the same
-shape as [the bug](#the-bug) this exercise asks you to fix: `Balance`'s
-dispatch send — `w.requests <- req` — runs inside its own single
-goroutine, so if that send blocks because a `Worker`'s buffer is full,
-`Balance` can't reach its `done` case either, for *any* `Worker` — not
-just the one it's stuck sending to. At `requestBacklogPerWorker = 0`
-this reproduces the original wedge exactly, on the very first request
-that lands on a `Worker` that isn't idle. See
-[33b](../33b-load-balancer-nonblocking-dispatch) for a direct sequel
-that removes the buffer entirely and asks for a `Balance` that's
-correct without one.
+`requestBacklogPerWorker` is not just a speed setting. Correctness
+depends on it. Its value (`16`) fits this exercise's traffic. That
+traffic is a burst a few times larger than `numWorkers`. The value is
+not derived from another rule.
+
+Make the buffer small enough for one `Worker`'s load, and the fixed
+`Balance` wedges again. This has the same shape as
+[the bug](#the-bug) you are fixing. `Balance` sends with
+`w.requests <- req` inside its only goroutine. If a `Worker`'s buffer
+is full, that send blocks. `Balance` cannot reach its `done` case for
+any `Worker`. This is not limited to the blocked `Worker`.
+
+At `requestBacklogPerWorker = 0`, the original wedge returns. It happens
+on the first request to a `Worker` that is not idle. See
+[33b](../33b-load-balancer-nonblocking-dispatch) for a direct sequel.
+That exercise removes the buffer and asks for a correct `Balance`
+without one.
 
 ## Test your solution
 

@@ -93,11 +93,11 @@ const ROUND = K.latency.value;
 const tests = {
   urgent: {
     name: "TestSchedulerPrioritizesUrgentJobs",
-    short: "urgent next",
+    short: "urgent job next",
   },
   ties: {
     name: "TestSchedulerTiesBrokenByArrivalOrder",
-    short: "FIFO ties",
+    short: "priority order",
   },
 } satisfies Record<string, TestDef>;
 
@@ -304,11 +304,11 @@ function wakeModel(): Model {
       completed: completed(1, [3, 1]),
     },
     insight:
-      "With an empty queue the worker releases the mutex and waits on signal. Submit locks, adds the job, unlocks, and signals; the worker wakes, rechecks the queue, then picks the job.",
+      "The queue is empty. The worker releases the mutex and waits on signal. Submit locks, adds the job, unlocks, and signals. The worker wakes, rechecks the queue, and starts the job.",
     stops: [
-      { when: { op: "block", g: "worker" }, say: "The queue is empty. The worker waits on signal, and the mutex is free for Submit." },
-      { when: { op: "notify", g: "test" }, say: "Submit has pushed the job and released the mutex; the signal wakes the parked worker." },
-      { when: { op: "work", g: "worker" }, say: "The worker rechecks the queue, finds the job, and starts it." },
+      { when: { op: "block", g: "worker" }, say: "The queue is empty. The worker waits on signal. Submit can now take the mutex." },
+      { when: { op: "notify", g: "test" }, say: "Submit added the job and released the mutex. The signal wakes the waiting worker." },
+      { when: { op: "work", g: "worker" }, say: "The worker checks again. It finds the job and starts it." },
     ],
     expect: { outcome: "exit", t: ROUND },
   };
@@ -325,7 +325,7 @@ export default defineViz({
       chip: "Today",
       tier: "today",
       summary:
-        "Jobs enter one FIFO channel in arrival order. Job 7 has priority 10, but it still sits behind jobs 2-6 and completes last.",
+        "Jobs enter one FIFO channel in arrival order. Job 7 has priority 10. It still sits behind jobs 2-6 and finishes last.",
       model: {
         nodes: {
           test: urgentTest(),
@@ -335,10 +335,10 @@ export default defineViz({
           completed: fact({ label: "completed", pos: [3, 1], value: 0 }),
         },
         insight:
-          "A channel preserves send order. Job 7 has priority 10, but that number cannot move it ahead of jobs 2-6 once they occupy the tail. Watch the worker finish 1 through 7 in order.",
+          "A channel keeps send order. Job 7 has priority 10. That number cannot move it ahead of jobs 2-6. The worker finishes 1 through 7 in order.",
         stops: [
-          { when: { op: "send", g: "test", node: "jobs", nth: 6 }, say: "Job 7 (priority 10) enters the tail. Its position is already fixed behind jobs 2-6." },
-          { when: { op: "fail", g: "test" }, say: "Job 7 finishes at index 6, behind every low-priority job. The urgent-job test fails." },
+          { when: { op: "send", g: "test", node: "jobs", nth: 6 }, say: "Job 7 (priority 10) enters the queue. It is fixed behind jobs 2-6." },
+          { when: { op: "fail", g: "test" }, say: "Job 7 finishes last, behind every low-priority job. The urgent-job test fails." },
         ],
         tests: { urgent: tests.urgent },
         clock: { unit: "ms" },
@@ -364,7 +364,7 @@ export default defineViz({
       chip: "Goal",
       tier: "goal",
       summary:
-        "The priority-aware worker finishes job 1 without interruption, then takes job 7 before the p1 backlog. Completion is 1, 7, 2, 3, 4, 5, 6.",
+        "The worker finishes job 1 first. It then takes job 7 before the priority 1 backlog. The order is 1, 7, 2, 3, 4, 5, 6.",
       model: {
         nodes: {
           test: fixedUrgentTest(),
@@ -377,10 +377,10 @@ export default defineViz({
           signal: channel({ label: "signal", pos: [2, 2], cap: 0 }),
         },
         insight:
-          "Job 7 does not preempt the job already running. At the next pick it wins on priority, then equal-priority jobs 2-6 retain their arrival order.",
+          "Job 7 does not interrupt the running job. At the next pick, it wins on priority. Jobs 2-6 keep their arrival order.",
         stops: [
-          { when: { op: "set", g: "worker", node: "priority", nth: 2 }, say: "Job 1 has finished. The p10 job is the highest-priority waiting job, so it is picked next." },
-          { when: { op: "send", g: "worker", node: "done", nth: 2 }, say: "Completion order is 1, 7, 2, 3, 4, 5, 6. Job 7 is second and the test passes." },
+          { when: { op: "set", g: "worker", node: "priority", nth: 2 }, say: "Job 1 has finished. Job 7 has the highest priority, so it is picked next." },
+          { when: { op: "send", g: "worker", node: "done", nth: 2 }, say: "The order is 1, 7, 2, 3, 4, 5, 6. Job 7 is second, so the test passes." },
         ],
         tests: { urgent: tests.urgent },
         clock: { unit: "ms" },
@@ -392,7 +392,7 @@ export default defineViz({
       chip: "Ties",
       tier: "inside",
       summary:
-        "Every queued job has priority 5. Priority cannot distinguish them, so the scheduler uses submission sequence and completion stays 1-6.",
+        "Every queued job has priority 5. Priority cannot separate them. The scheduler uses submission order, so completion stays 1-6.",
       model: {
         nodes: {
           test: tiesTest(),
@@ -406,10 +406,10 @@ export default defineViz({
           signal: channel({ label: "signal", pos: [2, 2], cap: 0 }),
         },
         insight:
-          "For equal priorities, Less compares seq. The earliest sequence is the smallest tie-break value, so the heap pops p5 jobs in submission order and the test passes.",
+          "Equal priorities use seq as the tie-break. The earliest sequence is smallest. The heap pops priority 5 jobs in submission order. The test passes.",
         stops: [
-          { when: { op: "set", g: "worker", node: "seq", nth: 1 }, say: "Priority ties, so seq decides. Job 2 has the earliest remaining sequence." },
-          { when: { op: "pass", g: "test" }, say: "The completed strip is 1, 2, 3, 4, 5, 6: equal-priority FIFO is preserved." },
+          { when: { op: "set", g: "worker", node: "seq", nth: 1 }, say: "The priorities tie, so seq decides. Job 2 has the earliest remaining sequence." },
+          { when: { op: "pass", g: "test" }, say: "The completed list is 1, 2, 3, 4, 5, 6. Equal-priority jobs keep submission order." },
         ],
         tests: { ties: tests.ties },
         clock: { unit: "ms" },
@@ -431,7 +431,7 @@ export default defineViz({
       chip: "Wake",
       tier: "inside",
       summary:
-        "An empty queue leaves the worker parked on a signal with the mutex released. Submit wakes it after adding work, and the job runs.",
+        "The queue is empty. The worker waits on signal with the mutex released. Submit adds work and wakes it. The job runs.",
       model: wakeModel(),
     },
   ],

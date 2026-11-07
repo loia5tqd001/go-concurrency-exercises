@@ -1,10 +1,16 @@
 # Suggested Solutions
 
-> **Spoiler warning.** Every file in this folder contains a full worked solution (sometimes two) for one exercise in this repo, including the exact Go code, verified to pass that exercise's own hidden tests (`go test -race`).
+> **Spoiler warning.** Each file has a full solution for one exercise. It
+> includes working Go code. The code passes the exercise tests and
+> `go test -race`.
 >
-> These are meant for when you're stuck, or when you've already solved an exercise and want to compare your approach against another valid one — not as something to read before you've tried the exercise yourself. That's also why these live in their own folder instead of sitting next to each `main.go`: nothing here shows up while you're working in an exercise's directory unless you come looking for it.
+> Use these files when you are stuck. You can also use them to compare
+> answers after you solve an exercise.
 >
-> Each file explains *why* the naive starting code is wrong (sometimes it's a correctness bug, sometimes — as with the fan-out/fan-in exercises — the naive code is already correct and just too slow), walks through one idiomatic fix, and, where a second approach is genuinely different rather than a cosmetic variation, shows that too with its own tradeoffs.
+> Each file explains what is wrong with the starter code. Some starters
+> are incorrect. Some are correct but too slow. Each file then shows a
+> clean fix. A second, different fix appears when it teaches something
+> useful.
 
 ## Index
 
@@ -58,4 +64,8 @@
 
 ## A note on exercises 0-5
 
-Exercises 0 through 5 predate this `solutions/` folder and may already have your own in-progress or finished code sitting in their `main.go`. The write-ups for those five were done independently, from each exercise's original naive starting point (not from whatever you'd already written), so you get a clean reference to compare against rather than a mirror of your own draft.
+Exercises 0 through 5 are older than this `solutions/` folder. Your
+`main.go` may already contain unfinished or finished code.
+
+The write-ups for these exercises start from the original scaffold.
+They do not copy your local code. You can use them as a clean reference.

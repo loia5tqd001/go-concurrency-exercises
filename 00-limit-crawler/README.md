@@ -1,14 +1,11 @@
 # Limit your crawler
 
-Given is a crawler (modified from the Go tour) that requests pages
-excessively. However, we don't want to burden the webserver too
-much. Your task is to change the code to limit the crawler to at most
-one page per second, while maintaining concurrency (in other words,
-Crawl() must be called concurrently)
+The crawler asks for many pages at the same time. This puts too much
+load on the web server. Change the code so it starts at most one page
+request each second. Keep the crawler concurrent.
 
-Right now every `go Crawl(...)` goroutine calls `fetcher.Fetch` the
-moment it runs, so a handful of URLs fan out into a burst of near
-simultaneous requests:
+Right now every `go Crawl(...)` goroutine calls `fetcher.Fetch` as
+soon as it starts. A group of URLs becomes a burst of requests:
 
 ```
 today:  goroutine A ─▶ Fetch (t=0.00s)
@@ -22,13 +19,13 @@ goal:   goroutine A ─▶ Fetch (t=0s) ─┐
         goroutine D ─▶ Fetch ········┘    however many goroutines race for it
 ```
 
-Every goroutine still runs concurrently - only the moment it's allowed
-to call `Fetch` gets serialized through one shared gate.
+The goroutines can still run together. Only the `Fetch` call waits for
+its turn.
 
 ## Hint
 
-This exercise can be solved in 3 lines only. If you can't do
-it, have a look at this:
+You can solve this with three lines. The Go rate-limiting guide is
+here:
 https://go.dev/wiki/RateLimiting
 
 ## Test your solution

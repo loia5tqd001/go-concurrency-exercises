@@ -56,7 +56,7 @@ const CANCELED = 2;
 const timeoutTests = {
   timeout: {
     name: "TestHandleRequestRespectsTimeout",
-    short: "err, < 350 ms",
+    short: "deadline error",
     // errors.Is(err, context.DeadlineExceeded) and elapsed < budget.
     judge: (run: { vars: Readonly<Record<string, number>>; t: number }) => run.vars.err === DEADLINE && run.t < K.budget.value,
   },
@@ -65,7 +65,7 @@ const timeoutTests = {
 const midTests = {
   midway: {
     name: "TestHandleRequestCancelledMidway",
-    short: "err, < 500 ms",
+    short: "cancel error",
     judge: (run: { vars: Readonly<Record<string, number>>; t: number }) => run.vars.err !== undefined && run.t < K.midBudget.value,
   },
 };
@@ -123,7 +123,7 @@ export default defineViz({
       id: "today",
       chip: "Today",
       tier: "today",
-      summary: `The layers get context.Background(), so the ${K.deadline.value} ms deadline passes unseen and all three layers run: ${3 * K.layer.value} ms, no error.`,
+      summary: `The layers use context.Background(). The ${K.deadline.value} ms deadline passes unseen. All three layers run for ${3 * K.layer.value} ms, and no error is returned.`,
       model: {
         nodes: {
           ctx: context({ label: "ctx", pos: [0, 1], deadline: K.deadline.value }),
@@ -138,9 +138,9 @@ export default defineViz({
           timer: timer({ label: "timer", pos: [1, 0], after: K.layer.value }),
           ...factNodes(),
         },
-        insight: `Each layer waits on its timer and on a Background context, which never ends. ctx passes its ${K.deadline.value} ms deadline with no edge from any layer, so every layer runs its full ${K.layer.value} ms and HandleRequest returns "ABC" and no error.`,
+        insight: `Each layer waits on its timer and on a Background context. That context never ends. The ${K.deadline.value} ms deadline passes with no edge from any layer. Every layer runs its full ${K.layer.value} ms. HandleRequest returns "ABC" and no error.`,
         stops: [
-          { when: { op: "fire", node: "ctx" }, say: `The ${K.deadline.value} ms deadline passes. Nothing is listening: the layers hold Background(), not ctx.` },
+          { when: { op: "fire", node: "ctx" }, say: `The ${K.deadline.value} ms deadline passes. Nothing listens, because the layers use Background() instead of ctx.` },
         ],
         tests: timeoutTests,
         clock,
@@ -173,7 +173,7 @@ export default defineViz({
       id: "goal",
       chip: "Goal",
       tier: "goal",
-      summary: `The layers get ctx, so the ${K.deadline.value} ms deadline reaches the layer in flight: it returns ctx.Err() and the other layers are skipped.`,
+      summary: `The layers use ctx. The ${K.deadline.value} ms deadline reaches the layer in flight. It returns ctx.Err(), and the other layers are skipped.`,
       model: {
         nodes: {
           ctx: context({ label: "ctx", pos: [0, 1], deadline: K.deadline.value }),
@@ -188,9 +188,9 @@ export default defineViz({
           timer: timer({ label: "timer", pos: [1, 0], after: K.layer.value }),
           ...factNodes(),
         },
-        insight: `Now the layer waits on its timer and on ctx.Done(). At ${K.deadline.value} ms the deadline wins, the layer returns ctx.Err(), and HandleRequest returns DeadlineExceeded at once. CallLayerB and CallLayerC never start.`,
+        insight: `Now each layer waits on its timer and on ctx.Done(). At ${K.deadline.value} ms, the deadline wins. The layer returns ctx.Err(), and HandleRequest returns DeadlineExceeded at once. CallLayerB and CallLayerC never start.`,
         stops: [
-          { when: { op: "fire", node: "ctx" }, say: `At ${K.deadline.value} ms the deadline passes. The layer in flight sees ctx.Done() before its ${K.layer.value} ms timer and returns ctx.Err().` },
+          { when: { op: "fire", node: "ctx" }, say: `At ${K.deadline.value} ms the deadline passes. The layer sees ctx.Done() before its ${K.layer.value} ms timer. It returns ctx.Err().` },
         ],
         tests: timeoutTests,
         clock,
@@ -201,7 +201,7 @@ export default defineViz({
       id: "cancel",
       chip: "Cancel",
       tier: "inside",
-      summary: `A cancel at ${K.cancelAt.value} ms lands while CallLayerB is in flight: it returns context.Canceled, C is skipped, and the chain ends at ${K.cancelAt.value} ms.`,
+      summary: `The test cancels at ${K.cancelAt.value} ms, while CallLayerB is in flight. B returns context.Canceled, C is skipped, and the chain ends.`,
       model: {
         nodes: {
           test: goroutine({
@@ -230,9 +230,9 @@ export default defineViz({
           resCh: channel({ label: "resCh", pos: [1, 2], cap: 1 }),
           ...factNodes(),
         },
-        insight: `Layer A finishes at ${K.layer.value} ms. Layer B has ${K.cancelAt.value - K.layer.value} ms on its timer when the test cancels ctx, so it returns context.Canceled, C is skipped, and the result reaches the test at ${K.cancelAt.value} ms, well inside ${K.midBudget.value} ms.`,
+        insight: `Layer A finishes at ${K.layer.value} ms. Layer B has ${K.cancelAt.value - K.layer.value} ms left on its timer when the test cancels ctx. B returns context.Canceled, C is skipped, and the result reaches the test at ${K.cancelAt.value} ms. The ${K.midBudget.value} ms budget still has room.`,
         stops: [
-          { when: { op: "cancel", node: "ctx" }, say: `The test cancels ctx at ${K.cancelAt.value} ms, while CallLayerB is waiting on its timer.` },
+          { when: { op: "cancel", node: "ctx" }, say: `The test cancels ctx at ${K.cancelAt.value} ms. CallLayerB is waiting on its timer.` },
         ],
         tests: midTests,
         clock: { unit: "ms", budget: { at: K.midBudget.value, label: "budget" } },

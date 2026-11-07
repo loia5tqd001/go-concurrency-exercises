@@ -1,10 +1,14 @@
 # Tee Channel: Duplicating a Sensor Stream to Two Consumers — Suggested Solutions
 
-> **Spoiler warning.** This file contains full worked solutions for `14-tee-channel/`. Try solving it yourself first — come back here if you're stuck or want to compare approaches.
+> **Spoiler warning.** This file contains full worked solutions for `14-tee-channel/`. Try solving it yourself first. Come back if you are stuck or want to compare approaches.
 
 ## The problem
 
-`StartSensor(count)` (see `mocksensor.go`) emits `count` incrementing integer readings, one every 5ms, then closes its channel. `Tee` is supposed to duplicate every value it reads from `in` onto two independent output channels, so two consumers — say a live display and a logger — can each observe the full, identical sequence in order, even if one of them reads much slower than the other. Closing `done` should make `Tee` abandon everything promptly and close both outputs.
+`StartSensor` in `mocksensor.go` sends `count` increasing readings. The
+signature is `StartSensor(count)`. It sends one every 5ms and then
+closes the channel. `Tee` must copy every value from `in` to two outputs.
+Both consumers need the full order, even if one reads slowly. Closing
+`done` must stop `Tee` and close both outputs.
 
 The naive implementation is:
 
@@ -16,7 +20,11 @@ func Tee(done <-chan struct{}, in <-chan int) (<-chan int, <-chan int) {
 
 ## Why the naive version is wrong
 
-`out1` and `out2` here are literally the same channel as `in`. Every value sent on that channel goes to whichever of the two consumer goroutines happens to win the race to receive it — never both. `check_test.go`'s key test, `TestTeeDuplicatesToBothConsumers`, proves this directly: it runs a fast consumer (drains `out1` as fast as possible) against a slow one (`out2`, sleeping 2ms between reads) and checks both end up with the full `[0..9]` sequence.
+`out1` and `out2` are the same channel as `in`. Each value goes to only
+one receiving goroutine. `TestTeeDuplicatesToBothConsumers` in
+`check_test.go` proves this.
+It drains `out1` quickly and reads `out2` with a 2ms delay. Both must get
+the full `[0..9]` sequence.
 
 Verified against the naive version in a scratch copy:
 
@@ -30,13 +38,23 @@ Verified against the naive version in a scratch copy:
     check_test.go:147: expected out1 to be closed once done fires, got value 4 instead
 ```
 
-The fast consumer steals the odd-indexed values, the slow one gets the even-indexed ones — each is missing exactly half the sequence, so `reflect.DeepEqual` against the expected `[0..9]` fails for both. `TestTeeStopsOnDone` fails for a related reason: since `out1`/`out2` are `in` itself, closing `done` has no effect on it at all — `in` keeps producing values from `StartSensor` regardless, so the very next read returns a real value instead of observing the channel closed.
+The fast consumer gets odd values. The slow one gets even values. Both
+are missing half. `reflect.DeepEqual` against `[0..9]` fails.
+
+`TestTeeStopsOnDone` also fails. `out1` and `out2` are `in`. Closing
+`done` does nothing. The next read returns a sensor value, not a closed
+channel.
 
 ## Approach 1: per-value goroutine, inner select with nil-out-on-send
 
-There's really one idiomatic pattern for `Tee`, so this is the only approach shipped here — a second, genuinely different design isn't really available: you need to hold each value until *both* outputs have received it, and you need an inner loop so a slow reader on one output can't block delivery to the other (or ignore `done`).
+There is only one common shape for `Tee`. Hold each value until both
+outputs receive it. Use an inner loop so one slow reader cannot block
+the other output or ignore `done`.
 
-For each value read from `in`, use two local variables that alias `out1`/`out2` and get **nilled out once that output has received the value** — sending on a nil channel blocks forever, so once an output's variable is nil it simply drops out of the `select` and can never be chosen again for this value. The inner loop keeps going until both variables are nil (both outputs have gotten the value) or `done` fires.
+For each value, make two local variables from `out1` and `out2`. Set
+each one to nil after its output receives the value. A nil channel is
+never ready in a `select`. The inner loop ends when both are nil or
+`done` closes.
 
 ```go {38,42,44}
 package main
@@ -126,18 +144,28 @@ func main() {
 }
 ```
 
-Why this shape specifically:
+Why this shape:
 
-- **One goroutine reading `in`, per-value fan-out inner loop.** Only one goroutine ever touches `in`, so there's no risk of two goroutines racing to read the same value out of `in` (which would just relocate the original bug one level down).
-- **`out1Ch`/`out2Ch` locals, nilled on send, not the real `out1`/`out2`.** Nilling the *local copy* of the channel variable (not the channel itself) removes that branch from future iterations of the inner `select` without affecting the other consumer's view of the channel. A nil channel is never ready in a `select`, so once `out1Ch` is nil, the `select` only has `out2Ch <- v` and `<-done` left to consider.
-- **`done` is checked in both the outer receive and the inner send loop.** Without the inner `case <-done`, a value that's already been delivered to the fast consumer but not yet to a stalled slow consumer would block the whole goroutine forever once `done` closes — exactly what `TestTeeStopsOnDone`/`TestTeeStopsOnDoneRace` are designed to catch.
-- **Both `close(out1)`/`close(out2)` are deferred up front**, so every return path (input exhausted, or `done` fired mid-send) closes both outputs exactly once, letting `range` loops on either side terminate cleanly instead of leaking a goroutine or hanging a consumer.
+- Only one goroutine reads `in`. Two readers could split values again.
+- Set the local `out1Ch` and `out2Ch` to nil, not the real `out1` and
+  `out2`. The `select` then stops choosing that output.
+- Check `done` with `<-done` or `case <-done` while reading and sending.
+  If `done` closes while a slow consumer is unread, the send must still
+  stop. The other send can use `out2Ch <- v`.
+- Defer `close(out1)` and `close(out2)`. Every return path closes both
+  channels once. Consumers can end their `range` loops.
 
-**Verified** in a scratch copy of `14-tee-channel/` (never modifying the live repo directory): the naive `main.go` fails `TestTeeDuplicatesToBothConsumers`, `TestTeeStopsOnDone`, and `TestTeeStopsOnDoneRace` as shown above; swapping in the solution above, `go test -race -count=5 ./...` passes cleanly, 5/5 runs, no data races.
+**Verified:** in a scratch copy, the starting `main.go` failed
+`TestTeeDuplicatesToBothConsumers`, `TestTeeStopsOnDone`, and
+`TestTeeStopsOnDoneRace`. This solution passed
+`go test -race -count=5 ./...` in all 5 runs.
 
 ## Key takeaways
 
-- `return in, in` isn't "duplication" — it's the same channel handed out twice, so consumers race for each value instead of each seeing every value.
-- Tee needs to hold each value until *every* output has received it, with an inner `select` (not a fixed order of blocking sends) so a slow consumer on one output can't stall delivery to a faster one on the other.
-- Nilling out a *local* channel variable per output, per value, is the standard trick for "send to whichever of these haven't received it yet" — a nil channel is never selectable, so it naturally drops out of the `select` once satisfied.
-- `done` must be checked in the inner per-value send loop, not just the outer receive loop — otherwise a value stuck waiting on a stalled/slow consumer can hang the whole goroutine past shutdown.
+- `return in, in` is not duplication. It returns one channel twice.
+- Hold each value until both outputs receive it. Use an inner `select`.
+  Do not use fixed blocking sends.
+- Set each local output variable to nil after delivery. A nil channel is
+  never selected.
+- Check `done` while sending inside the per-value loop. Without it, one
+  stalled consumer can block shutdown.

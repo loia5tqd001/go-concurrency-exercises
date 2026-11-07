@@ -1,15 +1,14 @@
 # Or-Done Channel
 
-`StartMetricStream` (`mockmonitor.go`) simulates a long-lived feed - a
-metrics websocket, a tailed log - that emits one value every 20ms
-forever. It never closes its channel, because it has no way to know
-the consumer stopped listening.
+`StartMetricStream` in `mockmonitor.go` sends one value every 20 ms. It
+can run forever. It never closes its channel. It does not know when the
+reader stops.
 
-`orDone(done, c)` should wrap `c` so a consumer can stop early by
-closing `done`, without leaking the forwarding goroutine or forcing
-every read site to write its own done-aware `select`.
+`orDone(done, c)` should wrap `c` in a new `out` channel. Do not use
+`return c`. Closing `done` must stop the reader. The forwarding
+goroutine must not leak.
 
-Currently `orDone` just does `return c` - a no-op:
+Right now `orDone` uses `return c`. It does nothing:
 
 ```
 Today:   c ──────────────────────────▶ out        (out IS c, literally)
@@ -29,9 +28,8 @@ Goal:    c ──▶ [forwarder goroutine] ──▶ out
 
 ## See the bug by running it
 
-`main.go` reads 5 values, closes `done`, then does one more read on
-`out` with a 200ms timeout to check whether `orDone` actually
-stopped:
+`main.go` reads five values. It closes `done`. Then it waits 200 ms for
+one more value:
 
 ```
 go run .
@@ -44,19 +42,15 @@ done reading, done closed - checking whether orDone actually stopped...
 unexpected: got a value after done closed: 6
 ```
 
-`StartMetricStream`'s goroutine is still ticking every 20ms regardless
-of `done`, so the next value (6) shows up right on schedule instead of
-`out` closing. Once you implement `orDone` for real, that last read
-should instead see `out` closed (`ok == false`).
+The stream still runs. It sends value 6 even after `done` closes. When
+`orDone` works, the last read should get `ok == false`.
 
 ## Your task
 
-Make `orDone` spawn a goroutine that ranges over `c` and forwards each
-value onto a new output channel. Two operations in that goroutine can
-block forever once the other side has walked away - receiving from
-`c`, and sending on the output channel - so both need a `select` that
-also watches `done`. When `done` closes, return promptly and close the
-output channel. Keep the signature:
+Make `orDone` start a goroutine. It should forward values from `c` to a
+new channel. A receive from `c` can block. A send to the output can also
+block. Both operations need a `select` that also watches `done`. When
+`done` closes, return and close the output. Keep the signature:
 
 ```go
 func orDone(done <-chan struct{}, c <-chan int) <-chan int

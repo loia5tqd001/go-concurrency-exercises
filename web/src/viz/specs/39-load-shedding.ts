@@ -38,7 +38,7 @@ const attempts = K.capacity.value + K.workers.value + K.margin.value;
 const tests: Record<string, TestDef> = {
   fast: {
     name: "TestSubmitFailsFastWhenQueueIsFull",
-    short: "returns in time",
+    short: "fails fast",
   },
 };
 
@@ -129,15 +129,15 @@ function model(today: boolean): Model {
       overloaded: fact({ label: "overloaded", pos: [1, 3], value: 0, limit: 1 }),
     },
     insight: today
-      ? `The worker is inside Run, waiting on block. The next Submit caller is still blocked on jobs when the test's ${K.deadline.value} ms per-call timer fires.`
-      : `A Submit caller reaches select with no receiver and no free jobs slot, so default returns ErrOverloaded. The test records it and breaks; it does not try another call.`,
+      ? `The worker is inside Run and waits on block. The next Submit caller is still blocked on jobs. The test's ${K.deadline.value} ms timer fires.`
+      : `A Submit caller reaches select with no receiver and no free jobs slot. The default case returns ErrOverloaded. The test records it and stops. It does not try another call.`,
     stops: today
       ? [
-          { when: { op: "block", g: "worker" }, say: "The worker has taken a job and is inside Run, waiting on block." },
-          { when: { op: "fire", node: "after" }, say: "The per-call deadline fires: the test fails." },
+          { when: { op: "block", g: "worker" }, say: "The worker takes a job and is inside Run, waiting on block." },
+          { when: { op: "fire", node: "after" }, say: "The per-call deadline fires. The test fails." },
         ]
       : [
-          { when: { op: "inc", node: "overloaded" }, say: "No send was ready, so Submit returned ErrOverloaded." },
+          { when: { op: "inc", node: "overloaded" }, say: "No send is ready, so Submit returns ErrOverloaded." },
           { when: { op: "pass", node: "fast" }, say: "The test sees ErrOverloaded and stops trying." },
         ],
     tests,
@@ -175,14 +175,14 @@ export default defineViz({
       id: "today",
       chip: "Today",
       tier: "today",
-      summary: `The per-call Submit goroutine blocks when jobs is full; the test's ${K.deadline.value} ms timer wins and fails the test.`,
+      summary: `The Submit goroutine blocks when jobs is full. The test's ${K.deadline.value} ms timer wins and fails the test.`,
       model: model(true),
     },
     {
       id: "goal",
       chip: "Goal",
       tier: "goal",
-      summary: "Submit tries the channel send once. With no room, default returns ErrOverloaded and the test stops.",
+      summary: "Submit tries the channel send once. With no room, default returns ErrOverloaded. The test stops.",
       model: model(false),
     },
   ],

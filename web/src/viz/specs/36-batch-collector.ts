@@ -78,7 +78,7 @@ const tests: Record<string, TestDef> = {
   },
   wait: {
     name: "TestCollectorFiresOnMaxWaitWithPartialBatch",
-    short: "partial waits",
+    short: "wait timer",
     judge: (run: RunSummary) =>
       run.vars.callCount === 1 &&
       run.vars.got0 === K.request0.value * 2 &&
@@ -298,7 +298,7 @@ export default defineViz({
       id: "today",
       chip: "Today",
       tier: "today",
-      summary: `All ${FULL} callers run doubleFn themselves because scaffold Add calls fn immediately with only its own request.`,
+      summary: `All ${FULL} callers run doubleFn themselves. Scaffold Add calls fn at once with only its own request.`,
       model: {
         nodes: {
           test: goroutine({
@@ -320,7 +320,7 @@ export default defineViz({
           }),
           Call: fact({ label: "Call", pos: [2, 1], value: 0, limit: 1 }),
         },
-        insight: `Every Add bypasses batching. Call reaches ${FULL} for ${FULL} submitted requests, and no caller shares a round-trip with another.`,
+        insight: `Every Add skips batching. Call reaches ${FULL} for ${FULL} requests. No caller shares a round-trip with another.`,
         stops: [
           {
             when: { op: "work", g: "caller", nth: FULL },
@@ -328,7 +328,7 @@ export default defineViz({
           },
           {
             when: { op: "end" },
-            say: `Call is ${FULL}; the test wants 1. The scaffold has no MaxWait or Close path to make batching possible.`,
+            say: `Call is ${FULL}, but the test wants 1. The scaffold has no MaxWait or Close path for batching.`,
           },
         ],
         tests: { full: tests.full! },
@@ -359,7 +359,7 @@ export default defineViz({
       id: "goal",
       chip: "Goal",
       tier: "goal",
-      summary: `${FULL} callers submit into one batch, fn runs once, and every caller receives the response matching its own request.`,
+      summary: `${FULL} callers submit into one batch. fn runs once. Every caller receives the response for its own request.`,
       model: {
         nodes: {
           test: goroutine({
@@ -404,7 +404,7 @@ export default defineViz({
           responses: slice({ label: "responses", pos: [4, 2], size: FULL }),
           Call: fact({ label: "Call", pos: [4, 1], value: 0, limit: 1 }),
         },
-        insight: `All ${FULL} requests enter one batch, and fn runs once after every caller has submitted. It writes one response per request position, then releases all callers.`,
+        insight: `All ${FULL} requests enter one batch. fn runs once after every caller submits. It writes one response per request position. It then releases all callers.`,
         stops: [
           {
             when: { op: "work", g: "fn" },
@@ -412,7 +412,7 @@ export default defineViz({
           },
           {
             when: { op: "put", g: "fn", nth: FULL },
-            say: `All ${FULL} ordered responses are ready. Call stayed at 1.`,
+            say: `All ${FULL} ordered responses are ready. Call stays at 1.`,
           },
         ],
         tests: { full: tests.full! },
@@ -423,7 +423,7 @@ export default defineViz({
       id: "waited",
       chip: "Wait",
       tier: "inside",
-      summary: `Two requests do not reach MaxBatchSize, so the ${K.waitMs.value} ms timer fires one partial batch and delivers both responses.`,
+      summary: `Two requests do not reach MaxBatchSize. The ${K.waitMs.value} ms timer fires one partial batch and delivers both responses.`,
       model: {
         nodes: {
           test: goroutine({
@@ -483,19 +483,19 @@ export default defineViz({
           result1: channel({ label: "result 1", pos: [4, 2], cap: 1 }),
           Call: fact({ label: "Call", pos: [4, 1], value: 0, limit: 1 }),
         },
-        insight: `The second Add joins the open batch, but ${K.waitMs.value} ms pass without reaching ${K.partialMax.value}. The deadline detaches that same b once, and one fn call returns 20 and 40.`,
+        insight: `The second Add joins the open batch. The count stays below ${K.partialMax.value}. At ${K.waitMs.value} ms the deadline removes that same batch from c.batch once. One fn call returns 20 and 40.`,
         stops: [
           {
             when: { op: "go", g: "test", node: "deadline" },
-            say: `The first Add armed this batch's ${K.waitMs.value} ms timer before releasing mu.`,
+            say: `The first Add starts this batch's ${K.waitMs.value} ms timer before releasing mu.`,
           },
           {
             when: { op: "fire", node: "MaxWait" },
-            say: "The partial batch still fires. The deadline path and count path can use the same detach gate.",
+            say: "The partial batch still fires. The deadline and count paths remove the batch in the same place.",
           },
           {
             when: { op: "send", g: "execute", node: "result1" },
-            say: "Both callers receive the response at their own request index in the one batch.",
+            say: "Both callers receive the response for their own request index in the batch.",
           },
         ],
         tests: { wait: tests.wait! },
@@ -512,7 +512,7 @@ export default defineViz({
       chip: "Stop",
       tier: "inside",
       summary:
-        "Stop-before-fire: each count fire stops MaxWait before it runs. This does not exercise a callback that has already started or Stop returning false.",
+        "Each count trigger stops MaxWait before it runs. This scene does not test a callback already running or Stop returning false.",
       model: {
         nodes: {
           test: goroutine({
@@ -542,19 +542,19 @@ export default defineViz({
           results: slice({ label: "results", pos: [5, 2], size: ROLL_SIZE * ROLL_BATCHES }),
           ready: channel({ label: "ready", pos: [4, 3], cap: 0 }),
         },
-        insight: `Stop-before-fire schedule: each wave fills four slots and stops its MaxWait before the callback starts. Each execution writes its four ordered result values; this does not model Stop returning false after a callback has begun.`,
+        insight: `This scene shows the stop-before-fire order. Each wave fills four slots. It stops MaxWait before the callback starts. Each execution writes four ordered results. The scene does not model Stop returning false after a callback starts.`,
         stops: [
           {
             when: { op: "stop", node: "MaxWait" },
-            say: "Reaching MaxBatchSize stops only the current batch's timer before detaching it.",
+            say: "Reaching MaxBatchSize stops only the current batch timer before detaching it.",
           },
           {
             when: { op: "go", g: "callerA", node: "execA" },
-            say: "The count trigger starts execution after Add releases the lock; the next batch may open immediately.",
+            say: "The count trigger starts execution after Add releases the lock. The next batch can open at once.",
           },
           {
             when: { op: "go", g: "callerC", node: "execC" },
-            say: "A and B already fired. C's four requests remain isolated in their own batch and produce the third fn call.",
+            say: "A and B already fired. C's four requests stay in their own batch and produce the third fn call.",
           },
         ],
         tests: { roll: tests.roll! },
@@ -569,7 +569,7 @@ export default defineViz({
       id: "shutdown",
       chip: "Close",
       tier: "inside",
-      summary: `fn is blocked after a full batch fires. Close waits on inflight, times out at ${K.closeDeadline.value} ms, and the fn call still finishes afterward.`,
+      summary: `fn blocks after a full batch fires. Close waits on inflight. It times out at ${K.closeDeadline.value} ms. The fn call still finishes afterward.`,
       model: {
         nodes: {
           test: goroutine({
@@ -657,7 +657,7 @@ export default defineViz({
           ch0: channel({ label: "ch0", pos: [5, 0], cap: 1 }),
           ch1: channel({ label: "ch1", pos: [5, 3], cap: 1 }),
         },
-        insight: `Close sees that the count path already detached the batch, marks the Collector closed, and waits on inflight. At ${K.closeDeadline.value} ms ctx wins, but releasing fn later still sends both results.`,
+        insight: `Close sees that the count path already detached the batch. It marks the Collector closed and waits on inflight. At ${K.closeDeadline.value} ms ctx wins. Releasing fn later still sends both results.`,
         stops: [
           {
             when: { op: "set", node: "closed" },
@@ -665,11 +665,11 @@ export default defineViz({
           },
           {
             when: { op: "wait", g: "waiter", node: "inflight" },
-            say: "The helper goroutine inside Close waits for every fired batch to finish calling fn.",
+            say: "The helper goroutine in Close waits for every fired batch to finish fn.",
           },
           {
             when: { op: "fire", node: "ctx" },
-            say: `At ${K.closeDeadline.value} ms Close returns DeadlineExceeded; inflight is still one, so the fn call keeps running.`,
+            say: `At ${K.closeDeadline.value} ms Close returns DeadlineExceeded. The inflight count is still one, so fn keeps running.`,
           },
         ],
         tests: { close: tests.close! },

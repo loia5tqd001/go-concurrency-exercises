@@ -31,7 +31,7 @@ export function CodePanel({ model, lines, world, focus, onFocus }: Props) {
     <details className="sim-code" open>
       <summary>
         <span className="sim-code-file">{file}</span>
-        <span className="sim-code-hint">A dot marks the line each goroutine is on.</span>
+        <span className="sim-code-hint">The dot shows where each goroutine is.</span>
       </summary>
       <pre className="sim-code-body">
         {lines.map((line, n) => {

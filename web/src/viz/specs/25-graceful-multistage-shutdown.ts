@@ -46,7 +46,7 @@ const tests: Record<string, TestDef> = {
   },
   inflight: {
     name: "TestDoneWaitsForInFlightProcessCall",
-    short: "blocked process",
+    short: "waits on process",
   },
 };
 
@@ -156,11 +156,11 @@ const today = {
     done: channel({ label: "done", pos: [3, 1], cap: 0 }),
   },
   insight:
-    "done closes before Start returns. The test may receive it while workers are still processing jobs, so processed does not protect downstream cleanup.",
+    "done closes before Start returns. The test can receive it while workers still run process. So done cannot protect cleanup that depends on process.",
   stops: [
     {
       when: { op: "close", node: "done" },
-      say: "done closes immediately, with no relationship to the workers or their process calls.",
+      say: "done closes at once. It has no link to the workers or their process calls.",
     },
   ],
   tests: { every: tests.every! },
@@ -224,15 +224,15 @@ const goal = {
     done: channel({ label: "done", pos: [3, 1], cap: 0 }),
   },
   insight:
-    "Closing jobs stops new receives, but workers already inside process keep running. The test observes done only after all four returns, when processed is 20.",
+    "Closing jobs stops new receives. Workers already inside process keep going. The test sees done only after all four workers return. At that point, processed is 20.",
   stops: [
     {
       when: { op: "close", node: "jobs" },
-      say: "The producer has no more work, but some workers may still be inside process. done stays open.",
+      say: "The producer has no more work. Some workers may still be inside process. done stays open.",
     },
     {
       when: { op: "close", node: "done" },
-      say: "The last worker has returned from process. Only now does the test observe done close.",
+      say: "The last worker has returned from process. Only now does done close.",
     },
   ],
   tests: { every: tests.every! },
@@ -253,19 +253,19 @@ const stages = {
     done: channel({ label: "done", pos: [4, 1], cap: 0 }),
   },
   insight:
-    `jobs closing and done closing are separate events. At the first, workers may still be in process. At the second, all ${W} have returned.`,
+    `Closing jobs and closing done are different events. At the first, workers may still be in process. At the second, all ${W} have returned.`,
   stops: [
     {
       when: { op: "wait", node: "workers" },
-      say: "The background waiter blocks on the four workers. Start has already returned its done channel.",
+      say: "The background waiter blocks on the four workers. Start has already returned done.",
     },
     {
       when: { op: "close", node: "jobs" },
-      say: "The range loop ends only after the current process call returns; closing jobs does not interrupt that call.",
+      say: "The range loop ends only after the current process call returns. Closing jobs does not interrupt that call.",
     },
     {
       when: { op: "close", node: "done" },
-      say: "All four calls to Done have happened. The caller may now tear down process output.",
+      say: "All four workers called Done. The caller may now tear down process output.",
     },
   ],
   tests: { every: tests.every! },
@@ -349,19 +349,19 @@ const blocked = {
     timeout: timer({ label: "timeout", pos: [1, 2], after: K.blockedWaitMs.value }),
   },
   insight:
-    "The test closes jobs while one process call is parked on proceed. After 200 ms done is still open; only releasing process lets the last worker return.",
+    "The test closes jobs while one process call waits on proceed. After 200 ms, done is still open. Only releasing process lets the last worker return.",
   stops: [
     {
       when: { op: "recv", g: "worker", node: "proceed" },
-      say: "A worker is inside process. jobs is already closed, but this call is still in flight.",
+      say: "A worker is inside process. jobs is already closed, but this call is still running.",
     },
     {
       when: { op: "fire", node: "timeout" },
-      say: "The test's 200 ms probe expires. done has stayed open, which is the required result.",
+      say: "The test's 200 ms probe expires. done is still open, as required.",
     },
     {
       when: { op: "close", node: "proceed" },
-      say: "The process call returns, its worker exits the range loop, and the final Done lets done close.",
+      say: "The process call returns. Its worker leaves the range loop. The final Done lets done close.",
     },
   ],
   tests: { inflight: tests.inflight! },
@@ -405,7 +405,7 @@ export default defineViz({
       chip: "Today",
       tier: "today",
       summary:
-        "The scaffold closes done before Start returns, so the test sees fewer than 20 completed process calls.",
+        "The scaffold closes done before Start returns. The test sees fewer than 20 completed process calls.",
       model: today,
     },
     {
@@ -413,7 +413,7 @@ export default defineViz({
       chip: "Goal",
       tier: "goal",
       summary:
-        "done closes only after all four workers return and every submitted job has finished processing.",
+        "done closes only after all four workers return. Every submitted job has finished process.",
       model: goal,
     },
     {
@@ -421,7 +421,7 @@ export default defineViz({
       chip: "Stages",
       tier: "inside",
       summary:
-        "Closing jobs stops future work; the workers counter reaches zero only after every in-flight process call finishes.",
+        "Closing jobs stops future work. The workers counter reaches zero only after every process call finishes.",
       model: stages,
     },
     {
@@ -429,7 +429,7 @@ export default defineViz({
       chip: "Blocked",
       tier: "inside",
       summary:
-        "The deterministic test keeps one process call blocked for 200 ms and verifies that done does not close.",
+        "One process call stays blocked for 200 ms. The test checks that done stays open.",
       model: blocked,
     },
   ],

@@ -31,7 +31,7 @@ const ROUND = K.latency.value;
 const tests: Record<string, TestDef> = {
   bounded: {
     name: "TestProcessJobsIsBounded",
-    short: `${K.floor.value} < hwm ≤ ${K.poolMax.value}`,
+    short: "pool bounded",
     // The test reads JobConcurrencyHighWaterMark after ProcessJobs returns.
     judge: (run) => (run.vars.hwm ?? 0) > K.floor.value && (run.vars.hwm ?? 0) <= K.poolMax.value,
   },
@@ -157,18 +157,18 @@ function goal(P: Params): Model {
   const ok = hwm > K.floor.value && hwm <= K.poolMax.value;
   const insight =
     workers <= K.floor.value
-      ? `One worker is a pool in name only: the ${N} jobs still run one at a time, the high-water mark stays at ${hwm}, and the run takes ${t} ms. The test needs more than ${K.floor.value}.`
+      ? `One worker is a pool in name only. The ${N} jobs still run one at a time. The high-water mark stays at ${hwm}, and the run takes ${t} ms. The test needs more than ${K.floor.value}.`
       : workers > K.poolMax.value
-        ? `${workers} workers is one goroutine per job: every job runs at once and the high-water mark reaches ${hwm}, past the ${K.poolMax.value} the test allows. A pool exists to keep this number small.`
-        : `${workers} workers take jobs from the jobs channel as each one frees up, so at most ${workers} run at once however many jobs there are. The ${N} jobs finish at ${t} ms.`;
+        ? `${workers} workers means one goroutine per job. Every job runs at once, and the high-water mark reaches ${hwm}. That is past ${K.poolMax.value}, which the test allows. A pool exists to keep this number small.`
+        : `The workers take jobs as each one frees up. At most ${workers} jobs run at once, however many jobs exist. The ${N} jobs finish at ${t} ms.`;
   return {
     ...pool(workers, false),
     insight,
     stops:
       ok
         ? [
-            { when: { op: "close", node: "jobCh" }, say: `All ${N} jobs are sent and the jobs channel closes. Each worker ends its loop when it has no job left.` },
-            { when: { op: "close", node: "resultCh" }, say: "Every worker is done, so the coordinating goroutine closes the results channel. Now the caller's loop ends." },
+            { when: { op: "close", node: "jobCh" }, say: `All ${N} jobs are sent, and the jobs channel closes. Each worker ends its loop when no job is left.` },
+            { when: { op: "close", node: "resultCh" }, say: "Every worker is done, so the coordinating goroutine closes the results channel. The caller's loop ends." },
           ]
         : [],
     tests,
@@ -188,7 +188,7 @@ export default defineViz({
       id: "today",
       chip: "Today",
       tier: "today",
-      summary: `ProcessJobs runs ${N} jobs one after another on one goroutine, so one RunJob is in flight at a time and the high-water mark stays at 1.`,
+      summary: `ProcessJobs runs ${N} jobs one at a time on one goroutine. One RunJob is in flight, and the high-water mark stays at 1.`,
       model: {
         nodes: {
           caller: goroutine({
@@ -201,11 +201,11 @@ export default defineViz({
           }),
           highWaterMark: fact({ label: "hwm", pos: [1, 0], value: 0, limit: K.poolMax.value }),
         },
-        insight: `Each RunJob waits for the one before it. Never two jobs in flight, so the high-water mark stays at 1 and the ${N} jobs take ${N * ROUND} ms. The test needs more than ${K.floor.value}.`,
+        insight: `Each RunJob waits for the one before it. Two jobs are never in flight, so the high-water mark stays at 1. The ${N} jobs take ${N * ROUND} ms. The test needs more than ${K.floor.value}.`,
         stops: [
           {
             when: { op: "work", nth: 2 },
-            say: `Job 1 starts only now, ${ROUND} ms after job 0 began. The high-water mark has not moved from 1.`,
+            say: `Job 1 starts only now, ${ROUND} ms after job 0 began. The high-water mark is still 1.`,
           },
         ],
         tests,
@@ -229,7 +229,7 @@ export default defineViz({
       id: "goal",
       chip: "Goal",
       tier: "goal",
-      summary: `A few workers pull jobs from one jobs channel and send results to one results channel, so the high-water mark equals the worker count, not the job count.`,
+      summary: "A few workers take jobs from one channel and send results to another. The high-water mark follows the worker count, not the job count.",
       knobs: [{ key: "workers", label: "workers", options: [K.floor.value, K.workers.value, K.poolMax.value, N], value: K.workers.value }],
       model: goal,
     },
@@ -237,13 +237,13 @@ export default defineViz({
       id: "closes",
       chip: "Closes",
       tier: "inside",
-      summary: `Two closes end the pool: close(jobCh) ends the workers, and close(resultCh) after wg.Wait() ends the caller's range loop.`,
+      summary: "The pool has two closes. close(jobCh) ends the workers. close(resultCh), after wg.Wait(), ends the caller's range loop.",
       model: {
         ...pool(K.workers.value, true),
-        insight: `The feeder closes jobCh after the last job, so each worker's range loop ends and the worker calls Done. When the count reaches 0 the closer closes resultCh, and only then does the caller's range loop end.`,
+        insight: "The feeder closes jobCh after the last job. Each worker's range loop ends, and each worker calls Done. When the count reaches 0, the closer closes resultCh. Only then does the caller's range loop end.",
         stops: [
-          { when: { op: "close", node: "jobCh" }, say: "close(jobCh): no job is left, so each worker's range loop ends as soon as it finishes the job it holds." },
-          { when: { op: "close", node: "resultCh" }, say: "close(resultCh) runs on its own goroutine: the caller cannot wait here, it is still draining resultCh." },
+          { when: { op: "close", node: "jobCh" }, say: "close(jobCh) means no job is left. Each worker ends its range loop after its current job." },
+          { when: { op: "close", node: "resultCh" }, say: "close(resultCh) runs on another goroutine. The caller is still draining resultCh, so it cannot wait here." },
         ],
         tests,
         clock: { unit: "ms" },

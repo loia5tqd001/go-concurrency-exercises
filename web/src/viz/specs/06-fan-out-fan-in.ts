@@ -32,13 +32,13 @@ const thumb = (i: number): string => `t${i + 1}`;
 const allIn = (run: RunSummary): boolean => run.world.slice.thumbnails?.every((cell) => cell !== null) === true;
 
 const tests: Record<string, TestDef> = {
-  correctness: { name: "TestGenerateThumbnailsCorrectness", short: "correctness", judge: allIn },
+  correctness: { name: "TestGenerateThumbnailsCorrectness", short: "correct", judge: allIn },
   concurrency: {
     name: "TestGenerateThumbnailsConcurrency",
-    short: `under ${K.budget.value} ms`,
+    short: "time limit",
     judge: (run) => run.t < K.budget.value,
   },
-  race: { name: "TestGenerateThumbnailsConcurrentCorrectness", short: "race-safe", judge: allIn },
+  race: { name: "TestGenerateThumbnailsConcurrentCorrectness", short: "race safe", judge: allIn },
 };
 
 const clock = { unit: "ms", budget: { at: K.budget.value, label: "budget" } } as const;
@@ -54,7 +54,7 @@ export default defineViz({
       id: "today",
       chip: "Today",
       tier: "today",
-      summary: `One goroutine calls ProcessImage ${N} times in a row, so the run takes ${N * K.latency.value} ms.`,
+      summary: `One goroutine calls ProcessImage ${N} times in a row. The run takes ${N * K.latency.value} ms.`,
       model: {
         nodes: {
           caller: goroutine({
@@ -70,11 +70,11 @@ export default defineViz({
           }),
           thumbnails: slice({ label: "thumbnails", pos: [1, 0], size: N }),
         },
-        insight: `One goroutine calls ProcessImage ten times in a row. Each call waits for the one before, so the clock reaches ${N * K.latency.value} ms, three times the ${K.budget.value} ms budget.`,
+        insight: `One goroutine calls ProcessImage ${N} times in a row. Each call waits for the one before. The clock reaches ${N * K.latency.value} ms, three times the ${K.budget.value} ms budget.`,
         stops: [
           {
             when: { op: "append", nth: 1 },
-            say: `The first thumbnail is in at ${K.latency.value} ms. Only now does the second call start.`,
+            say: `The first thumbnail arrives at ${K.latency.value} ms. The second call starts only now.`,
           },
         ],
         tests,
@@ -103,7 +103,7 @@ export default defineViz({
       id: "goal",
       chip: "Goal",
       tier: "goal",
-      summary: `Ten goroutines run ProcessImage at once; the WaitGroup lets the caller return after ${K.latency.value} ms.`,
+      summary: `${N} goroutines call ProcessImage at once. The WaitGroup lets the caller return after ${K.latency.value} ms.`,
       model: {
         nodes: {
           caller: goroutine({
@@ -132,11 +132,11 @@ export default defineViz({
           }),
           thumbnails: slice({ label: "thumbnails", pos: [2, 1], size: N }),
         },
-        insight: `The caller starts one goroutine per URL, so all ten ProcessImage calls overlap. The WaitGroup counts them down and lets the caller return at ${K.latency.value} ms.`,
+        insight: `The caller starts one goroutine per URL. All ${N} ProcessImage calls overlap. The WaitGroup counts them down. The caller returns at ${K.latency.value} ms.`,
         stops: [
           {
             when: { op: "work", g: "worker", nth: N },
-            say: "Ten calls run at once. The caller waits until the WaitGroup counts down to 0.",
+            say: `All ${N} calls run at once. The caller waits until the WaitGroup reaches 0.`,
           },
         ],
         tests,

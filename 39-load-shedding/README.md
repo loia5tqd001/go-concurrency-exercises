@@ -1,11 +1,10 @@
 # Load Shedding: Reject Fast Instead of Blocking the Hot Path
 
-`Queue` is a small, fixed-size pool of workers that process `Job`s
-handed to it via `Submit` - think an application's telemetry client:
-every request calls `Submit` to record a metric, a background pool
-aggregates and ships them somewhere, and this keeps happening for as
-long as the process is up. The one hard rule: recording a metric must
-never slow down the request that triggered it.
+`Queue` is a fixed-size worker pool. It processes `Job`s sent with
+`Submit`. Think of a telemetry client. Each request calls `Submit` to
+record a metric. A background pool groups and sends the metrics. This
+continues while the process runs. One rule is strict: recording a
+metric must not slow the request.
 
 ```
 today:  Submit(job) ──▶ jobs <- job ──▶ blocks until a worker frees up
@@ -20,21 +19,19 @@ goal:   Submit(job) ──▶ room right now? ──yes──▶ queued, returns
                          the metric and moves on, unslowed
 ```
 
-Right now `Submit` is a plain blocking send on a bounded channel. Once
-that channel and every worker are full, the next `Submit` call just
-sits there waiting for *something* to free up. Not a deadlock - the
-workers are still draining - but exactly the failure mode a hot-path
-caller can't afford: it has no idea how long "briefly busy" is going
-to last, and every millisecond it waits is a millisecond stolen from
-the actual request it's supposed to be serving.
+Today, `Submit` does a blocking send on a bounded channel. When the
+channel and every worker are full, the next `Submit` waits. It waits
+for something to free up. This is not a deadlock because workers are
+still draining. But it is exactly what a hot path cannot do. The caller
+does not know how long the wait will last. Every millisecond of waiting
+delays the real request.
 
 ## Your task
 
-Make `Submit` fail fast: the instant `jobs` has no room, return
-`ErrOverloaded` immediately - never block waiting for space to free
-up.
+Make `Submit` fail fast. When `jobs` has no room, return
+`ErrOverloaded` at once. Never wait for room.
 
-Exported surface stays the same:
+Keep the exported surface the same:
 
 ```go
 func NewQueue(workers, capacity int) *Queue
@@ -45,14 +42,15 @@ You should not need to change `Job` or `worker`.
 
 ## Contrast with 18's backpressure
 
-[18](../18-bounded-pipeline-backpressure) is the mirror image of this
-exercise: there, the producer is *supposed* to feel the slowdown, so
-blocking is the right answer. Here, the caller has somewhere better to
-go the instant it can't get in - drop the metric, retry a cheaper
-path, degrade gracefully - so blocking is exactly wrong. Same shape of
-problem (a bounded channel backed by a fixed pool of workers), opposite
-answer to "what happens when it's full?" - which one is correct
-depends entirely on whether the caller is meant to wait.
+[18](../18-bounded-pipeline-backpressure) is the mirror image. There,
+the producer is supposed to feel the slowdown. Blocking is correct.
+Here, the caller has a better option when the queue is full. It can
+drop the metric, retry on a cheaper path, or degrade. Blocking is
+wrong.
+
+Both exercises use a bounded channel and a fixed worker pool. The
+full-queue answer is opposite. The right answer depends on whether the
+caller should wait.
 
 ## Hint, if you're stuck
 
@@ -65,9 +63,9 @@ default:
 }
 ```
 
-`select` + `default` tries the send once; if nothing's ready this
-instant, `default` runs instead of waiting - the standard idiom for
-"try, don't wait."
+`select` with `default` tries the send once. If the channel cannot
+accept the send right now, `default` runs. It does not wait. This is
+the standard try-without-waiting idiom.
 
 ## Test your solution
 

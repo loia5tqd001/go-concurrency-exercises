@@ -1,18 +1,14 @@
 # Context Cancellation & Propagation: A Request Chain That Ignores Its Deadline
 
-Given is `HandleRequest`, which is supposed to call three independent
-downstream layers - `CallLayerA`, `CallLayerB`, and `CallLayerC` (see
-`mocklayers.go`) - in sequence and concatenate their results. Each
-layer is a well-behaved, context-aware dependency: it takes 300ms to
-complete under normal conditions, but returns early with `ctx.Err()`
-the moment the context it's given is cancelled or its deadline
-expires.
+`HandleRequest` calls `CallLayerA`, `CallLayerB`, and `CallLayerC` in
+order. See `mocklayers.go`. Each layer takes about 300 ms. Each layer
+watches the context it receives.
 
-The current implementation ignores the context it receives entirely:
-it calls every layer with `context.Background()` instead of `ctx`, so
-a caller's timeout or cancellation is never actually propagated
-anywhere - each layer always runs its full 300ms regardless, even if
-the caller has already given up.
+It returns early with `ctx.Err()` when that context ends.
+
+The current code ignores `ctx`. It gives each layer a new background
+context. A timeout or cancellation never reaches the layers. Each
+layer always runs for 300 ms.
 
 ```
 today (broken):                      goal (fixed):
@@ -28,10 +24,8 @@ deadline ignored                     reaches every layer call
                                       Canceled instead, C still skipped)
 ```
 
-Your task is to fix `HandleRequest` so that it passes `ctx` (not
-`context.Background()`) into each layer call, so the caller's
-deadline/cancellation actually reaches them and a layer can return
-early via `ctx.Err()` instead of always running its full 300ms.
+Pass `ctx` into each layer. Do not use `context.Background()`. Then a
+cancel or deadline can stop the chain early.
 
 The function signature must stay exactly the same:
 
@@ -41,7 +35,7 @@ func HandleRequest(ctx context.Context) (string, error)
 
 ## Test your solution
 
-To complete this exercise, you must pass the tests:
+Pass these tests:
 
 ```
 go test

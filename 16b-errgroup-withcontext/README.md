@@ -1,8 +1,18 @@
 # errgroup.WithContext: Cancel-on-First-Error
 
-This exercise picks up right where [16](../16-errgroup-failfast) left off. Given is a `Group` whose `Go`/`Wait` pair already does everything 16 asked for — `Go` launches tasks concurrently, tracked via an internal `sync.WaitGroup`, and safely captures the first error via `sync.Once`. What's new here is `WithContext`, meant to mimic `golang.org/x/sync/errgroup.WithContext`: it should hand back a `*Group` alongside a `context.Context` that gets cancelled the instant any task fails, so cooperating siblings can notice via `ctx.Done()` and stop early instead of running to completion regardless — and that also gets cancelled once `Wait` returns, even if every task succeeded, so its resources are never leaked.
+This exercise follows [16](../16-errgroup-failfast). Its `Group`
+already has a working `Go` and `Wait`. `Go` starts tasks at the same
+time and tracks them with `sync.WaitGroup`. `Wait` captures the first
+error with `sync.Once`.
 
-The current `WithContext` just hands back the same `ctx` it was given, completely unchanged:
+The new part is `WithContext`. It should work like
+`golang.org/x/sync/errgroup.WithContext`. It returns a `*Group` and a
+`context.Context`. The context is canceled when any task fails.
+Other tasks can check `ctx.Done()` and stop early. The context is also
+canceled when `Wait` returns, even if every task succeeds. This
+avoids leaving its resources open.
+
+Today, `WithContext` returns `ctx` unchanged:
 
 ```
 today:  WithContext(ctx) ──▶ ctx, unchanged
@@ -16,13 +26,23 @@ goal:   WithContext(ctx) ──▶ child, cancel := context.WithCancel(ctx)
         Wait()          ──▶ cancel() unconditionally ──▶ Context released even on success
 ```
 
-Your task is to fix `WithContext` and wire the two other methods so that:
+Your task is to fix `WithContext` and connect it to the other
+methods:
 
-- `WithContext(ctx context.Context) (*Group, context.Context)` derives a cancelable child `Context` (via `context.WithCancel`) and returns it alongside a new `*Group`.
-- `Go(f func() error)` keeps launching `f` concurrently and capturing the first error exactly as before, but now also cancels the derived `Context` the instant that first error is captured.
-- `Wait() error` keeps waiting for every task and returning the first error exactly as before, but now also cancels the derived `Context` before returning, even when every task succeeded.
+- `WithContext(ctx context.Context) (*Group, context.Context)` creates
+  a cancelable child `Context` with `context.WithCancel`. Return it
+  with a new `*Group`.
+- `Go(f func() error)` still starts `f` at the same time and captures
+  the first error. When it captures that error, it also cancels the
+  child context.
+- `Wait() error` still waits for every task and returns the first
+  error. Before it returns, it cancels the child context, even if
+  every task succeeded.
 
-One thing to hold onto: this is **cooperative** cancellation, same as real `errgroup`. Nothing here can forcibly stop a running goroutine — a task that never selects on `ctx.Done()` keeps running to completion regardless of what `Go`/`Wait` do. "Fail fast" only works for tasks that are themselves written to notice `ctx` and return early.
+Cancellation needs cooperation, just like real `errgroup`. It cannot
+force a goroutine to stop. A task that does not check `ctx.Done()`
+runs until it finishes. Fail-fast only works when each task checks the
+context and returns early.
 
 The signatures must be:
 

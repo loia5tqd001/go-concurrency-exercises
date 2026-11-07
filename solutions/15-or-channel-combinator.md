@@ -1,12 +1,16 @@
-# Or-Channel Combinator: Combining Independent Shutdown Triggers — Suggested Solutions
+# Or-channel combinator: combine shutdown signals
 
-> **Spoiler warning.** This file contains full worked solutions for `15-or-channel-combinator/`. Try solving it yourself first — come back here if you're stuck or want to compare approaches.
+> **Spoiler warning.** This file has full solutions for `15-or-channel-combinator/`. Try the exercise first. Come back if you get stuck.
 
 ## The problem
 
-A service often needs to shut down as soon as ANY of several independent triggers fires — a failed health check, an admin-requested shutdown, a deadline expiring. Each trigger is its own `<-chan struct{}` that gets closed the moment its condition occurs. `or` is supposed to combine an arbitrary, variadic number of such signal channels into a single channel that closes as soon as ANY ONE of the inputs closes — no matter which one, and no matter how many channels there are (including 0 or 1).
+A service may need to stop when any one of several events occurs. Examples include a failed health check, an admin shutdown, or an expired deadline.
 
-The naive implementation only ever watches `channels[0]`:
+Each event has its own `<-chan struct{}`. The channel closes when the event happens. `or` must combine any number of these channels into one output.
+
+The output must close when any input closes. It must work for any input, and for 0 or 1 channels.
+
+The naive version watches only `channels[0]`:
 
 ```go {8}
 func or(channels ...<-chan struct{}) <-chan struct{} {
@@ -22,11 +26,15 @@ func or(channels ...<-chan struct{}) <-chan struct{} {
 }
 ```
 
-## Why the naive version is wrong
+## Why the naive version fails
 
-Closing any channel *other than* `channels[0]` has no effect at all — the combined channel just sits there, blocked forever, even though one of the shutdown triggers already fired. `check_test.go`'s key test, `TestOrFiresOnAnyChannel`, closes `chans[3]` out of 5 and expects `or()` to unblock promptly; `TestOrHandlesManyChannels` does the same with 20 channels, closing index 12.
+If any other input closes, nothing happens. The combined channel stays blocked forever.
 
-Verified against the naive version in a scratch copy:
+`TestOrFiresOnAnyChannel` closes `chans[3]` out of 5. It expects `or()` to return at once. The test lives in `check_test.go`.
+
+`TestOrHandlesManyChannels` uses 20 channels and closes index 12. It has the same expectation.
+
+I ran the naive version in a scratch copy:
 
 ```
 --- FAIL: TestOrFiresOnAnyChannel (0.30s)
@@ -35,11 +43,15 @@ Verified against the naive version in a scratch copy:
     check_test.go:131: or() with 20 channels did not fire within 300ms after channels[12] closed
 ```
 
-Both failures are clean timeouts (the tests guard their blocking receive with `select` + `time.After(300ms)`), not panics — which matters here specifically because these two tests deliberately run on the real clock instead of inside `synctest.Test`. Inside a `synctest` bubble, a goroutine that never unblocks and has no fake time left to advance makes every goroutine in the bubble "durably blocked," which `synctest` reports as a fatal deadlock panic that would crash the whole test binary rather than failing the test cleanly. `TestOrFiresOnFirstChannel` (closes `channels[0]`) and `TestOrHandlesEdgeCases` (0 and 1 channels) pass even against the naive code — they exercise exactly the one case the buggy implementation accidentally gets right, plus edges it doesn't touch at all.
+Both failures are clean timeouts. The tests use `select` and `time.After(300ms)`.
+
+These tests use the real clock, not `synctest.Test`. In a `synctest` bubble, a blocked goroutine with no fake time can mark all goroutines as blocked. `synctest` then crashes the whole test binary with a deadlock panic.
+
+`TestOrFiresOnFirstChannel` and `TestOrHandlesEdgeCases` pass against the naive code. The first test closes `channels[0]`, the one case the bug handles. The second test covers 0 and 1 channels.
 
 ## Approach 1: flat fan-out with `sync.Once` (recommended default)
 
-The simplest design that satisfies every requirement without any recursion: spawn one goroutine per input channel, each racing the shared output channel against its own input, and let `sync.Once` decide who gets to close it.
+This is the simplest design without recursion. Start one goroutine per input. Each goroutine watches its own input and the shared output. `sync.Once` decides which one closes the output.
 
 ```go {17,18,19,20}
 package main
@@ -88,19 +100,31 @@ func main() {
 }
 ```
 
-Why it's correct, including the two base cases the other approaches special-case explicitly:
+Here is why it works, including the 0 and 1 channel cases:
 
-- **Zero channels**: the loop body never runs, so no goroutine ever exists to close `orDone` — it just sits there forever. Same outcome as Approaches 2 and 3 below, reached without a dedicated `case 0` branch.
-- **One channel**: one goroutine is spawned, racing `orDone` against that single channel. If the channel never closes, that goroutine blocks forever — but that's *correct*, not a leak: its lifetime is exactly `or`'s own intended lifetime for this call (if the only input never fires, `or` shouldn't fire either). It does cost one goroutine the README's suggested direct `return channels[0]` avoids entirely, which is this approach's one deviation from the spec's called-out guidance — harmless, just not free.
-- **N > 1**: every goroutine watches `orDone` in addition to its own channel, so whichever channel closes first wins the race for `once.Do`, and every other still-waiting goroutine wakes via the now-closed `orDone` and exits. There's no recursive tree and therefore no orphaning trap to get right in the first place — the same reason Approach 2 (`reflect.Select`) below doesn't need one either.
+- Zero channels: the loop does not run. Nothing closes `orDone`, so it stays open forever. This matches Approaches 2 and 3, without a `case 0` branch.
+- One channel: one goroutine watches `orDone` and that channel. If the input never closes, the goroutine waits forever.
+- That wait is not a leak. The goroutine lives as long as this `or` call. If the only input never fires, `or` must not fire.
+- This version uses one goroutine where the README suggests `return channels[0]`. That is harmless, but it has a cost.
+- N > 1: every goroutine watches `orDone` and its own input. The first input to close wins `once.Do`.
+- The closed `orDone` wakes every other goroutine, and they exit.
+- There is no recursive tree, so there is no orphan trap. Approach 2 has the same benefit.
 
-**Cost.** This spawns exactly N goroutines — one per input channel, always, even for the trivial N=1 case. In exchange, every goroutine's job is identical and symmetric (race my channel against the shared done-signal), it reacts to a winning channel in a single hop (no chain of nested selects to climb, unlike Approach 3 below), and there's no reflection and no recursive leak trap to get right. See Approaches 2 and 3 for how the O(1)-goroutine and recursive alternatives compare.
+This version starts N goroutines, one per input. It pays that cost even when N is 1. All goroutines do the same job.
 
-**Verified** in a scratch copy of `15-or-channel-combinator/` (never modifying the live repo directory): the naive `main.go` fails `TestOrFiresOnAnyChannel` and `TestOrHandlesManyChannels` with clean timeouts (not panics) as shown above, while `TestOrFiresOnFirstChannel` and `TestOrHandlesEdgeCases` already pass. Swapping in the solution above, `go test -race -count=10 ./...` passes cleanly, 10/10 runs, no data races, covering 0, 1, and many (20) channels.
+The result reacts in one hop. There is no nested select chain. It uses no reflection and has no recursive leak trap.
+
+Approaches 2 and 3 show the O(1)-goroutine and recursive alternatives.
+
+I tested this in a scratch copy of `15-or-channel-combinator/`. The naive `main.go` fails the two timeout tests above.
+
+`TestOrFiresOnFirstChannel` and `TestOrHandlesEdgeCases` pass against the naive code. The solution passes `go test -race -count=10 ./...` in all 10 runs.
+
+The run found no data races. It covered 0, 1, and 20 channels.
 
 ## Approach 2: `reflect.Select` over a single flat case list
 
-A genuinely different design for the "more than one channel" case: instead of spawning a goroutine per input channel, construct one `[]reflect.SelectCase` covering *all* N channels up front, and let a single goroutine block on all of them at once via `reflect.Select`.
+This is a different design for more than one channel. Build one `[]reflect.SelectCase` for all N inputs. Then one goroutine blocks on all of them with `reflect.Select`.
 
 ```go {25,35}
 package main
@@ -162,21 +186,34 @@ func main() {
 }
 ```
 
-The two base cases (0 and 1 channels) are identical to Approach 1 for the same reasons given above — those aren't where the two approaches diverge.
+The 0 and 1 channel cases match Approach 1. The approaches differ only for N > 1.
 
-Where they genuinely differ, for N > 1 channels:
+For N > 1 inputs:
 
-- **Goroutine count.** Approach 1 spawns exactly N goroutines, one per input channel, all racing the shared `orDone` against their own channel. Approach 2 spawns exactly **one** goroutine total, regardless of N, blocked in a single `reflect.Select` over a flat, N-case list.
-- **Propagation.** Both are flat, non-recursive designs, so both react to whichever channel wins in a single hop — no chain of nested selects to climb, unlike Approach 3's recursive design below.
-- **Cost tradeoff.** `reflect.Select` has to build a `[]reflect.SelectCase` (one allocation-heavy value per channel) and pay reflection overhead on every call, which Approach 1's compile-time `select` per goroutine doesn't. In exchange, it uses a fixed 1 goroutine instead of N, which starts to matter once N reaches into the thousands.
+- Approach 1 starts N goroutines. Approach 2 starts one goroutine, no matter how large N is.
+- That one goroutine blocks in a flat, N-case `reflect.Select`.
+- Both designs are flat. Both react in one hop. Approach 3 uses a recursive chain.
+- `reflect.Select` builds one allocation-heavy `[]reflect.SelectCase` value per channel. It also pays reflection cost on every call.
+- Approach 1 avoids that cost with a compile-time `select`.
+- Approach 2 uses one goroutine instead of N. This matters when N reaches the thousands.
 
-Both are correct; which one to reach for is a call between "no reflection, compile-time channel typing, O(N) goroutines" (Approach 1) and "O(1) goroutines, at the cost of reflection overhead and losing compile-time channel-type checking" (Approach 2).
+Both designs work. Approach 1 has no reflection, compile-time channel types, and O(N) goroutines.
 
-**Verified** in the same scratch copy, swapping Approach 1's `main.go` for the `reflect.Select` version above: `go test -race -count=10 ./...` passes cleanly, 10/10 runs, no data races — including the 0-channel, 1-channel, and 20-channel (`TestOrHandlesManyChannels`) cases.
+Approach 2 has O(1) goroutines, reflection cost, and no compile-time channel-type check.
+
+I tested the `reflect.Select` version in the same scratch copy. `go test -race -count=10 ./...` passed all 10 runs.
+
+It found no data races. The runs covered 0, 1, and 20 channels, including `TestOrHandlesManyChannels`.
 
 ## Approach 3: recursive divide-and-conquer (the classic textbook idiom)
 
-The idiom most commonly cited for this problem (e.g. Katherine Cox-Buday's *Concurrency in Go*), and the one this exercise's own README walks through: watch `channels[0]` and `channels[1]` directly in a `select`, and fold everything else into a single recursive third branch. It's included here for that reason, and because its leak trap is a genuinely instructive lesson about channel/goroutine lifetime — not because it outperforms Approaches 1 or 2. See the caveats at the end of this section before reaching for it in real code.
+Textbooks often cite this idiom. Katherine Cox-Buday's *Concurrency in Go* uses it. The exercise README also walks through it.
+
+Watch `channels[0]` and `channels[1]` in a `select`. Put all other channels in a recursive third branch.
+
+This section includes it because the README asks for it. Its leak trap also teaches an important lesson about goroutine lifetime. It is not faster than Approaches 1 or 2.
+
+Read the caveats before using it in real code.
 
 ```go {22,35,36,37,42}
 package main
@@ -246,28 +283,71 @@ func main() {
 }
 ```
 
-Why the two base cases matter, not just the recursive step:
+The two base cases matter as much as the recursive step:
 
-- **Zero channels**: nothing to react to. Returning a channel that's never closed is the only sane behavior — there is no trigger to wait for, so the function must not fabricate one that fires on its own.
-- **One channel**: return it directly, don't wrap it in a relay goroutine. A relay (`go func() { defer close(orDone); <-channels[0]; }()`) looks harmless, but it has no way to know when to give up — if that single channel is one of several independent triggers that *doesn't* end up firing (completely normal — only one trigger fires in practice), the relay goroutine blocks on it forever. `TestOrHandlesEdgeCases`'s "one channel" subtest exercises exactly this path.
+- Zero channels: there is no input to watch. Return a channel that never closes. Never invent a trigger.
+- One channel: return it directly. Do not wrap it in a relay goroutine.
+- A relay such as `go func() { defer close(orDone); <-channels[0]; }()` has no way to stop.
+- Usually only one trigger fires. A relay for an input that never closes waits forever.
+- The "one channel" subtest of `TestOrHandlesEdgeCases` covers this path.
 
-The trap in the recursive case, spelled out: if you recurse on plain `or(channels[2:]...)`, and *this* level's `select` happens to fire because of `channels[0]` or `channels[1]` — not the recursive branch — the goroutine spawned by that recursive call is left behind. It's still blocked in its own `select`, waiting on channels further down the list that may never close, forever. That's a goroutine leak on *every single call* where the winning channel isn't in the deepest recursion level — which, for a signal fired somewhere in the middle of a long channel list, is the common case, not a corner case.
+The recursive case has a trap. Suppose the code recurses with `or(channels[2:]...)`.
 
-The fix is to fold this level's own `orDone` into what gets recursed on: `or(append(channels[2:], orDone)...)`. Since `orDone` is closed via `defer` no matter which branch of *this* `select` fires, closing it also unblocks the recursive call's `select` (via its own `<-or(tail...)` branch, which bottoms out on this `orDone`), so that goroutine gets to return and exit instead of being orphaned. The same reasoning applies transitively at every level of the recursion, all the way down — each level's shutdown collapses the ones below it.
+Then this level's `select` fires on `channels[0]` or `channels[1]`, not the recursive branch. The recursive goroutine is left behind.
 
-**Why this isn't better than Approach 1, despite the name.** Despite the "divide-and-conquer" label, this recursion doesn't split the channel list in half each level — it peels off a constant 2 channels (`channels[0]`, `channels[1]`) and folds the remaining N-2 back together with 1 new `orDone`, so the next level always has N-1 channels, not N/2. That makes it a **linear chain**, not a balanced tree: recursion depth is O(N), not O(log N). Total goroutine count still comes out to a fixed **N-1** for N channels — any binary tree combining N leaves has exactly N-1 internal nodes, whether balanced or a straight chain — so it's the same *order* as Approach 1's N, not fewer.
+It still waits on lower channels that may never close. This leaks a goroutine whenever the winner is not in the deepest level.
 
-Worse, the linear shape costs real propagation latency that Approaches 1 and 2 don't pay: if the channel that fires is buried deep in the tail (e.g. `channels[12]` of 20), the "done" signal has to climb one recursion level at a time — the level that directly saw the win closes its own `orDone`, which is exactly what the level above it is blocked selecting on, waking it to close *its* `orDone`, and so on up to the top. That's O(depth) = O(N) sequential goroutine wake-ups in the worst case, versus Approach 1's and Approach 2's O(1) — whichever goroutine sees the winning channel closes the *one shared* output directly, no chain to climb.
+That is common when a signal comes from the middle of a long list.
 
-A genuinely balanced variant exists — split the list in half and recurse on each half (`or(or(left...), or(right...))`) — which gets recursion depth down to O(log N) while keeping the same N-1 total goroutines. That's likely what gets remembered as "halving" when this idiom is discussed: not fewer total goroutines, just a shallower tree. It isn't included here as its own approach because it doesn't change the fundamental trade-off against Approaches 1 and 2 — still O(N) total goroutines, still more code than either — and its one real advantage, shallower depth, is immaterial for the handful of channels this exercise actually combines.
+The fix adds this level's `orDone` to the recursive input: `or(append(channels[2:], orDone)...)`.
 
-**Verified** in the same scratch copy, swapping in the version above: `go test -race -count=5 ./...` passes cleanly, 5/5 runs, no data races, covering 0, 1, and many (20) channels.
+Whichever branch wins, this `select` closes `orDone` through `defer`. The recursive `select` then wakes through its `<-or(tail...)` branch.
+
+That goroutine returns and exits. The same rule applies at every level. Each level's shutdown closes the levels below it.
+
+The "divide-and-conquer" name is misleading. The code does not split the list in half.
+
+It removes two channels, `channels[0]` and `channels[1]`. It combines the other N-2 channels with one new `orDone`.
+
+The next level has N-1 channels, not N/2. This makes a linear chain with O(N) depth, not O(log N) depth.
+
+The code creates N-1 goroutines for N channels. A binary tree with N leaves also has N-1 internal nodes.
+
+This is the same order as Approach 1's N goroutines. It is not fewer.
+
+The linear shape also adds delay. Suppose `channels[12]` of 20 fires.
+
+The signal climbs one level at a time. Each level closes its `orDone`, wakes the level above, and exits.
+
+The worst case is O(depth), which is O(N) wake-ups. Approaches 1 and 2 take O(1), because one goroutine closes the shared output directly.
+
+You can split the list in half and recurse on each half: `or(or(left...), or(right...))`.
+
+That lowers depth to O(log N) and keeps N-1 goroutines. It is the likely source of the "halving" idea.
+
+This doc does not include it as a separate approach. It still has O(N) goroutines and more code. Its shallower depth does not matter for this exercise's small channel counts.
+
+I tested this version in the same scratch copy. `go test -race -count=5 ./...` passed all five runs.
+
+It found no data races. The runs covered 0, 1, and 20 channels.
 
 ## Key takeaways
 
-- Watching only `channels[0]` is a common naive shape for variadic "combine these signals" helpers — it happens to pass any test that only ever closes the first channel, which is why `TestOrFiresOnFirstChannel` alone wouldn't have caught this bug.
-- The 0-channel and 1-channel base cases aren't just tidiness — the 1-channel case in particular has a real trap: wrapping a single passthrough channel in a relay goroutine leaks that goroutine forever whenever the channel it watches is never closed, which is the normal case for one of several independent triggers.
-- A flat fan-out with `sync.Once` (Approach 1) is the simplest correct design: every goroutine's job is identical and symmetric, there's no recursion and therefore no leak trap to get right, and it reacts to a winning channel in a single hop. Its only cost is O(N) goroutines instead of O(1).
-- `reflect.Select` (Approach 2) offers a genuinely different structural tradeoff: one goroutine and one flat N-way select instead of N separate goroutines — same O(1)-hop propagation as Approach 1, at the cost of reflection overhead and an allocation-heavy `[]reflect.SelectCase` built on every call.
-- The classic recursive `or` idiom (Approach 3) is the one most often cited in textbooks and blog posts, and it's what this exercise's README asks for — but despite being called "divide-and-conquer," it peels off a constant 2 channels per level rather than splitting the list in half, making it a linear chain (O(N) depth) rather than a balanced tree (O(log N) depth). It has the same trap either way: recursing on `or(channels[2:]...)` unmodified orphans a goroutine every time the *current* level's select wins on `channels[0]`/`channels[1]` instead of the recursive branch. Folding this level's own `orDone` into the recursive tail (`or(append(channels[2:], orDone)...)`) fixes that, but even fixed, the linear shape means a signal buried deep in the channel list takes O(N) sequential goroutine wake-ups to reach the top-level output — worse than Approaches 1 and 2's O(1). Its value is pedagogical, not performance.
-- Tests that must observe a *hang* (not just a value) can't safely run inside `testing/synctest`'s fake-clock bubble: a goroutine that's supposed to never unblock makes the whole bubble "durably blocked," which `synctest` treats as a fatal deadlock and panics instead of letting the test fail normally. That's why `TestOrFiresOnAnyChannel` and `TestOrHandlesManyChannels` here use the real clock with `select` + `time.After` instead.
+- Watching only `channels[0]` is a common mistake. It passes tests that close only the first channel.
+- `TestOrFiresOnFirstChannel` alone cannot catch the bug.
+- The 0 and 1 channel cases are not just cleanup. A relay for one input leaks when that input never closes.
+- A flat fan-out with `sync.Once` is the simplest correct design.
+- All goroutines do the same job. There is no recursion and no orphan trap. The result reacts in one hop.
+- Its only cost is O(N) goroutines instead of O(1).
+- `reflect.Select` uses one goroutine and one flat N-way select. It reacts in one hop like Approach 1.
+- Its cost is reflection and an allocation-heavy `[]reflect.SelectCase` on every call.
+- The classic recursive idiom uses a constant two channels per level, not two halves.
+- It forms a linear chain with O(N) depth, not a balanced tree with O(log N) depth.
+- Recurse with `or(channels[2:]...)` unchanged, and the current level can orphan a goroutine.
+- The current `select` can win on `channels[0]` or `channels[1]` instead of the recursive branch.
+- Add this level's `orDone` with `or(append(channels[2:], orDone)...)` to fix that leak.
+- A deep winner still needs O(N) wake-ups. Approaches 1 and 2 need O(1).
+- The recursive form is useful for learning, not for speed.
+- Do not use `testing/synctest` to test a hang. A goroutine that never wakes makes the bubble look deadlocked.
+- `synctest` then panics and takes down the test binary.
+- `TestOrFiresOnAnyChannel` and `TestOrHandlesManyChannels` use the real clock, `select`, and `time.After` for this reason.

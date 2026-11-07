@@ -41,12 +41,12 @@ export function DocPane({ summary, exercise, tab, status, onOpenFile }: Props) {
         </a>
         <span className="spacer" />
         {summary.unsupported && (
-          <span className="badge local" title="Tests require local Go">
+          <span className="badge local" title="Tests need Go on your computer">
             local
           </span>
         )}
         {hasViz(id) && (
-          <span className="badge visualisation" title="Animated visualisation">
+          <span className="badge visualisation" title="This exercise has an animation">
             <VisualisationIcon width={11} height={11} /> visual
           </span>
         )}
@@ -86,8 +86,8 @@ export function DocPane({ summary, exercise, tab, status, onOpenFile }: Props) {
         ) : (
           <div className="spoiler">
             <p>
-              <strong>Spoiler.</strong> This is the worked solution for exercise {summary.number}, with the reasoning behind it. Try the
-              exercise first, and come back when you are stuck or want to compare notes.
+              <strong>Spoiler.</strong> This is the full solution for exercise {summary.number}. Try the exercise first. Come back if
+              you get stuck.
             </p>
             <button className="btn primary" onClick={() => setRevealed(true)}>
               Show the solution

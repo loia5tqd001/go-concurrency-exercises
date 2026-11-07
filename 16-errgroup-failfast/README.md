@@ -1,18 +1,15 @@
 # Your Own errgroup: Concurrent Tasks with First-Error Capture
 
-Given is a `Group` type meant to mimic the shape of
-`golang.org/x/sync/errgroup`'s `Group` (implemented here from scratch,
-using only the standard library - no importing that package). `Go`
-registers a task; `Wait` blocks until every registered task has
-finished and returns the first error encountered, if any.
+`Group` copies `Group` from `golang.org/x/sync/errgroup`. Build it
+with the standard library only. Do not import that package. `Go`
+registers a task. `Wait` waits for every task and returns the first
+error, if any.
 
-The current implementation doesn't do what it's supposed to: `Go`
-calls the given function immediately, on the calling goroutine,
-blocking until it returns - so tasks registered via `Go` run one after
-another instead of concurrently, and the shared "first error" field is
-read and written without any synchronization even though real usage
-may call `Go` from multiple goroutines before `Wait`. Start every task
-before calling `Wait`; a `WaitGroup` must not race a new `Add` from zero.
+Today, `Go` runs the function immediately on the caller. It waits for
+the function to return. Tasks therefore run one after another. The
+shared first-error field has no protection either. Real code may call
+`Go` from many goroutines before `Wait`. Start all tasks before
+calling `Wait`. A `WaitGroup` must not race a new `Add` from zero.
 
 ```
 TODAY (1 goroutine)
@@ -27,20 +24,18 @@ GOAL (11 goroutines: 1 caller + 10 workers)
                     +--> t10 100ms --+
 ```
 
-Your task is to fix `Group` so that:
+Your task is to fix `Group`:
 
-- `Go(f func() error)` launches `f` in its own goroutine immediately
-  and returns without blocking, tracking the goroutine via an internal
+- `Go(f func() error)` starts `f` in its own goroutine and returns
+  without waiting. Track the goroutine with an internal
   `sync.WaitGroup`.
-- `Wait() error` blocks until every goroutine launched via `Go` has
-  finished, and returns the first error encountered - captured safely
-  from concurrently running goroutines (e.g. via `sync.Once` or a
-  mutex) even if several tasks fail around the same time, without
-  introducing a data race.
+- `Wait() error` waits for every goroutine started by `Go`. It returns
+  the first error. Capture that error safely if many tasks fail at
+  once. Use `sync.Once` or a mutex. Do not create a data race.
 
-No `context`/cancellation support is needed - keep the scope to the
-plain `Go`/`Wait` pair, matching real errgroup's base `Group` without
-`WithContext`. The signatures must stay the same:
+Do not add `WithContext`, `context`, or cancellation support. Keep
+only `Go` and `Wait`, like the base errgroup `Group`. The signatures
+must stay the same:
 
 ```go
 func (g *Group) Go(f func() error)

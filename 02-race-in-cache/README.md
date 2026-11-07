@@ -1,14 +1,10 @@
 # Race in an LRU Cache
 
-`KeyStoreCache` is an LRU cache: a map for O(1) lookup, plus a
-`container/list.List` that tracks recency so the least-recently-used
-entry can be evicted once the cache fills up. `Get` mutates *both*
-structures with no synchronization at all - including on a cache
-**hit**, which calls `MoveToFront` to mark the entry as most-recently
-used. This is the same shape as a real in-process cache in front of a
-slow backing store (see the production writeups on Mailgun's and
-Allegro's Go caches, linked below) - and production traffic calls
-`Get` from many goroutines at once:
+`KeyStoreCache` has two parts: `cache` and `pages`. `cache` is a map
+for fast lookup. `pages` is a `container/list.List` that tracks recent
+use. `Get` changes both parts and uses no lock. Even a cache hit moves
+the entry to the front of the list. Many goroutines can call `Get` at
+the same time.
 
 ```
 goroutine A: Get("x") hit  ──▶ MoveToFront(e) ─┐
@@ -16,52 +12,42 @@ goroutine B: Get("x") hit  ──▶ MoveToFront(e) ─┼─▶ same list node,
 goroutine C: Get("y") miss ──▶ cache["y"] = e ─┘   no lock → race
 ```
 
-Right now `Get` has zero synchronization:
+Right now `Get` has no synchronization:
 
-- **The map.** One goroutine's `cache[key] = ...` on a miss races any
-  other goroutine's `cache[key]` read - a plain map read concurrent
-  with a write is undefined behavior in Go. `go test --race` reports it
-  as a data race; run without `--race` and with enough concurrent
-  callers it can instead crash outright with "fatal error: concurrent
-  map writes".
-- **The list.** `MoveToFront` on a *hit* and `PushFront`/`Remove` on a
-  *miss* all mutate the same `container/list.List`, which has no
-  locking of its own. This is the easy-to-miss half of the bug: it's
-  tempting to reach for an `RWMutex` that only takes `RLock` on the
-  hit path (since it "just reads" the cache), but the hit path still
-  *writes* to the list via `MoveToFront` - so that fix still races.
+- **The map.** A miss writes `cache[key] = ...`. Another goroutine may
+  read `cache[key]`. This can crash the program.
+- **The list.** Hits and misses both change the same list. A miss calls
+  `PushFront` and `Remove`. A hit calls `MoveToFront`.
+- An `RWMutex` with `RLock` on a hit is unsafe. The hit still writes to
+  the list.
 
 ## Your task
 
-Make `Get` safe to call from any number of goroutines at once, without
-changing its externally observable behavior. The signatures stay the
-same:
+Make `Get` safe for many goroutines. Do not change what callers see.
+Keep the same signatures:
 
 ```go
 func New(load KeyStoreCacheLoader) *KeyStoreCache
 func (k *KeyStoreCache) Get(key string) string
 ```
 
-- No data race on the map or the list (`go test --race`).
-- The cache still holds at most `CacheSize` entries and evicts the
-  least-recently-used one - `cache` and `pages` must always agree on
-  size.
-- Each key is loaded from the database **at most once**. Narrowing the
-  lock to just the map/list bookkeeping and reloading from the
-  database *outside* of it keeps `-race` quiet but breaks this: two
-  goroutines can both miss on the same key before either finishes
-  loading it, each issuing its own DB call.
+- No data race on the map or the list.
+- The cache still holds at most `CacheSize` entries.
+- The cache still removes the least recently used entry.
+- Each key is loaded from the database at most once.
 
-Try to get your test run under 30 seconds - and if you can, under 5.
-*Hint*: the database load is by far the slowest part of `Get`.
+Try to finish the test in under 30 seconds. Under 5 seconds is better.
+Hint: the database call is the slow part of `Get`.
 
 ## Test your solution
+
+Use `go test --race`. The `--race` flag may also appear as `-race`.
 
 ```
 go test --race
 ```
 
-No output means it's correct. A race prints something like:
+No output means the test passed. A race prints something like this:
 
 ```
 ==================

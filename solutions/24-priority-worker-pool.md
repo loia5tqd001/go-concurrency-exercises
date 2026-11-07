@@ -1,10 +1,10 @@
-# Priority Worker Pool: Urgent Jobs Shouldn't Wait Behind a Backlog — Suggested Solutions
+# Priority Worker Pool: Urgent Jobs Should Not Wait Behind a Backlog - Suggested Solutions
 
-> **Spoiler warning.** This file contains full worked solutions for `24-priority-worker-pool/`. Try solving it yourself first — come back here if you're stuck or want to compare approaches.
+> **Spoiler warning.** This file has full solutions for `24-priority-worker-pool/`. Try the exercise first. Come back if you are stuck or want to compare approaches.
 
 ## The problem
 
-The starting point is a `Scheduler` with exactly one worker goroutine, backed by a single buffered channel:
+The starting `Scheduler` has one worker goroutine. It uses one buffered channel:
 
 ```go
 type Scheduler struct {
@@ -24,19 +24,22 @@ func (s *Scheduler) Submit(job Job) {
 }
 ```
 
-`Scheduler` must:
+`Scheduler` must do these things:
 
-- Keep waiting jobs in an internal priority queue (`container/heap` is the natural tool) guarded by a mutex, instead of a plain channel.
-- Whenever the worker finishes a job and needs to pick up the next one, take the **highest-`Priority`** job currently queued.
-- Break ties by earliest submission time — FIFO among jobs of equal priority.
-- Block the worker efficiently (no busy-spin) when the queue is empty, waking as soon as `Submit` adds something.
-- Keep the exported API unchanged: `func NewScheduler() *Scheduler`, `func (s *Scheduler) Submit(job Job)`, `func (s *Scheduler) Completed() <-chan int`.
+- Keep waiting jobs in a priority queue guarded by a mutex. `container/heap` is the natural tool.
+- Pick the **highest-`Priority`** queued job when the worker finishes a job.
+- Use FIFO order for jobs with equal priority.
+- Block without busy-spinning when the queue is empty.
+- Wake when `Submit` adds a job.
+- Keep the API unchanged: `func NewScheduler() *Scheduler`, `func (s *Scheduler) Submit(job Job)`, and `func (s *Scheduler) Completed() <-chan int`.
 
 ## Why the naive version is wrong
 
-`s.jobs` is a plain FIFO channel. Once a job is sent into it, its position relative to every other queued job is frozen — a job's only lever over how soon it runs is *when it was submitted*, never how important it is. A priority-10 job submitted while five priority-1 jobs are already sitting in the channel still has to wait behind all five, because the channel has no way to look past what's already queued and reorder it.
+`s.jobs` is a plain FIFO channel. A sent job keeps its position in the line. Its only ordering rule is submission time. Priority has no effect.
 
-Verified: running the current `check_test.go` against the naive `main.go` in a throwaway scratch copy fails `TestSchedulerPrioritizesUrgentJobs`:
+A priority-10 job can arrive while five priority-1 jobs wait in the channel. It still waits behind all five. The channel cannot reorder jobs already inside it.
+
+Verified: the naive `main.go` fails `TestSchedulerPrioritizesUrgentJobs`:
 
 ```
 --- FAIL: TestSchedulerPrioritizesUrgentJobs (0.15s)
@@ -44,13 +47,18 @@ Verified: running the current `check_test.go` against the naive `main.go` in a t
 FAIL
 ```
 
-Job 7 (priority 10) completes dead last, exactly as the naive FIFO channel guarantees. The other two correctness tests (`TestSchedulerCompletesAllJobs`, `TestSchedulerTiesBrokenByArrivalOrder`) pass against the naive version too, since a strict FIFO channel is trivially "every job runs once" and "ties broken by arrival order" — it only fails the one test that actually exercises reordering by priority.
+Job 7 has priority 10. It finishes last, as the FIFO channel requires. `TestSchedulerCompletesAllJobs` and `TestSchedulerTiesBrokenByArrivalOrder` still pass. A FIFO channel already runs every job and keeps ties in arrival order. Only the priority test fails.
 
 ## A note on the test file: no `testing/synctest` here
 
-Every other exercise's test file in this repo that deals with timing uses `testing/synctest` to fake the clock and run instantly. `24-priority-worker-pool/check_test.go` deliberately does **not** — `NewScheduler` starts a worker goroutine that loops forever (`for job := range s.jobs` in the naive version, and the equivalent unbounded `for { ... }` loop in a fixed version) with no shutdown API at all. `synctest.Test` requires every goroutine reachable from the bubble to eventually block or exit so the fake clock can determine the bubble is idle; a goroutine that runs forever with no way to signal "I'm done" can never let the bubble settle, so `synctest` simply doesn't work here.
+Many timing tests in this repo use `testing/synctest`. This test uses
+the real clock instead.
 
-Instead, the tests use real-clock waits sized against `jobLatency = 20 * time.Millisecond` (mirroring the worker's simulated-work sleep), with a `select` + a 2-second `time.After` safety net around every read from `Completed()` — not because a correct scheduler could ever deadlock (it can't: the worker always makes progress), but purely as a bound on how long a *broken* implementation gets to keep the test alive.
+`24-priority-worker-pool/check_test.go` makes this choice on purpose. `NewScheduler` starts a `worker` that loops forever. It has no shutdown API. The naive worker uses `for job := range s.jobs`. A fixed worker uses an unbounded `for { ... }` loop.
+
+`synctest.Test` needs every reachable goroutine to block or exit. Only then can the fake clock prove the test is idle. A worker that never exits prevents that. `synctest` cannot work here.
+
+`check_test.go` uses real-clock waits based on `jobLatency`. The value is `jobLatency = 20 * time.Millisecond`. Each read from `Completed()` uses `select` and a 2-second `time.After` safety net. A correct scheduler cannot deadlock because its worker always makes progress. The timeout only limits how long a broken solution can hang.
 
 ## Approach 1: `container/heap` + `sync.Cond`
 
@@ -157,17 +165,20 @@ func (s *Scheduler) Completed() <-chan int {
 
 Design notes:
 
-- **`heap.Pop` and the `len(s.queue) == 0` check both happen while `mu` is held.** That's what makes "highest priority currently queued" an atomic, race-free statement — the worker's pick and any concurrent `Submit`'s push can never interleave in a way that lets the worker observe a stale view of the queue.
-- **`for len(s.queue) == 0 { s.cond.Wait() }` is a loop, not an `if`.** `sync.Cond.Wait()` can (rarely) return without a corresponding `Signal` — the classic spurious-wakeup hazard — and more importantly, with only one worker here it's not actually needed for correctness beyond defensive style, but it's the idiomatic, always-correct pattern for consuming from a `Cond`-guarded queue and costs nothing.
-- **`cond.Signal()` is called *after* `mu.Unlock()`.** This is a minor optimization, not a correctness requirement here (`sync.Cond` explicitly allows signaling with or without holding the lock) — it just avoids momentarily waking the worker only for it to immediately block again on the mutex.
-- **The tie-break is encoded directly in `Less`**: compare `Priority` first (descending, for a max-heap), and only fall back to `seq` (ascending) when priorities are equal. Since `nextSeq` is only ever read/written under `mu`, and `Submit` assigns it in submission order, equal-priority jobs come out of the heap in exactly the order they were submitted.
-- **`jobHeap.Pop()`/`Push()` operate on the slice directly** — this is the standard `container/heap` contract: the heap package calls these to move the last/first element, and the caller (`Submit`/`worker`) always goes through `heap.Push`/`heap.Pop`, never appends/truncates the slice directly, so heap invariants are never bypassed.
+- **`heap.Pop` and the empty-queue check both run while `mu` is held.** This makes the pick atomic. A concurrent `Submit` cannot change the queue in the middle of the pick.
+- **Use a loop for `sync.Cond`: `for len(s.queue) == 0 { s.cond.Wait() }`.** The condition is `len(s.queue) == 0`. The call is `sync.Cond.Wait()`.
+- **Do not use an `if`.** A `Cond` wait belongs in a loop. A `Signal`
+  may wake a different waiter. Always recheck the condition after a
+  wake-up. With one `worker`, the loop is defensive, but still correct.
+- **Call `cond.Signal()` after `mu.Unlock()`.** This is only an optimization. `sync.Cond` allows signaling with the lock held. Unlocking first avoids waking the worker just to block it again on the mutex.
+- **`Less` handles the tie-break.** It compares `Priority` first, highest first for a max-heap. It compares `seq` next, lowest first. `Submit` assigns `nextSeq` under `mu`. Equal-priority jobs therefore leave the heap in submission order.
+- **`jobHeap.Pop()` and `Push()` work on the slice directly.** This is the `container/heap` contract. Callers use `heap.Push` and `heap.Pop`. They do not append or truncate the slice directly. The heap invariants stay intact.
 
-**Verified**: copied this exercise into a throwaway scratch directory, confirmed the naive `main.go` fails `TestSchedulerPrioritizesUrgentJobs` (see above), then dropped in this solution. `gofmt -l` is clean, `go vet ./...` is clean, and `go test -race -count=10 ./...` passes repeatably — including `TestSchedulerRace`, which submits 50 jobs from 50 concurrent goroutines to stress-test the heap/mutex pairing.
+**Verified:** `gofmt -l` and `go vet ./...` are clean. `go test -race -count=10 ./...` passes repeatedly. The runs include `TestSchedulerRace`, which submits 50 jobs from 50 goroutines.
 
-## Approach 2: fixed priority-tiered channels (alternative, lighter-weight for a small fixed set of levels)
+## Approach 2: One Channel per Priority Level
 
-A genuinely different mechanism worth knowing about when priorities come from a **small, fixed set of levels** rather than a continuous range: instead of one heap ordered by an arbitrary `Priority` value, keep one plain FIFO channel per priority tier, and have the worker scan the tiers from highest to lowest on every pick.
+This version suits a **small, fixed set of priority levels**. It uses one FIFO channel per level instead of one heap. The worker scans from the highest level to the lowest on every pick.
 
 ```go {48,50,82}
 package main
@@ -261,19 +272,19 @@ func (s *Scheduler) Completed() <-chan int {
 }
 ```
 
-Design notes and honest tradeoffs versus Approach 1:
+Design notes and differences from Approach 1:
 
-- **This is only "highest priority *observed during one scan*," not "highest priority currently queued" — and that's a real, weaker guarantee than Approach 1's.** `tryPick` does a non-blocking pass through 31 channels one at a time; there is no lock held across the whole scan. If a priority-10 job is submitted at the exact moment `tryPick` has already scanned past tier 10 (say it's currently checking tier 3), that job simply waits for the *next* `tryPick` call rather than preempting the one in progress. Approach 1 holds `mu` across the entire pop, so its pick is genuinely atomic with respect to concurrent submissions. This exercise's own tests don't expose the gap — every test enqueues the whole backlog a full `jobLatency` (20ms) before the pick that matters, which is much larger than one scan takes — but it's a real difference a reader should know about before reaching for this design under tighter timing.
-- **Fixed tiers means fixed priority *range*, silently, not just "doesn't scale."** `Submit` clamps any `Priority` outside `[0, numLevels-1]` into the nearest boundary tier. That's not a graceful degradation — a job submitted with `Priority: 32` and one with `Priority: 1000` both land in the same top tier and get FIFO'd against each other as if they had equal priority, silently losing whatever distinction the caller intended. This design is only appropriate when the full set of priority values in use is known ahead of time and small (e.g. "low/normal/high/urgent"), not for an open-ended or continuous priority range — that's exactly what Approach 1's heap handles correctly instead.
-- **Cost shape is the mirror image of Approach 1's**: `numLevels` buffered channels of `levelBuf` capacity each are allocated up front — a fixed ~130KB per `Scheduler` here — regardless of how many jobs are ever actually queued, versus the heap's slice that only grows with actual queued jobs. And `Submit` on this design *blocks* if a single tier's buffer fills up, where the heap-based `Submit` never blocks (an `append` under a mutex, not a channel send). So this alternative trades away the heap's O(log n) push/pop and unbounded/never-blocking `Submit` for simpler code, at the cost of a fixed memory footprint and a `Submit` that can stall under sustained same-tier load.
-- **The `signal` channel is a single-slot "maybe something's ready" flag, not a per-job wake-up.** A buffered channel of capacity 1 with a non-blocking `select`/`default` send from `Submit` means multiple submissions between two worker wake-ups collapse into a single pending signal — that's fine, because the worker always re-scans *all* tiers on `tryPick`, not just the tier that triggered the signal, so nothing is missed; it just avoids an unbounded backlog of no-op wake-ups.
+- **This version finds the highest priority only within one scan.** It does not guarantee the highest priority currently queued. `tryPick` checks 31 channels without holding one lock across the scan. A high-priority job can arrive after its tier was checked. It waits for the next scan. Approach 1 holds `mu` through the whole pop, so its pick is atomic.
+- **Fixed tiers also mean a fixed priority range.** `Submit` clamps values outside `[0, numLevels-1]` to the nearest tier. `Priority: 32` and `Priority: 1000` both become the top tier. They then share FIFO order and lose their difference. This design fits known levels such as "low, normal, high, urgent." It does not fit open-ended priorities.
+- **The memory and blocking costs differ from Approach 1.** This version allocates `numLevels` channels with `levelBuf` capacity up front. That is about 130KB per `Scheduler`, even when no jobs are queued. A heap grows only with queued jobs. `Submit` can also block when one tier is full. The heap version uses `append` under a mutex and does not block.
+- **The `signal` channel is only a wake-up hint.** Its capacity is 1, and `Submit` uses a non-blocking `select` with `default`. Many submissions collapse into one wake-up. That is safe because the worker scans all tiers. It avoids a backlog of useless wake-ups.
 
-**Verified**: same scratch-directory protocol, in a separate throwaway copy from Approach 1. `gofmt -l` is clean, `go vet ./...` is clean, and `go test -race -count=10 ./...` passes repeatably, including `TestSchedulerRace` and `TestSchedulerPrioritizesUrgentJobs`.
+**Verified:** `gofmt -l` and `go vet ./...` are clean. `go test -race -count=10 ./...` passes repeatedly. The runs include `TestSchedulerRace` and `TestSchedulerPrioritizesUrgentJobs`.
 
 ## Key takeaways
 
-- A plain FIFO channel can express "process everything," but never "reorder what's already queued by some property of the item" — once a value is sent, its position is frozen. Priority scheduling needs a data structure that can be reordered after items are already waiting, which is exactly what a mutex-guarded heap (or any structure you can re-scan/re-sort under a lock) gives you and a channel doesn't.
-- `container/heap` needs a type implementing `sort.Interface` plus `Push`/`Pop` operating on the underlying slice — encode the tie-break (submission order) directly in `Less` alongside the primary sort key (priority) rather than as a separate mechanism.
-- `sync.Cond` is the standard tool for "block until some shared, mutex-guarded condition becomes true, then re-check the condition in a loop (never an `if`) once woken" — it composes naturally with a mutex-guarded heap because the same lock protects both the data structure and the condition being waited on.
-- A design that looks "lighter-weight" (plain channels, no `container/heap`) can trade away a correctness property that isn't obvious until you look for it: fixed priority-tiered channels only give you "highest priority observed in one non-atomic scan," not "highest priority currently queued" — a genuine, if narrow, gap versus a properly locked heap. Don't reach for the simpler design without naming that gap explicitly.
-- `testing/synctest` requires every goroutine reachable from the test's bubble to eventually block or exit so the fake clock can detect idleness; a component with a worker goroutine that runs forever and has no shutdown API (as here) is fundamentally incompatible with it, and the test must fall back to real-clock waits with generous timeouts instead.
+- A FIFO channel can process every job. It cannot reorder jobs already queued. A priority queue must reorder waiting jobs under a lock.
+- `container/heap` needs `sort.Interface` and slice-based `Push` and `Pop` methods. Put the priority and FIFO tie-break in `Less`.
+- Use `sync.Cond` to wait for a condition guarded by a mutex. Recheck the condition in a loop after every wake-up.
+- Fixed priority tiers are simpler, but they have a weaker guarantee. They find the highest priority only within one non-atomic scan.
+- `synctest` needs every reachable goroutine to block or exit. A worker with no shutdown API never satisfies that. Use real-clock waits with wide timeouts.

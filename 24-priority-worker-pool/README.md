@@ -1,23 +1,20 @@
 # Priority Worker Pool: Urgent Jobs Shouldn't Wait Behind a Backlog
 
-`Scheduler` runs submitted jobs on exactly one worker goroutine
-(deliberately just one: with a single worker, the order jobs complete
-in is fully determined by the order they're picked up, so there's no
-ambiguity from multiple workers racing to grab the next job). Whenever
-that worker is about to start a new job and more than one is waiting,
-it's supposed to always pick the HIGHEST-`Priority` one - so an urgent
-job submitted after a pile of low-priority ones doesn't have to sit
-behind all of them.
+`Scheduler` runs submitted jobs on exactly one worker goroutine. One
+worker makes the completion order clear. There is no race between
+workers to take the next job.
 
-This builds on the [worker-pool exercise](../11-worker-pool): that one
-hands every job the same treatment and only cares about draining a
-shared queue with several workers running in parallel, in whatever
-order jobs happen to arrive. Here there's only one worker, but the
-queue itself has to be priority-aware.
+The worker must choose the highest-`Priority` job when several are
+waiting. An urgent job must not wait behind low-priority jobs.
 
-Right now it's a plain buffered channel - and a channel can't reorder
-what's already sitting inside it, so as soon as a job is queued behind
-others its `Priority` stops mattering:
+This builds on the [worker-pool exercise](../11-worker-pool). That
+exercise uses several workers. It drains one shared queue in arrival
+order. Here there is only one worker, but the queue must respect
+priority.
+
+Today the queue is a plain buffered channel. A channel cannot reorder
+items that are already queued. Once a job is behind others, its
+`Priority` no longer matters:
 
 ```
 submit order:   1(p1)  2(p1)  3(p1)  4(p1)  5(p1)  6(p1)  7(p10)
@@ -34,15 +31,13 @@ goal - priority queue, ties broken by arrival order:
 
 ## Your task
 
-Reimplement `Scheduler` so waiting work can be reordered instead of
-remaining trapped in channel arrival order. Whenever the worker is
-ready for another job, it must choose the highest-`Priority` job
-currently waiting; ties go to earliest submission time. Design the
-waiting path so an empty scheduler sleeps without busy-polling and
-`Submit` wakes it safely.
+Replace the waiting queue with a priority queue. When the worker is
+ready, it must pick the highest-`Priority` job. If priorities tie, it
+must pick the earliest submitted job. An empty scheduler must sleep
+without busy polling. `Submit` must wake the worker safely.
 
-The exported API must stay exactly the same, so `Scheduler` remains a
-drop-in replacement for the version above:
+The exported API must stay exactly the same. `Scheduler` must remain a
+drop-in replacement:
 
 ```go
 func NewScheduler() *Scheduler
@@ -52,7 +47,7 @@ func (s *Scheduler) Completed() <-chan int
 
 ## Test your solution
 
-To complete this exercise, you must pass the tests:
+The tests must pass:
 
 ```
 go test

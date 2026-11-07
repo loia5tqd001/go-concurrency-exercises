@@ -58,14 +58,14 @@ const SLOWER = 2 * K.interval.value;
 const tests: Record<string, TestDef> = {
   both: {
     name: "TestTeeDuplicatesToBothConsumers",
-    short: "both get 0..9",
+    short: "both get all",
     // reflect.DeepEqual(fast, want) and reflect.DeepEqual(slow, want).
     judge: (run) => run.vars.fast === N && run.vars.slow === N && run.vars.bad === undefined,
   },
 };
 
 const stopTests: Record<string, TestDef> = {
-  stops: { name: "TestTeeStopsOnDone", short: "closes on done" },
+  stops: { name: "TestTeeStopsOnDone", short: "stops on done" },
 };
 
 // The sensor as mocksensor.go writes it: sleep one interval, send, repeat,
@@ -198,10 +198,10 @@ function goal(P: Params): Model {
   const slower = slowMs > K.interval.value;
   const insight =
     slowMs === 0
-      ? `Both readers keep up. The tee goroutine reads each value from in once and sends it to out1 and to out2, so each reader ends with all ${N} values.`
+      ? `Both readers keep up. The tee goroutine reads each value from in once. It sends the value to out1 and out2. Each reader ends with all ${N} values.`
       : slower
-        ? `Reader 2 needs ${slowMs} ms per value, more than the sensor's ${K.interval.value} ms. The tee goroutine holds each value until out2 takes it, and the sensor waits behind it. Reader 2 still gets all ${N}; only the run gets longer.`
-        : `Reader 2 sleeps ${slowMs} ms per value, but is back before the next one arrives. The tee goroutine sends each value to out1 and to out2, so each reader ends with all ${N} values.`;
+        ? `Reader 2 needs ${slowMs} ms per value. That is longer than the sensor's ${K.interval.value} ms. The tee goroutine holds each value until out2 takes it, so the sensor waits. Reader 2 still gets all ${N} values. The run just takes longer.`
+        : `Reader 2 sleeps ${slowMs} ms per value. It is back before the next value arrives. The tee goroutine sends each value to out1 and out2. Each reader ends with all ${N} values.`;
   return {
     nodes: {
       main: goroutine({ label: "main", pos: [4, 1], main: true, program: mainProgram(true) }),
@@ -236,7 +236,7 @@ export default defineViz({
       id: "today",
       chip: "Today",
       tier: "today",
-      summary: `Tee returns in twice, so both readers receive from one channel: each value reaches one reader, and neither list holds all ${N}.`,
+      summary: `Tee returns in twice, so both readers use one channel. Each value reaches one reader. Neither list holds all ${N}.`,
       model: {
         nodes: {
           main: goroutine({ label: "main", pos: [2, 1], main: true, program: mainProgram(false) }),
@@ -247,10 +247,10 @@ export default defineViz({
           fast: slice({ label: "fast", pos: [3, 0], size: N }),
           slow: slice({ label: "slow", pos: [3, 2], size: N }),
         },
-        insight: `out1 and out2 are the same channel as in. Whichever reader receives a value first gets it, and the other never sees it, so the two lists split the stream and neither holds all ${N}.`,
+        insight: `out1 and out2 are the same channel as in. The first reader to receive a value gets it. The other reader never sees it. The two lists split the stream, and neither holds all ${N}.`,
         stops: [
           { when: { op: "append", nth: 1 }, say: "One reader got this value. The other reader will never see it." },
-          { when: { op: "end" }, say: `The sensor closed in. Each reader's list is missing values, and the test fails.` },
+          { when: { op: "end" }, say: `The sensor closed in. Each reader's list is missing values. The test fails.` },
         ],
         tests,
         clock: { unit: "ms" },
@@ -268,7 +268,7 @@ export default defineViz({
       id: "goal",
       chip: "Goal",
       tier: "goal",
-      summary: `One tee goroutine reads in and sends every value to out1 and to out2, so each reader gets all ${N} values, even a slow one.`,
+      summary: `One tee goroutine reads in. It sends every value to out1 and out2. Each reader gets all ${N} values, even a slow one.`,
       knobs: [{ key: "slowMs", label: "reader 2 (ms)", options: [0, K.slowMs.value, SLOWER], value: K.slowMs.value }],
       model: goal,
     },
@@ -276,7 +276,7 @@ export default defineViz({
       id: "done",
       chip: "Done",
       tier: "inside",
-      summary: `Under TestTeeStopsOnDone, close(done) ends the tee, and it closes out1 and out2 in the same instant. The sensor, which the test owns, is left blocked.`,
+      summary: "Under TestTeeStopsOnDone, close(done) ends the tee. It closes out1 and out2 at the same instant. The test's sensor is left blocked.",
       model: {
         nodes: {
           main: goroutine({
@@ -305,10 +305,10 @@ export default defineViz({
           out1: channel({ label: "out1", pos: [3, 0], cap: 0 }),
           out2: channel({ label: "out2", pos: [3, 2], cap: 0 }),
         },
-        insight: `The test reads two rounds, then closes done. The tee goroutine is waiting in its outer select, so the done case fires and its deferred closes shut out1 and out2 at once. The sensor still has ${K.stopItems.value - 2} values and now nobody to send to: the red leak line is that test sensor, not Tee, and the test passes.`,
+        insight: `The test reads two rounds, then closes done. The tee goroutine is waiting in its outer select, so the done case fires. Its deferred closes shut out1 and out2 at once. The sensor still has ${K.stopItems.value - 2} values, and nobody will read them. The red leak line is the test sensor, not Tee. The test passes.`,
         stops: [
-          { when: { op: "close", node: "done" }, say: "The test closes done after two rounds of reads. The tee goroutine is waiting for the next value from in." },
-          { when: { op: "close", node: "out1" }, say: "The done case fires, the goroutine returns, and its deferred closes shut both outputs." },
+          { when: { op: "close", node: "done" }, say: "The test closes done after two rounds of reads. The tee goroutine waits for the next value from in." },
+          { when: { op: "close", node: "out1" }, say: "The done case fires. The goroutine returns and closes both outputs." },
         ],
         tests: stopTests,
         clock: { unit: "ms" },

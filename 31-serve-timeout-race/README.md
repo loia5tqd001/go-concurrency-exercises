@@ -1,17 +1,16 @@
 # Serve Timeout Race: First-Wins Response Under a Deadline
 
-Given is `Serve`, a small stand-in for the server side of an RPC
-framework: it's handed a `ctx` carrying the caller's deadline and a
-`handler` that does the real work, and it's supposed to return by that
-deadline no matter what the handler does.
+`Serve` is a small stand-in for the server side of an RPC framework. It
+gets a `ctx` with the caller's deadline and a `handler` that does the
+work. It must return by the deadline, whatever the handler does.
 
-The catch is the handler's signature: `func() (string, error)` - it
-takes no `ctx` at all. That's deliberate. It represents legacy or
-simply synchronous business logic that has no way to cooperatively
-notice a cancellation, the same way a plain `time.Sleep` or a tight
-CPU loop can't. `Serve` can't reach into it and stop it early; all it
-can do is stop *waiting* for it once the deadline passes, and hand the
-caller a timeout error instead of the handler's eventual result.
+The handler signature is `func() (string, error)`. It takes no `ctx`.
+This is deliberate. It stands for old or synchronous logic that cannot
+notice cancellation. A plain `time.Sleep` or tight CPU loop behaves the
+same way.
+
+`Serve` cannot stop the handler early. It can stop waiting after the
+deadline. It then returns a timeout error instead of the later result.
 
 ```
 today (broken):                        goal:
@@ -30,11 +29,9 @@ Serve(ctx, handler)                    Serve(ctx, handler)
 
 ## Your task
 
-Fix `Serve` so that it returns by `ctx`'s deadline (with `ctx.Err()`)
-if the handler hasn't finished by then, without ever blocking on the
-handler for longer than that - while still letting the handler's real
-result through if it finishes first. The function signature must stay
-exactly the same:
+Fix `Serve`. If the handler has not finished by the deadline, return
+`ctx.Err()`. Do not wait longer. If the handler finishes first, return
+its real result. Keep the signature exactly the same:
 
 ```go
 func Serve(ctx context.Context, handler func() (string, error)) (string, error)
@@ -42,7 +39,7 @@ func Serve(ctx context.Context, handler func() (string, error)) (string, error)
 
 ## Test your solution
 
-To complete this exercise, you must pass the tests:
+The tests must pass:
 
 ```
 go test

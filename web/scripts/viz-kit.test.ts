@@ -230,7 +230,7 @@ test("main returning while another goroutine is blocked is a leak", () => {
   );
   assert.equal(run.outcome, "leak");
   assert.equal(run.world.g.gen!.status, "leaked");
-  assert.match(run.verdict, /^Leak: gen is blocked on out <-/);
+  assert.match(run.verdict, /^The program leaked a goroutine\. gen is blocked on out <-/);
 });
 
 test("main blocked with nothing left to wake it is a deadlock", () => {
@@ -261,8 +261,8 @@ test("main blocked with nothing left to wake it is a deadlock", () => {
   );
   assert.equal(run.outcome, "deadlock");
   assert.equal(run.world.g.p!.status, "deadlocked");
-  // Two goroutines each hold the lock the other wants: the verdict names the ring.
-  assert.match(run.verdict, /^Deadlock: (p → q → p|q → p → q),/);
+  // Two goroutines each hold the lock the other wants.
+  assert.match(run.verdict, /^Deadlock\. (p waits for q, q waits for p|q waits for p, p waits for q)\./);
 });
 
 test("endless work stops at until and reads as a timeout", () => {

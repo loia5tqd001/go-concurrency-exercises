@@ -95,7 +95,7 @@ export default defineViz({
       id: "today",
       chip: "Today",
       tier: "today",
-      summary: `The steward hands the ward's heartbeat straight back. After ${wedgeAfter} pulses the ward wedges, and the caller hears nothing until its ${K.deadlineS.value} s deadline.`,
+      summary: `The steward returns the ward's heartbeat directly. The ward wedges after ${wedgeAfter} pulses. The caller hears nothing until its ${K.deadlineS.value} s deadline.`,
       model: {
         nodes: {
           done: channel({ label: "done", pos: [1, 1], cap: 0 }),
@@ -124,15 +124,15 @@ export default defineViz({
           }),
           deadline: timer({ label: "deadline", pos: [2, 1], after: deadlineMs }),
         },
-        insight: `The caller reads the ward's own heartbeat, and the ward got the caller's own done. After ${wedgeAfter} pulses the ward wedges; nothing notices and nothing starts another, so received stays at ${wedgeAfter}.`,
+        insight: `The caller reads the ward's own heartbeat. The ward gets the caller's own done. After ${wedgeAfter} pulses the ward wedges. Nothing notices or starts a new ward. The received count stays at ${wedgeAfter}.`,
         stops: [
           {
             when: { op: "return", g: "ward" },
-            say: `After ${wedgeAfter} pulses ward-1 wedges and goes silent. Nothing watches it, so nothing starts another.`,
+            say: `The first ward wedges after ${wedgeAfter} pulses and goes silent. Nothing watches it, so no new ward starts.`,
           },
           {
             when: { op: "fire", node: "deadline" },
-            say: `At ${deadlineMs} ms the deadline fires with ${wedgeAfter} of ${wantPulses} pulses: the restart test fails.`,
+            say: `At ${deadlineMs} ms the deadline fires with ${wedgeAfter} of ${wantPulses} pulses. The restart test fails.`,
           },
         ],
         tests: { restart: { name: "TestStewardRestartsWedgedWard", short: "restart" } },
@@ -154,7 +154,7 @@ export default defineViz({
       id: "goal",
       chip: "Goal",
       tier: "goal",
-      summary: `A steward forwards every pulse and, ${timeoutMs} ms after the last one, closes the wedged ward's wardDone and starts a fresh generation.`,
+      summary: `A steward forwards every pulse. If no pulse arrives for ${timeoutMs} ms, it closes wardDone and starts a fresh ward.`,
       model: {
         nodes: {
           ward: goroutine({ label: "ward", pos: [0, 0], count: gens, base: 1, spawned: true, program: wardProgram(() => "wardDone") }),
@@ -221,7 +221,7 @@ export default defineViz({
           timeout: timer({ label: "timeout", pos: [2, 1], after: timeoutMs }),
           done: channel({ label: "done", pos: [3, 1], cap: 0 }),
         },
-        insight: `Each pulse resets the steward's ${timeoutMs} ms timeout. When a generation wedges, the timeout fires: the steward closes its wardDone without waiting, makes a fresh one, and starts the next generation.`,
+        insight: `Each pulse resets the ${timeoutMs} ms timeout. When a ward wedges, the timeout fires. The steward closes wardDone without waiting. It makes a fresh one and starts the next ward.`,
         stops: [
           {
             when: { op: "return", g: "ward" },
@@ -229,11 +229,11 @@ export default defineViz({
           },
           {
             when: { op: "go", g: "steward" },
-            say: `At ${genStart(1)} ms the timeout fires: the steward closes wardDone, makes a fresh one, and starts ward-2.`,
+            say: `At ${genStart(1)} ms the timeout fires. The steward closes wardDone, makes a fresh one, and starts ward-2.`,
           },
           {
             when: { op: "return", g: `ward[${gens - 1}]` },
-            say: `${wantPulses} pulses in, the caller closes done. The steward closes wardDone and stops; ward-${gens} returns.`,
+            say: `After ${wantPulses} pulses the caller closes done. The steward closes wardDone and stops. ward-${gens} returns.`,
           },
         ],
         tests: { restart: { name: "TestStewardRestartsWedgedWard", short: "restart" } },

@@ -1,11 +1,10 @@
 # Batch Collector: A Reusable Batcher With a Deadline and a Real Shutdown
 
-`Collector` lets many independent, concurrent callers each get back
-their own result from a batch API, while the API itself only gets
-called once per batch - and it keeps doing this indefinitely, the way
-a real batching client (a Kafka producer's `linger.ms`, a Google
-Pub/Sub publisher's `DelayThreshold`/`CountThreshold`, Segment's
-analytics client) actually runs in production, not just once and done:
+`Collector` combines requests from many concurrent callers. Each caller
+gets its own result. The batch API is called once per batch. The
+collector keeps running. Real batching clients work this way. Examples
+include a Kafka producer's `linger.ms`, a Google Pub/Sub publisher's
+`DelayThreshold`/`CountThreshold`, and Segment's analytics client:
 
 ```
 Add(order 0) ─┐
@@ -16,61 +15,58 @@ Add(order 2) ─┘    MaxWait elapses since the batch's 1st Add   then a fresh
                                        response
 ```
 
-Picture 30 goroutines each needing a shipping quote for their own
-order, from a quoting API that supports batches (send N orders, get N
-quotes) but charges a full round-trip per call regardless of size -
-and this keeps happening for as long as the service is up, not just
-once. One batched call per burst is the efficient move - but the
-goroutines don't know about each other, don't know when a batch is
-"full," and a batch that's still short when traffic goes quiet can't
-just wait forever either: every caller needs an answer within some
-bounded latency, full batch or not. And when the process is shutting
-down, it needs to stop taking new orders, finish whatever's already
-queued, and say so - not silently drop requests or hang forever.
+Picture 30 goroutines. Each needs a shipping quote for its own order.
+The quoting API accepts a batch. It returns N quotes for N orders. It
+charges one full round trip per call, whatever the batch size. The
+service keeps running.
 
-Right now `Collector` doesn't batch anything at all:
+One batched call per burst is efficient. But the goroutines do not know
+about each other. They do not know when a batch is full. Traffic may go
+quiet with a short batch. Still, every caller needs an answer within a
+bounded wait. The collector must batch a full or partial set.
 
-- `Add` calls `fn` immediately, with a "batch" of exactly the one
-  request it was given - the entire "coalesce many callers into one
-  round-trip" idea this exercise is about doesn't exist yet.
-- `MaxBatchSize` and `MaxWait` are both accepted in `Config` and never
-  looked at.
-- `Close` returns `nil` immediately. It doesn't stop `Add` from still
-  accepting requests, doesn't fire anything, and doesn't wait for
-  anything.
+At shutdown, the collector must stop new orders. It must finish queued
+work. It must report when everything is done. It must not drop requests
+or hang.
+
+Today, `Collector` does not batch anything:
+
+- `Add` calls `fn` at once. It sends a "batch" with only its one request.
+  The core idea, combining callers into one round trip, does not exist.
+- `Config` accepts `MaxBatchSize` and `MaxWait`. The code never reads
+  them.
+- `Close` returns `nil` at once. It still accepts requests, fires
+  nothing, and waits for nothing.
 
 ## Your task
 
 Fix `Collector` so that:
 
-- `Add(request int) <-chan Result` registers `request` as part of
-  whichever batch is currently open and returns a channel that
-  receives exactly one `Result` once that batch runs.
-- `Add` is safe to call concurrently, from any number of goroutines,
-  for as long as the `Collector` hasn't been closed.
-- A batch fires - runs `fn` exactly once, with every request queued
-  into it so far, in call order - the moment **either** its
-  `MaxBatchSize`-th request arrives **or** `MaxWait` has elapsed since
-  its first request, whichever happens first. Whichever trigger wins,
-  `fn` must run exactly once for that batch - never zero, never twice.
-- The instant one batch fires, the `Collector` opens a fresh one and
-  keeps working indefinitely, for as many batches as callers keep
-  submitting. Every caller gets back the `Result` at `fn`'s response
-  index matching the position **its own** request ended up at in
-  **its own** batch - never another caller's, and never a different
-  batch's.
+- `Add(request int) <-chan Result` adds `request` to the current open
+  batch. It returns a channel. That channel receives exactly one
+  `Result` when the batch runs.
+- `Add` must be safe for concurrent calls from any number of goroutines.
+  This lasts until the collector closes.
+- Normally, a batch fires when one of two triggers wins. The triggers
+  are reaching `MaxBatchSize` or waiting `MaxWait` since its first
+  request. It then runs `fn` once, with all requests so far, in call
+  order. Each batch must call `fn` exactly once. Never zero, never
+  twice.
+- When a batch fires, a fresh batch opens at once. This continues for
+  as many batches as callers submit. Each caller gets the result at the
+  index of its own request. It must not get another caller's result or
+  another batch's result.
 - If `fn` errors, every caller in that batch gets that same error.
-- `Close(ctx) error` stops the `Collector` from accepting any further
-  `Add` calls (each gets `ErrCollectorClosed` immediately instead),
-  fires whatever's currently queued as one last partial batch instead
-  of abandoning it, and blocks until every batch it ever started has
-  actually finished running `fn` - or returns `ctx`'s error if `ctx` is
-  done first, the same shape as `net/http`'s own
+- `Close(ctx) error` stops new `Add` calls. Each later call returns
+  `ErrCollectorClosed` at once. `Close` fires the queued requests as one
+  last partial batch. It does not discard them. It waits until every
+  started batch has finished calling `fn`. If `ctx` ends first, it
+  returns `ctx`'s error. This matches `net/http`'s
   [`Server.Shutdown(ctx)`](https://pkg.go.dev/net/http#Server.Shutdown).
-  `Close` is safe to call more than once, and concurrently with `Add`
-  and with itself.
+- `Close` must be safe for repeated calls. It must also be safe when
+  called at the same time as `Add` or another `Close`.
 
-Signatures stay the same:
+Keep the signatures the same:
 
 ```go
 func NewCollector(cfg Config, fn BatchFunc) *Collector
@@ -80,12 +76,11 @@ func (c *Collector) Close(ctx context.Context) error
 
 ## The double-fire trap
 
-A batch can be fired by whichever of **three** things happens first:
-its count trigger, its own deadline timer, or `Close`. All three must
-agree on "whoever gets there first, exactly once" - two of them
-racing to observe "this batch just reached its trigger" and both
-firing is the classic version of this bug, and here there are three
-ways to reach it instead of one:
+A batch can fire from three triggers. The count reaches `MaxBatchSize`;
+the batch timer reaches `MaxWait`; or `Close` runs. All three must
+agree. The first wins, and `fn` runs once for that batch. Two triggers
+may see the same batch as ready. Both may fire it. That is the
+double-fire bug. Here there are three paths, not one:
 
 ```
 Add pushes count to MaxBatchSize ──┐
@@ -93,32 +88,26 @@ batch's MaxWait timer fires  ──────┼──▶  EXACTLY ONE of thes
 Close is called            ────────┘     call fn for this one batch
 ```
 
-Worth trusting less than it looks like: `time.Timer.Stop()` does
-**not** guarantee its function hasn't already started running. Calling
-`Stop()` the moment the count trigger fires does not, by itself,
-prevent that batch's deadline timer from *also* calling its callback
-concurrently a moment later - whatever decides "has this batch already
-fired" has to hold up even when the count path and the timer path are
-both live at once, not just when they're neatly sequential.
+`time.Timer.Stop()` does **not** guarantee its function has not started.
+Calling `Stop()` when the count fires is not enough. The timer callback
+may still run at the same time. Any check for "already fired" must work
+when both paths are live. It cannot rely on them running one after the
+other.
 
 ## Rolling to the next batch
 
-Once one batch fires, `Add` needs to start filling a *new* one -
-forever, not just once. Whichever trigger fires a batch has to detach
-*that specific batch* from "the currently open one" without disturbing
-whatever batch may already be open by the time the trigger gets around
-to firing: a stale deadline timer belonging to a batch that already
-fired by count must not be able to reset or corrupt whatever *new*
-batch has opened in the meantime.
+After one batch fires, `Add` must fill a new one. This repeats forever.
+A trigger must detach its own batch from the current one. It must not
+affect a newer batch that opened in the meantime. A stale timer for an
+old batch must not reset or corrupt the new batch.
 
 ## Close: a hazard worth building a test for
 
-Whatever mechanism `Close` uses to know "every batch has finished"
-must never be able to observe zero batches in flight while a batch
-that *just* started firing (from a concurrent `Add`, or a timer that
-fired moments earlier) hasn't been counted yet. `go test -race` catches
-exactly this ordering bug - but only if a test actually forces the two
-to race concurrently, which is worth building deliberately.
+`Close` must know when every batch has finished. It must never see zero
+batches in flight while a just-started batch is not counted. That can
+happen from a concurrent `Add` or a timer that fired moments earlier.
+`go test -race` catches this ordering bug. A test must force the two
+paths to race.
 
 ## Test your solution
 

@@ -1,18 +1,14 @@
-# Concurrent Map-Reduce: Parallel Word Count — Suggested Solutions
+# Concurrent map-reduce: parallel word count
 
-> **Spoiler warning.** This file contains full worked solutions for `20-concurrent-map-reduce/`. Try solving it yourself first — come back here if you're stuck or want to compare approaches.
+> **Spoiler warning.** This file has full solutions for `20-concurrent-map-reduce/`. Try the exercise first. Come back if you get stuck.
 
 ## The problem
 
-`WordCount` is supposed to count word occurrences across many text
-chunks using the map-reduce pattern: a "map" phase that tokenizes each
-chunk independently and concurrently, and a "reduce" phase that merges
-all the partial counts into one final result — without ever having two
-goroutines write to the same shared map at the same time.
+`WordCount` counts words across many text chunks. It uses the map-reduce pattern.
 
-The given implementation processes chunks strictly sequentially,
-merging each chunk's words directly into a single shared `result` map
-as it goes:
+The map phase splits each chunk into words. It runs chunks at the same time. The reduce phase merges the partial counts.
+
+Two goroutines must never write to the same map at the same time. The starter handles chunks one at a time. It merges each chunk into one `result` map:
 
 ```go
 func WordCount(chunks []string) map[string]int {
@@ -29,23 +25,17 @@ func WordCount(chunks []string) map[string]int {
 }
 ```
 
-This is correct — there's only ever one goroutine touching `result` —
-but chunk 2 can't even start tokenizing until chunk 1's
-`time.Sleep(ProcessDelay)` has fully elapsed, so ten chunks cost ten
-chunks' worth of wall-clock time, even though tokenizing one chunk has
-nothing to do with tokenizing any other.
+This code is correct. Only one goroutine touches `result`.
+
+Chunk 2 cannot start until chunk 1 finishes `time.Sleep(ProcessDelay)`. Ten chunks take ten sleeps. Splitting one chunk does not depend on another.
 
 ## Why the naive version is wrong
 
-Again, "wrong" here is a throughput bug, not a correctness bug. The
-sequential loop passes `TestWordCountCorrectness` every time — it never
-drops a word, never double-counts, and (being single-threaded) can't
-race on `result`.
+This is a throughput bug, not a correctness bug. The sequential loop always passes `TestWordCountCorrectness`. It drops no words, counts nothing twice, and cannot race on `result`.
 
-What it fails is `TestWordCountConcurrency`, which uses `synctest.Test`
-to run the call on a fake clock and asserts the elapsed time stays well
-under 100ms. Ten chunks at 30ms each sequentially costs exactly 300ms —
-and that's exactly what the test observes:
+It fails `TestWordCountConcurrency`. That test uses `synctest.Test` and a fake clock. It requires the call to finish well under 100ms.
+
+Ten chunks at 30ms each take 300ms in sequence. The test reports that time:
 
 ```
 --- FAIL: TestWordCountConcurrency (0.00s)
@@ -54,21 +44,17 @@ and that's exactly what the test observes:
     instead of concurrently
 ```
 
-This is the right test tool for this exercise: the naive version never
-gets stuck, it's just slow, so a fake clock that fast-forwards once
-every goroutine is durably blocked can measure it exactly, with no
-flakiness on a busy machine. (Contrast this with exercise 21, where the
-naive bug is a genuine deadlock rather than mere slowness — `synctest`
-would be the *wrong* tool there, for reasons explained in that
-exercise's solution doc.)
+The fake clock is the right tool here. The naive code is slow, not stuck.
+
+The clock moves forward when every goroutine is blocked. It measures the delay exactly, even on a busy machine.
+
+Exercise 21 has a real deadlock. `synctest` is the wrong tool there. Its solution doc explains why.
 
 ## Approach 1: Goroutine-per-chunk into local maps, merge once (map-reduce, as specified)
 
-This is the design the exercise text asks for, verbatim: each chunk
-gets its own goroutine that tokenizes into its *own* local
-`map[string]int`, touching no shared mutable state during the map
-phase. Only after every goroutine has finished does a single,
-sequential reduce step fold the partials together.
+This is the design the exercise asks for. Each chunk gets its own goroutine.
+
+Each goroutine writes to its own local `map[string]int`. The map phase uses no shared mutable state. One sequential reduce step runs after every goroutine finishes.
 
 ```go {13,17}
 func WordCount(chunks []string) map[string]int {
@@ -100,40 +86,28 @@ func WordCount(chunks []string) map[string]int {
 }
 ```
 
-Walking through why this is race-free:
+Here is why this has no race:
 
-- **Map phase**: every goroutine owns exactly one slot,
-  `partials[i]`, that no other goroutine ever touches, and it builds
-  its own brand-new `local` map that no other goroutine even has a
-  reference to. Assigning `partials[i] = local` is the only shared
-  write, and each `i` is unique per goroutine, so there's no
-  overlapping access — writing to distinct slice indices concurrently
-  is safe in Go. `i` and `chunk` don't need to be re-captured per
-  iteration (no `i, chunk := i, chunk` shadowing trick) — since Go
-  1.22, `for` loop variables are already scoped to each iteration.
-- **Reduce phase**: `wg.Wait()` establishes a happens-before edge
-  between every map-phase goroutine's completion and the reduce loop,
-  so by the time the reduce loop runs, all `partials` entries are
-  fully populated and visible. The reduce loop itself is single-
-  threaded, so merging into `result` needs no locking at all.
-- `wg.Go(func() { ... })` - added in Go 1.24 - replaces the manual
-  `wg.Add(1)` / `defer wg.Done()` pair, so there's no way to forget
-  the `Done()` call.
+- Map phase: each goroutine owns one slot, `partials[i]`. No other goroutine touches it.
+- It also builds a new `local` map. No other goroutine has a reference to that map.
+- The only shared write is `partials[i] = local`. Each `i` belongs to one goroutine.
+- Go allows concurrent writes to different slice indices. They do not overlap.
+- You do not need to recapture `i` and `chunk`. Since Go 1.22, each `for` loop has its own variables.
+- The old shadowing trick was `i, chunk := i, chunk`. It is no longer needed here.
+- Reduce phase: `wg.Wait()` creates a happens-before edge before the reduce loop.
+- Every `partials` entry is complete and visible when the loop runs. One goroutine runs the reduce, so `result` needs no lock.
+- `wg.Go(func() { ... })` arrived in Go 1.24. It replaces `wg.Add(1)` and `defer wg.Done()`.
+- No manual `Done()` call is needed, so you cannot forget it.
 
-This passed `go test -race -count=3` in a scratch copy with no
-flakiness: `TestWordCountCorrectness`, `TestWordCountConcurrency`, and
-`TestWordCountRace` (which reruns `WordCount` five times over 30
-chunks) all passed in ~0.03s–0.16s per run, well under the 100ms
-concurrency budget and with the race detector silent throughout.
+This version passed `go test -race -count=3` in a scratch copy with no flakes. The tests ran in about 0.03s to 0.16s.
+
+`TestWordCountCorrectness`, `TestWordCountConcurrency`, and `TestWordCountRace` all passed. `TestWordCountRace` runs `WordCount` five times over 30 chunks. The race detector reported nothing.
 
 ## Approach 1b (alternative): channel-of-partials fan-in instead of an indexed slice
 
-The exercise text also calls out "fanning the partials in over a
-channel of maps" as an equally valid map phase. It is — but it costs
-one more moving part than Approach 1: a `chan map[string]int` plus a
-dedicated goroutine whose only job is to close that channel once every
-map-phase goroutine has finished, so the reduce loop's `range` knows
-when to stop.
+The exercise also accepts "fanning the partials in over a channel of maps." This works.
+
+It adds one moving part. You need a `chan map[string]int` and a goroutine that closes it after every map goroutine finishes. The reduce `range` then knows when to stop.
 
 ```go {13,18}
 func WordCount(chunks []string) map[string]int {
@@ -167,24 +141,19 @@ func WordCount(chunks []string) map[string]int {
 }
 ```
 
-This is just as race-free as Approach 1 (same invariant: no map is
-ever written by more than one goroutine) and also passed
-`go test -race -count=3` cleanly. Reach for it over Approach 1 when
-the number of partials isn't known upfront, or when the reduce side
-wants to start consuming partials as they arrive rather than waiting
-for every map-phase goroutine to finish. Neither applies here — the
-chunk count is known before the loop starts, and the reduce phase
-never runs until every partial exists anyway — so Approach 1's
-pre-sized slice is the better default for this exercise specifically:
-one fewer moving part (no channel, no dedicated closer goroutine) for
-the same guarantee.
+This version has no race, just like Approach 1. No goroutine writes a map that another goroutine owns. It also passed `go test -race -count=3`.
+
+Use it when you do not know the partial count upfront. Use it when the reduce side should start before every map finishes.
+
+Neither case applies here. The chunk count is known before the loop. The reduce waits for every partial anyway.
+
+Approach 1 is the better default for this exercise. It has no channel and no closer goroutine.
 
 ## Common mistake to avoid: goroutine-per-chunk writing into ONE shared map
 
-A very natural-looking "fix" is to spawn one goroutine per chunk (so
-`TestWordCountConcurrency` passes) but skip the local-map step
-entirely, having every goroutine increment the *same* shared `result`
-map directly:
+A common wrong fix starts one goroutine per chunk. This passes `TestWordCountConcurrency`.
+
+It skips local maps. Every goroutine writes to the same shared `result` map:
 
 ```go {13}
 func WordCount(chunks []string) map[string]int {
@@ -209,20 +178,15 @@ func WordCount(chunks []string) map[string]int {
 }
 ```
 
-This looks like it should work — and on a small input, over a handful
-of runs, it might even *appear* to work, because `result[word]++` is
-"only" a read-modify-write and Go's map implementation doesn't always
-corrupt itself just because two goroutines hit it around the same
-time. That's exactly the trap: this code has a real, undefined-
-behavior data race regardless of whether any given run happens to show
-a symptom.
+This code looks like it should work. Small inputs can appear to work for several runs.
 
-Verifying this in a scratch copy confirms both halves of that claim.
-Running `go test -run TestWordCountRace -count=1` **without** `-race`
-eight times in a row against this exact code passed every single time
-— no crash, no wrong count, nothing to see. Running it **with**
-`-race` fails immediately and reliably, first with data-race warnings
-and then a fatal runtime error that kills the whole test binary:
+`result[word]++` is a read-modify-write. Go's map code does not always corrupt itself when two goroutines touch it.
+
+The code still has a real data race. Go treats that race as undefined behavior even when a run looks fine.
+
+I tested both cases in a scratch copy. I ran `go test -run TestWordCountRace -count=1` without `-race` eight times. It passed every time.
+
+Then I ran it with `-race`. It failed every time. First it printed data-race warnings, then a fatal runtime error:
 
 ```
 ==================
@@ -242,44 +206,29 @@ Previous write at 0x00c0001806c0 by goroutine 14:
 fatal error: concurrent map writes
 ```
 
-The `fatal error: concurrent map writes` is Go's *runtime* map-
-corruption guard, not the race detector — it fires when the map's
-internal bookkeeping is caught in an inconsistent state by two
-concurrent writers, independent of `-race`. That guard is probabilistic
-by nature: it depends on unlucky-enough interleaving to actually
-observe corrupted internal state, which is why plain `go test` (no
-`-race`) can run this exact racy code all day and never trip it, while
-`-race`'s instrumentation makes the underlying race itself deterministic
-to detect (it tracks every memory access with happens-before
-information, so it doesn't need the corruption to *manifest* — it
-just needs two unsynchronized accesses to the same memory, one of
-which is a write, and it did no such thing sporadically here: every
-`-race` run failed). This is precisely why `TestWordCountRace` exists
-and why the exercise's own instructions say to run `go test --race`:
-a bug like this can hide from you indefinitely under plain `go test`
-and still be live in production.
+`fatal error: concurrent map writes` comes from Go's runtime map guard. It is not the race detector.
 
-**The takeaway isn't "don't use a shared map."** It's "don't use a
-shared map *without synchronizing access to it*." Approach 1 avoids
-the problem by never sharing a mutable map across goroutines in the
-first place — Approach 2 below shows the other legitimate way to
-solve it: share the map, but synchronize each piece of it.
+The guard fires when two writers leave the map's internal state inconsistent. The timing must be unlucky. Plain `go test` can run this code all day and see nothing.
+
+`-race` detects the race without waiting for corruption. It tracks memory access and happens-before data.
+
+It needs two unprotected accesses to the same memory, and one must be a write. Every `-race` run failed here.
+
+This is why `TestWordCountRace` exists. It is also why the instructions say to run `go test --race`. A bug can hide under plain `go test` and still reach production.
+
+The rule is simple. Never use a shared map without synchronizing access.
+
+Approach 1 shares no mutable map. Approach 2 shares one and protects each part.
 
 ## Approach 2 (alternative, real-world contrast): sharded map with per-shard locks
 
-**Worth flagging up front: this approach does not satisfy what the
-exercise actually asks for.** The exercise's own comments and
-`README.md` are specific that the map phase should touch "no shared
-mutable state" and build results into each goroutine's "own local
-`map[string]int`." The design below has every map-phase goroutine
-write directly into one shared structure — which is exactly the shape
-the "common mistake" above also has. It's included here anyway because
-it's a real, distinct technique worth knowing, and because contrasting
-it with the mistake above makes the actual rule clearer: **the defect
-above was *unsynchronized* concurrent map access, not "a shared map"
-per se.** A shared map is safe exactly when every access to a given
-key is properly serialized against every other access to that same
-key — which is what sharding buys you.
+This approach does not satisfy the exercise. The comments and `README.md` require no shared mutable state in the map phase.
+
+Each goroutine must build its own local `map[string]int`. This design writes into one shared structure. It has the same shape as the common mistake above.
+
+The design is still worth knowing. It shows the real rule: the mistake was unsynchronized map access, not sharing itself.
+
+A shared map is safe when every access to a key is serialized with every other access to that key. Sharding does that.
 
 ```go {23,28}
 const numShards = 16
@@ -348,47 +297,29 @@ func WordCount(chunks []string) map[string]int {
 }
 ```
 
-The map (word → shard index, by hash) is split across `numShards`
-independent mutexes. Two goroutines updating words that hash to
-*different* shards never contend at all; two updates to the same word
-(same shard) are still safely serialized, by that shard's own lock,
-never a global one. This also passed `go test -race -count=3` cleanly
-in a scratch copy, with the same timings as Approach 1.
+The map uses a hash from word to shard index. It splits across `numShards` independent mutexes.
 
-When would you actually reach for this over Approach 1? When the
-partial results are too large to comfortably hold `len(chunks)`
-separate full copies in memory at once (e.g. very high-cardinality
-keys across very many chunks), or when you want writers to make
-progress incrementally into one structure rather than waiting for a
-distinct reduce pass — the classic real-world case is a long-lived
-concurrent counter or cache, not a one-shot batch job like this
-exercise. For this exercise's actual constraints (ten to thirty small
-chunks, one batch call), Approach 1 is simpler, cheaper, and — again —
-what the exercise is actually testing your understanding of.
+Writes to different shards do not contend. Writes to the same word use the same shard lock. No global lock is needed.
+
+This version passed `go test -race -count=3` in a scratch copy. Its timings matched Approach 1.
+
+Use this design when `len(chunks)` full copies are too large for memory. One example is many chunks with many unique keys.
+
+Use it when writers need to update one structure as they go. This fits a long-lived counter or cache, not a one-shot batch.
+
+This exercise uses ten to thirty small chunks and one batch call. Approach 1 is simpler, cheaper, and the intended design.
 
 ## Key takeaways
 
-- The naive version's defect is throughput, not correctness: it never
-  drops or double-counts a word, so `TestWordCountCorrectness` passes
-  against it; it fails only `TestWordCountConcurrency`, which measures
-  wall-clock time on a fake clock via `synctest.Test`.
-- "Spawn a goroutine per chunk" alone doesn't make code correct — it
-  only fixes the throughput test. If those goroutines still write into
-  one shared map with no synchronization, you've traded a throughput
-  bug for a data race, and that race is fully capable of hiding from
-  plain `go test` for many runs while still being live, undefined
-  behavior. That's exactly why the exercise's own instructions call
-  for `go test --race`, and why `TestWordCountRace` exists as a
-  dedicated stress test.
-- The rule is "don't touch shared mutable state without synchronizing
-  it," not "never share a map." Approach 1 sidesteps the problem
-  (local maps, merged once, sequentially); Approach 2 solves the same
-  problem the other legitimate way (a shared map, but with per-key
-  access properly serialized via sharding) — but Approach 2 is a
-  real-world variant, not what this specific exercise is asking you to
-  build.
-- `sync.WaitGroup.Wait()` is what creates the happens-before edge
-  between "all map-phase goroutines finished writing their partials"
-  and "it's safe for the single reduce goroutine to read them" — that
-  edge is what makes the reduce phase's lock-free reads safe, not
-  anything about maps specifically.
+- The naive version is slow, not wrong. It drops no words and counts none twice.
+- It passes `TestWordCountCorrectness` and fails `TestWordCountConcurrency`.
+- The concurrency test uses `synctest.Test` to measure fake-clock time.
+- Starting one goroutine per chunk fixes only the speed test.
+- If those goroutines share one map with no protection, the code has a data race.
+- Plain `go test` can hide that race for many runs. It is still undefined behavior.
+- Use `go test --race`. `TestWordCountRace` is the stress test for this case.
+- Do not touch shared mutable state without synchronization. Do not ban shared maps.
+- Approach 1 uses local maps and one reduce pass. Approach 2 shares a map with per-key locks.
+- Approach 2 is a real-world option, but this exercise does not ask for it.
+- `sync.WaitGroup.Wait()` creates the happens-before edge before the reduce loop.
+- That edge makes the reduce reads safe. The map itself does not provide it.

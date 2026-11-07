@@ -29,7 +29,7 @@ export function ExerciseView({ summary, tab, status, onStatus }: Props) {
     };
   }, [summary]);
 
-  if (error) return <div className="placeholder">Could not load this exercise: {error}</div>;
+  if (error) return <div className="placeholder">This exercise did not load: {error}</div>;
   if (!exercise) return <div className="placeholder">Loading…</div>;
 
   return (

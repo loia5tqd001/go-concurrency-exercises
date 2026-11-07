@@ -1,9 +1,8 @@
 # Semaphore: Bounding Parallelism Against a Rate-Limited API
 
-`FetchAll` fetches every request in a list from `FlakyAPI.Call` (see
-`mockapi.go`), a mock downstream service that only tolerates a small
-number of concurrent in-flight calls before it starts rejecting the
-rest with `ErrTooManyConcurrentRequests`.
+`FetchAll` sends each request to `FlakyAPI.Call` (see `mockapi.go`).
+The mock API allows only a few calls at the same time. If more calls
+run, it returns `ErrTooManyConcurrentRequests` for the rest.
 
 ```
 today (broken):                     goal:
@@ -17,29 +16,26 @@ come back ERROR                            ▼
                                      rejected, still running in parallel
 ```
 
-Right now `FetchAll` fires off every request at once with no
-concurrency limit whatsoever, so as soon as there are more requests
-than the API can handle simultaneously, it regularly blows past the
-API's concurrency budget and gets a pile of errors back.
+Today, `FetchAll` starts every request at once. When there are more
+requests than the API allows, many calls fail.
 
-Your task is to bound how many requests are in flight at once by
-implementing your own counting semaphore from scratch, using a
-buffered channel of `struct{}` - do not import
-`golang.org/x/sync/semaphore` or any other pre-built semaphore, the
-whole point of this exercise is to build one yourself.
+Your task is to limit how many requests run at once. Build your own
+counting semaphore with a buffered channel of `struct{}`. Do not import
+`golang.org/x/sync/semaphore` or another semaphore package. The point
+is to build the semaphore yourself.
 
-Pick a fixed cap that is strictly less than the API's own
-`maxConcurrent` budget (`main.go` constructs it with `NewFlakyAPI(3)`),
-giving yourself headroom rather than riding the exact edge of it. At
-the same time, requests must still be dispatched concurrently rather
-than one at a time - the point of a semaphore is to cap concurrency,
-not eliminate it. The function signature must stay the same:
+Choose a fixed cap below the API's `maxConcurrent` budget. `main.go`
+uses `NewFlakyAPI(3)`, so your cap should leave some room. Requests
+must still run in parallel. The semaphore limits how many run at once.
+It must not make all requests run one by one.
+
+The function signature must stay the same:
 
 ```go
 func FetchAll(api *FlakyAPI, reqs []string) []string
 ```
 
-so that it remains a drop-in replacement for the naive version below.
+so it can replace the naive version below without caller changes.
 
 ## Test your solution
 

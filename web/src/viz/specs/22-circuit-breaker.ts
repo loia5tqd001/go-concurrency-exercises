@@ -49,14 +49,14 @@ const serialLimit = (delay * 3) / 2;
 const headStart = delay / K.headStart.value;
 
 const tests = {
-  threshold: { name: "TestCircuitOpensAfterThreshold", short: "threshold" },
-  recovery: { name: "TestCircuitHalfOpenRecovery", short: "recovery" },
+  threshold: { name: "TestCircuitOpensAfterThreshold", short: "opens at 5" },
+  recovery: { name: "TestCircuitHalfOpenRecovery", short: "recovers" },
   noserialize: {
     name: "TestCircuitClosedDoesNotSerializeOnGatewayCall",
-    short: "no serialize",
+    short: "calls overlap",
     judge: (run: RunSummary) => run.t < serialLimit,
   },
-  trial: { name: "TestCircuitHalfOpenTrialFailsFastForOthers", short: "trial" },
+  trial: { name: "TestCircuitHalfOpenTrialFailsFastForOthers", short: "one trial" },
 } satisfies Record<string, TestDef>;
 
 // One Execute call while the gateway has no delay: it returns at once.
@@ -123,7 +123,7 @@ export default defineViz({
       id: "today",
       chip: "Today",
       tier: "today",
-      summary: "Execute passes every call straight to the gateway, so the 6th failing call reaches it too and the threshold test fails.",
+      summary: "Execute sends every call to the gateway. The 6th failing call also reaches it. The threshold test fails.",
       model: {
         nodes: {
           caller: goroutine({
@@ -141,11 +141,11 @@ export default defineViz({
           }),
           gateway: fact({ label: "gateway", pos: [1, 0], value: 0, limit: N }),
         },
-        insight: `Execute remembers nothing, so every call reaches the failing gateway. After ${N} failures the test expects the 6th call to fail fast; it reaches the gateway instead.`,
+        insight: `Execute remembers nothing. Every call reaches the failing gateway. After ${N} failures, the test expects call 6 to fail fast. It reaches the gateway instead.`,
         stops: [
           {
             when: { op: "inc", node: "gateway", nth: K.sixthCall.value },
-            say: "The 6th call reaches the gateway too and returns ErrGatewayDown. The test wanted ErrCircuitOpen.",
+            say: "Call 6 reaches the gateway too. It returns ErrGatewayDown. The test wanted ErrCircuitOpen.",
           },
         ],
         tests: { threshold: tests.threshold },
@@ -167,7 +167,7 @@ type CircuitBreaker struct {
       id: "goal",
       chip: "Goal",
       tier: "goal",
-      summary: "5 failures trip the breaker OPEN, the next call fails fast, and after the 2 s cooldown one trial call closes it again.",
+      summary: "5 failures open the breaker. The next call fails fast. After 2 seconds, one trial call closes it again.",
       model: {
         nodes: {
           caller: goroutine({
@@ -198,16 +198,16 @@ type CircuitBreaker struct {
           breaker: fact({ label: "breaker", pos: [1, 0], value: "CLOSED", states: ["CLOSED", "OPEN", "HALF-OPEN"] }),
           gateway: fact({ label: "gateway", pos: [2, 0], value: 0 }),
         },
-        insight: `Watch gateway stop at ${N} calls while the breaker is OPEN: the 6th call fails fast. After the 2 s cooldown one trial call goes through, succeeds, and the breaker is CLOSED again.`,
+        insight: `The gateway stops at ${N} calls while the breaker is OPEN. Call 6 fails fast. After 2 seconds, one trial call goes through. It succeeds, and the breaker closes.`,
         stops: [
-          { when: { op: "set", node: "breaker", nth: 1 }, say: `The ${N}th failure in a row trips the breaker to OPEN.` },
+          { when: { op: "set", node: "breaker", nth: 1 }, say: `After ${N} failures in a row, the breaker opens.` },
           {
             when: { op: "work", g: "caller" },
-            say: `The 6th call fails fast with ErrCircuitOpen: gateway stays at ${N} calls.`,
+            say: `Call 6 fails fast with ErrCircuitOpen. The gateway count stays at ${N}.`,
           },
           {
             when: { op: "set", node: "breaker", nth: 2 },
-            say: "After the cooldown one trial call reaches the healthy gateway and succeeds, so the breaker is CLOSED.",
+            say: "After the cooldown, one trial call reaches the healthy gateway. It succeeds, so the breaker closes.",
           },
         ],
         tests: { recovery: tests.recovery },
@@ -219,14 +219,14 @@ type CircuitBreaker struct {
       id: "lock",
       chip: "Lock",
       tier: "inside",
-      summary: "allow() holds mu only to check the state, so two callers' Charge calls overlap and the pair finishes in one delay.",
+      summary: "allow() holds mu only while it checks state. Two Charge calls can overlap. The pair finishes in one 150 ms delay.",
       model: {
         ...lockScene(false),
-        insight: `Each caller holds mu only inside allow() and afterCall(), never across Charge. Both ${delay} ms calls overlap, so the pair is done at ${delay} ms, under the ${serialLimit} ms limit.`,
+        insight: `Each caller holds mu only during allow() and afterCall(). Neither holds it during Charge. Both ${delay} ms calls overlap. The pair finishes at ${delay} ms, under the ${serialLimit} ms limit.`,
         stops: [
           {
             when: { op: "work", g: "caller", nth: 2 },
-            say: "Both Charge calls run at once: allow() released mu before the slow call.",
+            say: "Both Charge calls run at once. allow() released mu before the slow call.",
           },
         ],
         code: {
@@ -256,18 +256,18 @@ type CircuitBreaker struct {
       id: "held",
       chip: "Held",
       tier: "inside",
-      summary: "The trap: a breaker that keeps mu across Charge makes the second caller wait, so the pair takes two delays.",
+      summary: "The trap: the breaker keeps mu during Charge. The second caller waits. The pair takes two delays.",
       model: {
         ...lockScene(true),
-        insight: `Here the breaker keeps mu for the whole Charge. The second caller waits on mu.Lock() for ${delay} ms, so the pair takes ${2 * delay} ms, past the ${serialLimit} ms limit.`,
+        insight: `The breaker keeps mu during the whole Charge. The second caller waits on mu.Lock() for ${delay} ms. The pair takes ${2 * delay} ms, past the ${serialLimit} ms limit.`,
         stops: [
           {
             when: { op: "block", g: "caller" },
-            say: "One caller waits on mu.Lock(): the other keeps mu for its whole Charge.",
+            say: "One caller waits on mu.Lock(). The other keeps mu for the whole Charge.",
           },
           {
             when: { op: "work", g: "caller" },
-            say: `The second Charge starts only at ${delay} ms, a whole delay late.`,
+            say: `The second Charge starts at ${delay} ms, a whole delay late.`,
           },
         ],
         expect: { outcome: "ok", t: 2 * delay, tests: { noserialize: "fail" } },
@@ -277,7 +277,7 @@ type CircuitBreaker struct {
       id: "trial",
       chip: "Trial",
       tier: "inside",
-      summary: "Half-open lets one trial through. While its slow Charge runs, a second caller finds the slot taken and gets ErrCircuitOpen at once.",
+      summary: "Half-open allows one trial call. Its Charge is slow. A second caller sees the trial slot taken and gets ErrCircuitOpen at once.",
       model: {
         nodes: {
           trial: goroutine({
@@ -325,14 +325,14 @@ type CircuitBreaker struct {
             },
           }),
         },
-        insight: `The trial takes the slot under mu, then lets mu go before its ${delay} ms Charge. The test calls Execute ${headStart} ms later, locks mu at once, sees the slot taken, and gets ErrCircuitOpen without waiting.`,
+        insight: `The trial takes the slot under mu. It releases mu before its ${delay} ms Charge. The test calls Execute ${headStart} ms later. It locks mu at once, sees the slot taken, and gets ErrCircuitOpen.`,
         stops: [
-          { when: { op: "lock", g: "test" }, say: "The trial holds the slot, not mu, during Charge, so the test's second call locks mu at once." },
+          { when: { op: "lock", g: "test" }, say: "The trial holds the slot, not mu, during Charge. The second call can lock mu at once." },
           {
             when: { op: "unlock", g: "test" },
-            say: `The slot is taken, so Execute returns ErrCircuitOpen ${delay - headStart} ms before the trial ends.`,
+            say: `The slot is taken. Execute returns ErrCircuitOpen ${delay - headStart} ms before the trial ends.`,
           },
-          { when: { op: "set", node: "slot" }, say: "The trial succeeds: the slot is free and the breaker is closed again." },
+          { when: { op: "set", node: "slot" }, say: "The trial succeeds. The slot is free and the breaker closes again." },
         ],
         tests: { trial: tests.trial },
         clock: { unit: "ms" },

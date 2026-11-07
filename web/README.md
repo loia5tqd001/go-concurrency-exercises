@@ -53,6 +53,8 @@ Some exercises have an animated visualisation. A spec, `src/viz/specs/<id>.ts`, 
 
 The sidebar opens on **Recommended**, a curated browser-runnable, visual-backed path through the system. **All exercises** keeps the complete numbered catalogue. Search always covers all exercises, and opening a non-recommended exercise switches the list to **All exercises**.
 
+The language tests read every rendered exercise README, solution file, scene summary, insight, and stop caption. No prose sentence may exceed 20 words, and hard filler words are rejected. `npm run audit-language` prints the Markdown report for review.
+
 The Problem tab mounts the player on the README's own ASCII diagram. The diagram stays the default view; a "▶ Today" or "▶ Goal" chip swaps in the animation at the same top edge, and the Diagram chip swaps the fence back. A spec pins one fence per Problem tier. Inside scenes appear at the top of the Solution tab after the existing reveal. In development, a stale pin shows its scenes below the README with a strip that says why; a production build omits them. The door plays on open; the Solution block starts paused; reduced motion never autoplays and jumps between steps instead of flying values.
 
 `npm run check-visuals` proves each spec's constants and anchors against `git HEAD`, every `diagrams` pin against the working-tree README, code excerpts verbatim against the committed scaffold or the solution doc, no code in a goal scene, the vocabulary and spoiler rules for Problem scenes, the budgets, and a layout with no overlapping nodes at 300 and 640 px. It runs every scene, for every knob setting, under 12 seeds, and each run must end with the outcome, test results, and time the scene expects. `npm run test-web` adds the recommended-path contract, then tests the scheduler's Go rules and plants faults the checker must catch. Run both after `prepare-data`.
@@ -103,6 +105,7 @@ npm run build      # prepare + type-check + production build into dist/
 npm run og         # rebuild public/og.png, the link-preview card
 npm run smoke      # every scaffold through the runner under Node; each must build and fail its tests
 npm run smoke -- --solutions ..   # your local main.go files instead; each must pass
+npm run audit-language            # report long or hard-to-read prose across exercise and solution Markdown
 npm run test-web   # recommended-path contract and visual-engine tests
 npm run viz -- shots              # pixel check every spec; PNGs under node_modules/.cache/viz-shots
 npm run viz -- shots 06           # pixel check one spec, by id or leading number

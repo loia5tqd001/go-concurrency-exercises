@@ -110,7 +110,7 @@ export function Sidebar({ current, statuses, open, modal, onClose }: Props) {
               href={`/${e.id}`}
               className={e.id === current ? "active" : undefined}
               aria-current={e.id === current ? "page" : undefined}
-              title={`${e.title}\n${e.difficulty} · ${(e.topics ?? []).join(", ")}${statuses[e.id] ? `\n${statuses[e.id]}` : ""}${hasViz(e.id) ? "\nHas an animated visualisation" : ""}${e.unsupported ? "\nTests require local Go" : ""}`}
+              title={`${e.title}\n${e.difficulty} · ${(e.topics ?? []).join(", ")}${statuses[e.id] ? `\n${statuses[e.id]}` : ""}${hasViz(e.id) ? "\nHas an animation" : ""}${e.unsupported ? "\nTests need Go on your computer" : ""}`}
               onClick={(ev) => {
                 onLinkClick(ev);
                 onClose();
@@ -127,12 +127,12 @@ export function Sidebar({ current, statuses, open, modal, onClose }: Props) {
               <span className="ex-title">{e.title}</span>
               <span className="ex-marks">
                 {e.unsupported && (
-                  <span className="ex-local" title="Tests require local Go">
+                  <span className="ex-local" title="Tests need Go on your computer">
                     local
                   </span>
                 )}
                 {hasViz(e.id) && (
-                  <span className="ex-viz" role="img" aria-label="has an animated visualisation">
+                  <span className="ex-viz" role="img" aria-label="has an animation">
                     <VisualisationIcon width={14} height={14} />
                   </span>
                 )}
@@ -150,7 +150,7 @@ export function Sidebar({ current, statuses, open, modal, onClose }: Props) {
             </a>
           </li>
         ))}
-        {items.length === 0 && <li className="ex-empty">No exercise matches the current filters.</li>}
+        {items.length === 0 && <li className="ex-empty">No exercise matches these filters.</li>}
       </ol>
       <div className="sidebar-foot">
         <progress

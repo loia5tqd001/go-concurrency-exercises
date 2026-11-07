@@ -108,7 +108,7 @@ export default defineViz({
       id: "today",
       chip: "Today",
       tier: "today",
-      summary: `Publish holds b.mu and sends to the stalled subscriber's channel, which nobody reads, so the send never returns and b.mu is never released.`,
+      summary: "Publish holds b.mu and sends to a subscriber that never reads. The send waits forever, so b.mu is never released.",
       model: {
         nodes: {
           Publish: goroutine({
@@ -131,10 +131,10 @@ export default defineViz({
           }),
           ...shared(),
         },
-        insight: `Publish takes b.mu, hands the first event to the fast subscriber, then blocks on the stalled one: its channel has no buffer and nobody reads it. b.mu stays locked, so no later Publish gets in. After ${K.net.value} ms the test gives up. The blocked Publish is the learner's bug, not a test artefact.`,
+        insight: `Publish takes b.mu and sends the first event to the fast subscriber. Then it blocks on the stalled subscriber. That channel has no buffer, and nobody reads it. b.mu stays locked, so no later Publish gets in. After ${K.net.value} ms the test gives up. The blocked Publish is the learner's bug, not a test artifact.`,
         stops: [
-          { when: { op: "block", node: "chStalled" }, say: "The stalled channel has no buffer and no reader, so this send waits. Publish still holds b.mu." },
-          { when: { op: "fire", node: "net" }, say: `${K.net.value} ms pass and Publish is still stuck, holding b.mu. The test fails.` },
+          { when: { op: "block", node: "chStalled" }, say: "The stalled channel has no buffer and no reader. This send waits, and Publish still holds b.mu." },
+          { when: { op: "fire", node: "net" }, say: `${K.net.value} ms pass. Publish is still stuck and still holds b.mu. The test fails.` },
         ],
         tests,
         clock,
@@ -157,7 +157,7 @@ export default defineViz({
       id: "goal",
       chip: "Goal",
       tier: "goal",
-      summary: `Each subscriber has a buffer of ${CAP}. Publish sends without waiting and drops the event when a buffer is full, so all ${N} calls return.`,
+      summary: `Each subscriber has a buffer of ${CAP}. Publish sends without waiting and drops events when a buffer is full. All ${N} calls return.`,
       model: {
         nodes: {
           Publish: goroutine({
@@ -182,9 +182,9 @@ export default defineViz({
           chFast: channel({ label: "fast", pos: [1, 0], cap: CAP }),
           chStalled: channel({ label: "stalled", pos: [1, 2], cap: CAP }),
         },
-        insight: `The stalled channel takes ${CAP} events into its buffer and drops the other ${N - CAP}: its buffer is full and nobody reads it. Publish never waits, each call unlocks b.mu and returns, and all ${N} calls finish at once. The reader of the fast channel stays parked afterwards: that is the test's own loop, not a leak in the bus.`,
+        insight: `The stalled channel takes ${CAP} events into its buffer. It drops the other ${N - CAP} because the buffer is full and nobody reads it. Publish never waits. Each call unlocks b.mu and returns, so all ${N} calls finish at once. The fast reader stays parked afterwards. That is the test's own loop, not a leak in the bus.`,
         stops: [
-          { when: { op: "close", node: "done" }, say: `All ${N} Publish calls returned. The stalled channel holds ${CAP} events; the other ${N - CAP} were dropped.` },
+          { when: { op: "close", node: "done" }, say: `All ${N} Publish calls returned. The stalled channel holds ${CAP} events. The other ${N - CAP} were dropped.` },
         ],
         tests,
         clock,

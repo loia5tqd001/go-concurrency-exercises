@@ -1,21 +1,22 @@
-# Concurrent Prime Sieve: A Growing Pipeline That Must Learn to Shut Down — Suggested Solutions
+# Concurrent Prime Sieve: A Growing Pipeline That Must Shut Down — Suggested Solutions
 
-> **Spoiler warning.** This file contains a full worked solution for `34-prime-sieve/`. Try solving it yourself first — come back here if you're stuck or want to compare approaches.
+> **Spoiler warning.** This file has a full solution for `34-prime-sieve/`.
+> Try the exercise first. Come back if you are stuck or want to compare
+> approaches.
 
 ## The problem
 
-`generate` emits 2, 3, 4, 5, ... forever; every time a new prime falls
-out of the chain, `Primes` splices a new `filter` stage onto the end of
-it that strips that prime's multiples out of everything flowing past.
-Asking for the first `n` primes builds a pipeline `n+1` goroutines
-deep — one `generate`, one `filter` per prime found so far — the
-classic concurrent Sieve of Eratosthenes from Rob Pike's 2012 "Go
-Concurrency Patterns" talk.
+`generate` emits 2, 3, 4, 5, ... forever. When a new prime comes out,
+`Primes` adds a new `filter` stage to the end. That stage removes the
+prime's multiples from later values. Asking for the first `n` primes
+builds a pipeline with `n+1` goroutines. It has one `generate`
+goroutine and one `filter` per prime found. This is the classic
+concurrent Sieve of Eratosthenes from Rob Pike's 2012 "Go Concurrency
+Patterns" talk.
 
-`generate` and `filter` are both already correct: each respects a
-`done` channel on every receive *and* every send it makes, exactly like
-the or-done idiom from [exercise 07](../07-or-done-channel). The bug is
-entirely in `Primes`:
+`generate` and `filter` are already correct. Each checks `done` on
+every receive *and* every send. That is the or-done idiom from
+[exercise 07](../07-or-done-channel). The bug is entirely in `Primes`:
 
 ```go {2,8}
 func Primes(n int) []int {
@@ -32,17 +33,16 @@ func Primes(n int) []int {
 }
 ```
 
-The task is to fix `Primes` so that once it has its `n` primes, it
-shuts the entire chain down instead of abandoning it mid-flight, while
-keeping the signature `func Primes(n int) []int` exactly the same.
+Fix `Primes` so the whole chain stops after it gets `n` primes. Do not
+leave the chain running. Keep `func Primes(n int) []int` exactly the
+same.
 
 ## Why the naive version is wrong
 
-Every value `Primes` returns is correct — the sieve logic itself has no
-bug. The problem is entirely in what `Primes` hands `generate` and
-every `filter` as their `done` channel: `nil`. A receive on a nil
-channel inside a `select` is never ready, so the `done` case in every
-stage can never fire:
+Every value `Primes` returns is correct. The sieve logic has no bug.
+The problem is the `done` channel that `Primes` passes to `generate` and
+every `filter`: `nil`. A receive on a `nil` channel inside a `select`
+never runs. So the `done` case in every stage never fires.
 
 ```go {3}
 select {
@@ -52,9 +52,9 @@ case <-done: // done is nil here — never selectable
 }
 ```
 
-Once `Primes` has its n-th prime and returns, every one of those `n+1`
-goroutines is still alive, blocked forever trying to send the next
-candidate integer down a pipeline nobody is reading from anymore:
+`Primes` returns after the n-th prime. Its `n+1` goroutines are still
+alive. They are blocked forever on sending the next candidate down a
+pipeline that nobody reads.
 
 ```
 --- FAIL: TestPrimesDoesNotLeakGoroutines
@@ -63,13 +63,11 @@ candidate integer down a pipeline nobody is reading from anymore:
     was never told to stop and is still running in the background
 ```
 
-`TestPrimesReturnsCorrectPrimes` still passes against the naive
-version — the values are right, full stop. That's exactly the danger:
-a function that computes a correct answer while quietly leaving a
-proportional amount of garbage running behind it looks completely fine
-from its return value alone, and only shows up as a slow, creeping
-resource leak once something calls it enough times in a long-lived
-process.
+`TestPrimesReturnsCorrectPrimes` still passes with the naive version.
+The values are right. That is the danger. A function can return the
+right answer and leave many goroutines running. Its return value looks
+fine. The leak only shows up when a long-lived process calls it many
+times.
 
 ## Approach: one real `done`, shared by the whole chain
 
@@ -91,43 +89,36 @@ func Primes(n int) []int {
 }
 ```
 
-A single `done` channel, created once per call to `Primes`, gets
-threaded through `generate` and every `filter` stage spliced in after
-it — not a fresh one per stage. `defer close(done)` fires once
-`Primes` is about to return, whether that's after the normal loop
-finishes or (if you extend this further) on an early-exit path: closing
-a channel is a broadcast, so every stage currently blocked in a
-`select` on it — whether waiting to receive its next candidate or
-waiting to send its last one — wakes up on the same instant and exits.
+Create one `done` channel per call to `Primes`. Pass that same channel
+to `generate` and every `filter`; do not create one per stage. The
+statement `defer close(done)` closes the channel before `Primes`
+returns. It also runs on an early-exit path if you add one. Closing a
+channel is a broadcast. Every stage blocked in a `select` wakes at
+once. A stage may be waiting to receive a candidate or send one. Either
+way, it exits.
 
-This is the same or-done idiom as exercise 07, just applied across a
-chain that grows to an unknown depth at runtime instead of a single
-fixed stage. The chain doesn't need to know its own length or shut
-down in any particular order: every stage already independently watches
-the same `done`, so closing it once tears down all of them
-simultaneously, regardless of how many `filter`s happen to be spliced
-in by the time `n` primes have been found.
+This is the same or-done idiom as exercise 07. Here it applies to a
+chain whose depth is not known until runtime. The chain does not need to
+know its length. It does not need an orderly shutdown. Every stage
+watches `done`. Closing it once stops all stages together. This works
+no matter how many `filter`s were added before the n-th prime.
 
 ## Key takeaways
 
-- A goroutine that's correct in isolation (`generate` and `filter`
-  here, which properly implement or-done) is only as good as what it's
-  given as its cancellation signal. Passing `nil` where a real `done`
-  channel belongs silently defeats the whole mechanism without
-  changing either function's logic at all — the bug is entirely at the
-  call site.
-- Correctness of the *values* returned and absence of a *goroutine
-  leak* are independent properties, and a test suite has to check both
-  separately. `TestPrimesReturnsCorrectPrimes` catching nothing here is
-  the point: it's testing a dimension the bug doesn't touch.
-- One shared `done`, not one per stage, is what makes teardown of a
-  dynamically-growing pipeline simple: closing a channel is a
-  broadcast to every goroutine selecting on it, so a chain that grew to
-  an unknown depth at runtime still shuts down in one step, with no
-  stage needing to know how many stages exist behind it.
-- `runtime.NumGoroutine()`, polled with a short timeout rather than
-  compared instantaneously, is a simple and effective way to catch this
-  class of leak in a test — a correct implementation's goroutines exit
-  within a few scheduler ticks of `done` closing, while a leaked
-  goroutine is blocked forever and the count never comes back down no
-  matter how long you wait.
+- A goroutine can be correct by itself. `generate` and `filter`
+  implement or-done correctly. Their result still depends on the
+  cancellation signal they receive. Passing `nil` instead of a real
+  `done` channel disables the mechanism. Neither function's logic
+  changes. The bug is at the call site.
+- Correct values and no goroutine leak are separate properties. A test
+  suite must check both. `TestPrimesReturnsCorrectPrimes` catches
+  nothing here because the bug does not affect values.
+- Use one shared `done`, not one per stage. That keeps a growing
+  pipeline easy to stop. Closing a channel broadcasts to every
+  goroutine that selects on it. A runtime-depth chain shuts down in one
+  step. No stage needs to know how many stages follow it.
+- `runtime.NumGoroutine()` can catch this leak when you poll it with a
+  short timeout. Do not compare it at one instant. A correct
+  implementation exits within a few scheduler ticks of `close(done)`.
+  A leaked goroutine stays blocked forever. The count never comes back
+  down.

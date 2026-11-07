@@ -44,7 +44,7 @@ const N = K.tasks.value;
 const tests = {
   concurrent: {
     name: "TestGroupRunsConcurrently",
-    short: `under ${K.budget.value} ms`,
+    short: "time limit",
     judge: (run: { t: number }) => run.t < K.budget.value,
   },
 };
@@ -52,7 +52,7 @@ const tests = {
 const raceTests = {
   first: {
     name: "TestGroupFirstErrorRaceSafe",
-    short: "one first error",
+    short: "first error",
     // Wait returned an error that belongs to some task.
     judge: (run: { vars: Readonly<Record<string, number>> }) => run.vars.won === 1,
   },
@@ -71,7 +71,7 @@ export default defineViz({
       id: "today",
       chip: "Today",
       tier: "today",
-      summary: `Go calls f on the calling goroutine, so the ${N} tasks run one after another: ${N * K.latency.value} ms, over the ${K.budget.value} ms budget.`,
+      summary: `Go calls f on the calling goroutine. The ${N} tasks run one by one. They take ${N * K.latency.value} ms, over the ${K.budget.value} ms limit.`,
       model: {
         nodes: {
           caller: goroutine({
@@ -83,9 +83,9 @@ export default defineViz({
             },
           }),
         },
-        insight: `Each Go call returns only when its task has finished, so the next task cannot start. One goroutine does all ${N} tasks, and the clock reaches ${N * K.latency.value} ms, over three times the ${K.budget.value} ms budget.`,
+        insight: `Each Go call waits for its task. The next task cannot start yet. One goroutine runs all ${N} tasks. The clock reaches ${N * K.latency.value} ms, over three times the ${K.budget.value} ms budget.`,
         stops: [
-          { when: { op: "work", nth: 2 }, say: `The second task starts only now, ${K.latency.value} ms in, after the first has returned.` },
+          { when: { op: "work", nth: 2 }, say: `The first task has returned. The second task can start now, ${K.latency.value} ms in.` },
         ],
         tests,
         clock,
@@ -105,7 +105,7 @@ export default defineViz({
       id: "goal",
       chip: "Goal",
       tier: "goal",
-      summary: `Go starts each task in its own goroutine, so all ${N} run at once and Wait joins them after ${K.latency.value} ms.`,
+      summary: `Go starts each task in its own goroutine. All ${N} run at once. Wait joins them after ${K.latency.value} ms.`,
       model: {
         nodes: {
           caller: goroutine({
@@ -132,9 +132,9 @@ export default defineViz({
             },
           }),
         },
-        insight: `Each Go call counts the task in the WaitGroup and starts a goroutine, then returns at once. All ${N} tasks overlap, and Wait joins them when the count reaches 0, at ${K.latency.value} ms.`,
+        insight: `Each Go call adds one task to the WaitGroup. It then starts a goroutine and returns at once. All ${N} tasks overlap. Wait returns when the count reaches 0, at ${K.latency.value} ms.`,
         stops: [
-          { when: { op: "work", g: "worker", nth: N }, say: `All ${N} tasks are running. Wait blocks until the WaitGroup counts down to 0.` },
+          { when: { op: "work", g: "worker", nth: N }, say: `All ${N} tasks are running. Wait blocks until the WaitGroup reaches 0.` },
         ],
         tests,
         clock,
@@ -145,7 +145,7 @@ export default defineViz({
       id: "once",
       chip: "Once",
       tier: "inside",
-      summary: `${K.failing.value} tasks fail at once. Only the first one to reach once.Do writes firstErr, and Wait returns that error.`,
+      summary: `${K.failing.value} tasks fail at once. The first one to reach once.Do writes firstErr. Wait returns that error.`,
       model: {
         nodes: {
           caller: goroutine({
@@ -179,9 +179,9 @@ export default defineViz({
           }),
           firstErr: fact({ label: "firstErr", pos: [2, 1], value: "nil" }),
         },
-        insight: `Every task fails with no delay, so all ${K.failing.value} reach once.Do together. Exactly one runs the closure and writes firstErr; the others skip it. Wait returns after the last Done, so it reads firstErr only after every write.`,
+        insight: `Every task fails with no delay. All ${K.failing.value} reach once.Do together. One task runs the closure and writes firstErr. The others skip it. Wait returns after the last Done, so every write is complete.`,
         stops: [
-          { when: { op: "set", node: "firstErr" }, say: "One task got to once.Do first and wrote firstErr. Every later task skips the closure." },
+          { when: { op: "set", node: "firstErr" }, say: "One task reached once.Do first and wrote firstErr. Every later task skips the closure." },
         ],
         tests: raceTests,
         clock: { unit: "ms" },

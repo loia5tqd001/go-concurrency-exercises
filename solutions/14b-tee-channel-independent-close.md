@@ -1,10 +1,11 @@
 # Tee Channel, Independent Closing: Racing a Fast Consumer Past a Silent One — Suggested Solution
 
-> **Spoiler warning.** This file contains a full worked solution for `14b-tee-channel-independent-close/`. Try solving it yourself first — come back here if you're stuck or want to compare approaches.
+> **Spoiler warning.** This file contains a full worked solution for `14b-tee-channel-independent-close/`. Try solving it yourself first. Come back if you are stuck or want to compare approaches.
 
 ## The problem
 
-This exercise picks up where [14](../14-tee-channel) left off. The given starting point is already a complete, correct answer to 14 itself:
+This exercise follows [14](../14-tee-channel). The starting code in
+`main.go` is already a correct answer to 14:
 
 ```go {23}
 func Tee(done <-chan struct{}, in <-chan int) (<-chan int, <-chan int) {
@@ -46,17 +47,34 @@ func Tee(done <-chan struct{}, in <-chan int) (<-chan int, <-chan int) {
 }
 ```
 
-For each value, an inner `select` races both sends, nilling out whichever local channel variable has already received the current value (a nil channel is never selectable, so it drops out of the `select` for good) — so writing to one output never has to happen strictly before the other. `done` is checked in both the outer receive loop and the inner send loop, so shutdown is prompt either way. None of this needs fixing.
+For each value, an inner `select` races both sends. It sets each local
+channel variable to nil after that output receives the value. A nil
+channel is never selected. One output does not have to finish before the
+other. `done` is checked while reading and sending. Do not change this
+part.
 
-What's missing: closing is gated on the **slowest** consumer. The single goroutine above holds value N until *both* `out1Ch` and `out2Ch` have gone nil (i.e., both outputs received it) before it even looks at value N+1, and only closes both channels together, once, after the loop returns. If one consumer has already received every value the sensor will ever produce but the other hasn't read anything, the fast consumer's channel still won't close — the goroutine is stuck trying to hand still-pending values to the untouched side first.
+The close waits for the slowest consumer. One goroutine holds value N
+until `out1Ch` and `out2Ch` both become nil. It then reads value N+1. It
+closes both channels together after the loop.
 
-`check_test.go` (identical to 14's, plus one additional test) checks this directly: `TestTeeClosesEachOutputAsSoonAsItIsFullyDelivered` drains one output *completely* while the other is never read, then asserts the drained one is already closed. It runs in both directions (`out1` fast/`out2` slow, and vice versa) so an implementation that special-cases index 0 can't sneak by either.
+`out1` and `out2` are independent consumers. If one receives every value
+and the other reads nothing, the fast channel stays open. The goroutine
+waits to hand pending values to the slow side.
+
+`check_test.go` has the same tests as 14 and one more.
+`TestTeeClosesEachOutputAsSoonAsItIsFullyDelivered` drains one output and
+never reads the other. It requires the drained output to be closed. It
+tests both directions, so a special case for index 0 cannot pass.
 
 ## Why the given starting code isn't enough
 
-Verified against the given `main.go` in a throwaway scratch copy: `TestTeeDuplicatesToBothConsumers(ReversedRoles)`, `TestTeeDeliversToOneOutputWithoutWaitingOnTheOther`, and `TestTeeStopsOnDone(Race)` all pass — this code is a genuinely correct answer to 14's requirements, including the "no fixed try-order" property, since the inner `select` really does race both sends rather than attempting them in sequence.
+Verified in a scratch copy. `TestTeeDuplicatesToBothConsumers(ReversedRoles)`,
+`TestTeeDeliversToOneOutputWithoutWaitingOnTheOther`, and
+`TestTeeStopsOnDone(Race)` pass. The code meets 14's rules. The inner
+`select` races both sends.
 
-`TestTeeClosesEachOutputAsSoonAsItIsFullyDelivered` fails, and for a structural reason, not a closing-logic bug per se:
+`TestTeeClosesEachOutputAsSoonAsItIsFullyDelivered` fails. The design
+causes this, not a small close-code bug:
 
 ```
 --- FAIL: TestTeeClosesEachOutputAsSoonAsItIsFullyDelivered (0.00s)
@@ -66,9 +84,20 @@ Verified against the given `main.go` in a throwaway scratch copy: `TestTeeDuplic
         check_test.go:314: no value received within 20ms - is delivery to this output waiting on some other output being read first?
 ```
 
-The test's second `receiveWithTimeout` call on the fast output already times out: the delivery goroutine is still parked trying to hand value 0 to the untouched slow side and hasn't even looked at value 1 yet. "Holding each value until both outputs receive it, one value at a time, in a single goroutine" is exactly what 14 asked for — and it's precisely why this design can never let one output run more than a fraction of a value ahead of a completely unread other, no matter how the closing code is written on top of it. `StartSensor` itself also honors `done` (closed by the test's own `defer`), so `receiveWithTimeout`'s `t.Fatalf` fails just this subtest cleanly instead of leaving the sensor's goroutine blocked forever inside the `synctest` bubble — the remaining tests, `TestTeeStopsOnDone` and `TestTeeStopsOnDoneRace`, still run and pass.
+The second `receiveWithTimeout` on the fast output times out. The
+goroutine is still sending value 0 to the slow side. It has not read
+value 1.
 
-So fixing this needs more than moving the `close` calls around — it needs abandoning the single-goroutine, hold-until-both-received-it model in favor of letting each output's delivery progress independently.
+One goroutine cannot let one output move far ahead when it holds each
+value for both outputs. Changing the close code will not fix that design.
+
+`StartSensor` checks `done`, which the test closes with `defer`.
+`receiveWithTimeout` uses `t.Fatalf` only for this subtest. It runs under
+`synctest`.
+`TestTeeStopsOnDone` and `TestTeeStopsOnDoneRace` still pass.
+
+The fix must remove this single-goroutine model. Let each output deliver
+independently.
 
 ## The fix: per-output completion tracking, independent closers
 
@@ -197,18 +226,30 @@ func Tee(done <-chan struct{}, in <-chan int) (<-chan int, <-chan int) {
 
 Design notes:
 
-- **One long-lived forwarder per output.** The reader only appends to each output's FIFO; it never waits for either consumer. This keeps delivery to one output independent from a slow or silent consumer on the other.
-- **Ordering is structural.** Every output has one queue and one forwarder, so values reach that output in push order. It does not depend on separate goroutines racing to send to the same channel.
-- **Each output owns its close.** Closing its queue makes its forwarder drain the remaining FIFO and close the output. The other output is unaffected.
-- **`done` has one cleanup path.** The reader's deferred queue closes wake both forwarders even when cancellation happens before `in` is exhausted, and each blocked send also selects on `done`.
+- **Each output has one long-lived forwarder.** The reader appends to
+  each FIFO and does not wait for either consumer.
+- **Order comes from the FIFO.** Each output has one queue and one
+  forwarder. Values reach the output in push order.
+- **Each output owns its close.** Call `close` on the queue to wake its
+  forwarder. The forwarder drains the FIFO and closes the output. The
+  other output is not affected.
+- **`done` has one cleanup path.** The reader's deferred queue close
+  wakes both forwarders. Each blocked send also checks `done`.
 
-The tradeoff is that a silent consumer can make its queue grow without bound. The exercise's bounded test stream makes that acceptable here; a production stream with unbounded producers would need a byte/item limit or backpressure policy.
+A silent consumer can grow its queue without limit. The test stream is
+bounded, so that is fine here. A production stream would need an item
+limit or backpressure.
 
-**Verified** in a scratch copy of `14b-tee-channel-independent-close/`: the scaffold fails `TestTeeClosesEachOutputAsSoonAsItIsFullyDelivered`; this FIFO-forwarder version passes the full six-test suite under `go test -race -count=20 ./...`, with `go vet ./...` clean.
+**Verified:** in a scratch copy, the scaffold fails
+`TestTeeClosesEachOutputAsSoonAsItIsFullyDelivered`. This FIFO version
+passes all six tests under `go test -race -count=20 ./...`.
+`go vet ./...` is clean.
 
 ## Key takeaways
 
-- One goroutine that waits for both consumers before moving to the next value cannot let the outputs close independently.
-- Give each output its own FIFO and forwarder when independent progress and ordering both matter.
-- Keep shutdown in the delivery select and make cleanup close every queue.
-- A passing paced test does not prove ordering if the implementation relies on goroutine scheduling.
+- One goroutine that waits for both consumers cannot close outputs
+  independently.
+- Use a FIFO and forwarder per output when order and independent progress
+  both matter.
+- Check `done` in delivery. Close every queue during cleanup.
+- A timed test does not prove order if scheduling controls it.

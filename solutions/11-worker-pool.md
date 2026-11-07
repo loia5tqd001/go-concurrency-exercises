@@ -1,14 +1,13 @@
 # Worker Pool: Batch Job Processor with Partial Failures — Suggested Solutions
 
-> **Spoiler warning.** This file contains full worked solutions for `11-worker-pool/`. Try solving it yourself first — come back here if you're stuck or want to compare approaches.
+> **Spoiler warning.** This file contains full worked solutions for `11-worker-pool/`. Try solving it yourself first. Come back if you are stuck or want to compare approaches.
 
 ## The problem
 
-`ProcessJobs` is handed a slice of `Job`s, each run by calling `RunJob`
-(`mockjobs.go`), which sleeps for `JobLatency` (80ms) and then
-succeeds or fails with `ErrJobFailed` depending on the job's
-`ShouldFail` field. The naive version runs every job sequentially, one
-at a time, on the calling goroutine:
+`ProcessJobs` receives a slice of `Job` values. It runs each with
+`RunJob` from `mockjobs.go`. `RunJob` sleeps for `JobLatency`, 80ms. It
+returns `ErrJobFailed` when `ShouldFail` is true. The starting version
+runs each job one at a time:
 
 ```go
 func ProcessJobs(jobs []Job) []Result {
@@ -21,25 +20,17 @@ func ProcessJobs(jobs []Job) []Result {
 }
 ```
 
-The task is to replace this with a fixed-size pool of long-lived
-worker goroutines that pull `Job`s off a shared jobs channel, run
-`RunJob` on each, and write a `Result` back for every job — with a
-coordinating goroutine (backed by a `sync.WaitGroup`) closing the
-results channel once every worker has finished, so the caller can
-drain results without knowing in advance how many workers there are or
-when they'll finish. Every job must be captured exactly once (no
-skips, no duplicates, no data races), though the order of `Result`s in
-the returned slice does not need to match the order of the input
-`Job`s. The signature — `func ProcessJobs(jobs []Job) []Result` — must
-stay exactly the same.
+Your task is to use a fixed pool of workers. Each worker reads jobs from
+a shared channel and calls `RunJob`. Each writes one `Result`. A
+coordinating goroutine with `sync.WaitGroup` closes results after all
+workers finish. Each job runs exactly once. Do not skip, repeat, or race.
+Result order does not matter. Keep this signature:
+`func ProcessJobs(jobs []Job) []Result`.
 
 ## Why the naive version is wrong
 
-To be precise about what's actually broken here: nothing about the
-naive version is *incorrect*. It has no data race (only one goroutine
-ever touches `results` or calls `RunJob`), and every job's outcome ends
-up in the returned slice exactly once — the naive version's own doc
-comment says as much, and the tests confirm it:
+The starting version is correct. It has no race. It adds every result
+once. Its doc comment says the same, and the tests confirm it:
 
 ```
 --- FAIL: TestProcessJobsIsBounded (0.00s)
@@ -48,27 +39,16 @@ comment says as much, and the tests confirm it:
 FAIL
 ```
 
-`TestProcessJobsCorrectness` and `TestProcessJobsRace` both pass
-unmodified against the naive version above — there is no correctness
-bug or race to fix. The actual defect is pure wasted concurrency:
-because every `RunJob` call happens on the same goroutine, one after
-another, no two jobs are ever in flight at the same instant, even
-though none of them depends on any of the others finishing first.
-`TestProcessJobsIsBounded` is the test that catches this: it feeds
-`RunJob` its own instrumentation (`mockjobs.go`'s
-`JobConcurrencyHighWaterMark`) that tracks the largest number of jobs
-genuinely executing at once, and demands that number be *more than 1*
-(there's actual concurrency) *and* comfortably below the job count
-(that concurrency is capped by a small, fixed-size pool, not one
-goroutine per job). The naive version above trips the first half of
-that check — its high-water mark never leaves 1. The fix, then, is
-purely about *how much work happens at once*, not about *whether the
-result is correct* — which is exactly why a naive per-goroutine
-fan-out (spawning one goroutine per job, no pool at all) would trip
-the *second* half of the same check instead: its high-water mark would
-track the full job count, which a bounded worker pool is specifically
-built to avoid, since real workloads often need a cap on how many jobs
-run concurrently regardless of how many jobs there are.
+`TestProcessJobsCorrectness` and `TestProcessJobsRace` pass. There is no
+correctness bug to fix. The problem is lack of parallel work. Every
+`RunJob` uses one goroutine, so only one job runs.
+
+`TestProcessJobsIsBounded` uses
+`JobConcurrencyHighWaterMark` from `mockjobs.go`. This value tracks the
+largest number of jobs. It must be above 1 and below the job count.
+
+The starting version reports 1. One goroutine per job would report every
+job. A pool must keep the count fixed even when the input grows.
 
 ## Approach 1: Fixed-size worker pool, fan-in through a results channel
 
@@ -116,35 +96,25 @@ func ProcessJobs(jobs []Job) []Result {
 }
 ```
 
-Three pieces of machinery, each doing one job:
+There are three parts:
 
-- **`jobCh`** is the shared work queue. `numWorkers` long-lived worker
-  goroutines all `range` over it, so each job sent into `jobCh` gets
-  picked up by exactly one worker — Go guarantees a value sent on an
-  unbuffered channel is received by exactly one receiver, never
-  duplicated and never silently dropped, which is what gives "every
-  job captured exactly once" for free instead of needing to reason
-  about it by hand.
-- **A feeder goroutine** sends every job from the input slice into
-  `jobCh` and then `close`s it. Closing is what lets each worker's
-  `for j := range jobCh` loop terminate cleanly once the queue is
-  drained, rather than blocking forever waiting for one more job.
-- **`resultCh`** is the fan-in point: every worker writes its outcome
-  into the same channel as it finishes a job, and the caller drains it
-  with `for r := range resultCh`. A second coordinating goroutine calls
-  `wg.Wait()` (blocking until all `numWorkers` workers have called
-  `Done`) and then closes `resultCh` — this has to run on its own
-  goroutine, because closing `resultCh` unblocks the `for r := range
-  resultCh` loop below it, and that loop can't itself return until
-  `resultCh` closes. Doing the `wg.Wait()` inline on the main goroutine
-  instead would deadlock: it would block waiting for workers that are
-  in turn blocked trying to send on `resultCh`, which nothing is
-  draining yet.
+- **`jobCh` is the work queue.** `numWorkers` goroutines use
+  `for j := range jobCh`. Each job goes to one worker. Go sends an
+  unbuffered value to one receiver, so no job repeats or drops.
+- **A feeder sends jobs.** It closes `jobCh` after the input ends. The
+  worker loops then end.
+- **`resultCh` collects results.** Every worker sends here. The caller
+  uses `for r := range resultCh`. A separate goroutine waits with
+  `wg.Wait()` and then closes `resultCh`.
 
-Since results only ever leave a worker through `resultCh` — never
-through a shared slice each worker writes into directly — there's
-nothing to race on, which is why `TestProcessJobsRace` passes under
-`-race` even with 50 jobs across several runs.
+The close must use a separate goroutine. If `wg.Wait()` ran inline, it
+would wait for workers. The workers would wait to send to `resultCh`.
+Nothing would drain it, so the code would deadlock.
+
+Only `resultCh` carries results. Workers do not write a shared slice.
+Each worker calls `Done` when it exits. The caller uses `range` over
+`resultCh`. There is no race. `TestProcessJobsRace` passes under
+`-race`.
 
 ## Approach 2: Fixed-size worker pool, direct indexed writes into a pre-sized slice (alternative)
 
@@ -184,56 +154,34 @@ func ProcessJobs(jobs []Job) []Result {
 }
 ```
 
-Instead of fanning results in through a channel, this pre-sizes a
-`results` slice to `len(jobs)` up front and has each worker write
-straight into `results[j.ID]` as it finishes a job — no `resultCh`, no
-separate closer goroutine to coordinate it, and no drain loop; the
-main goroutine just feeds `jobCh` directly and blocks on `wg.Wait()`
-before returning `results`.
+This pre-sizes `results` to `len(jobs)`. Each worker writes to
+`results[j.ID]`. There is no `resultCh` and no closer goroutine. The main
+goroutine feeds `jobCh`, waits on `wg.Wait()`, and returns `results`.
 
-This is race-free *for a subtler reason than Approach 1's*: it isn't
-that only one goroutine ever touches `results` (many do, concurrently)
-— it's that every job's `ID` is unique, so no two workers ever write to
-the *same element* of the slice at the same time, and concurrent
-writes to different elements of the same slice are not a data race in
-Go's memory model. `go test -race` confirms this holds across several
-runs of the 50-job stress test.
+This is race-free for another reason. Many workers write `results`.
+Each job has a unique `ID`, so workers write different elements. Go does
+not treat writes to different slice elements as a race. The 50-job
+stress test passes under `go test -race`.
 
-**This only works because of a precondition specific to this
-exercise, not a general property of `ProcessJobs`.** `results[j.ID]`
-requires every `Job.ID` in the input to be a distinct value in `[0,
-len(jobs))` — true for both `testJobs` in `check_test.go` and the
-`jobs` slice built in `main`, which both number jobs `0..n-1`
-contiguously, but not something the function signature `func
-ProcessJobs(jobs []Job) []Result` promises or enforces. Hand this
-version a `[]Job` with IDs like 100, 200, 300, or with duplicate or
-negative IDs, and it panics with an index-out-of-range (or silently
-overwrites one job's result with another's) where the naive version
-and Approach 1 both handle arbitrary IDs without issue, since neither
-one ever uses `ID` as anything but a label to carry through to
-`Result`. Treat Approach 1 as the version to reach for by default;
-Approach 2 is worth knowing as a legitimate lock-free technique for
-exactly the case where "job ID doubles as a dense array index" is
-already guaranteed elsewhere in your system.
+This design needs one rule. Every `Job.ID` must be unique and in
+`[0, len(jobs))`. `testJobs` in `check_test.go` and `jobs` in `main`
+use `0..n-1`, so they meet this rule. The signature does not promise it.
+
+IDs like 100, 200, or 300 cause an index error. Duplicate IDs can
+overwrite a result. A caller can pass any `[]Job`. The starting version
+and Approach 1 accept any ID. They only copy the ID into `Result`.
+
+Use Approach 1 by default. Use Approach 2 only when the ID is already a
+dense array index.
 
 ## Key takeaways
 
-- Not every "naive" starting point is a correctness bug. Here it was a
-  purely sequential-vs-concurrent throughput problem — recognizing that
-  distinction (via a race detector and a passing correctness test)
-  matters as much as recognizing an actual bug does.
-- A worker pool decouples "how many jobs there are" from "how many of
-  them run at once": `numWorkers` stays fixed regardless of whether
-  `jobs` has 20 elements or 20,000, unlike a naive one-goroutine-per-job
-  fan-out.
-- `close(jobCh)` after feeding is what lets `for j := range jobCh` in
-  each worker terminate; `wg.Wait()` followed by `close(resultCh)` in
-  its own goroutine is what lets the *caller's* `for r := range
-  resultCh` terminate. Two different channels, two different close
-  points, each unblocking a different consumer.
-- Fan-in through a channel (Approach 1) and direct indexed writes into
-  a pre-sized slice (Approach 2) are both legitimately race-free, but
-  for different reasons — single-writer-per-channel-send versus
-  disjoint-memory-per-index — and the second one quietly narrows the
-  function's contract to inputs where IDs are dense and unique. Know
-  which guarantee you're actually relying on before you ship it.
+- A slow starting point is not always a correctness bug. Here the code
+  is correct but runs jobs one at a time.
+- A worker pool decouples job count from worker count. `numWorkers` stays
+  fixed for 20 jobs or 20,000 jobs.
+- Use `close(jobCh)` after feeding to end each worker's range loop. A
+  separate goroutine runs `wg.Wait()`, then `close(resultCh)`. Call
+  `close` only once on each channel.
+- A results channel and direct indexed writes can both be race-free.
+  They rely on different rules. Indexed writes need dense, unique IDs.

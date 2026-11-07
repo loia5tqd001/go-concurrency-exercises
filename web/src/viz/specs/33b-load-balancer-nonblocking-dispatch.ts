@@ -49,7 +49,7 @@ const N = W * K.rounds.value;
 const tests: Record<string, TestDef> = {
   queues: {
     name: "TestBalancerSurvivesMoreRequestsThanWorkers",
-    short: "flat workers",
+    short: "queue survives",
   },
 };
 
@@ -336,9 +336,9 @@ function fixedNodes(showInternals: boolean): Record<string, NodeDef> {
 }
 
 const todayInsight =
-  "At t=0 the first three sends reach fresh Workers. The fourth send targets a busy Worker and blocks outside the select. All three Workers finish at 5 ms and block on done, which Balance can no longer receive.";
+  "The first three sends reach idle Workers. The fourth send targets a busy Worker. It blocks outside the select. The Workers finish at 5 ms and block on done. Balance cannot receive done.";
 const goalInsight =
-  "Every request first enters Balance's queue. The same select keeps receiving new work and done reports, so a busy Worker cannot freeze the pool. After every submitter receives a result and the test returns, Balance and Workers remain resident: the final leak is fixture lifetime, not a failed fix.";
+  "Every request enters Balance's queue. The select keeps receiving new work and done reports. A busy Worker cannot freeze the pool. The test returns after all submitters get results. Balance and Workers remain alive. The run ends as a leak because the test leaves them running, not because the fix failed.";
 
 export default defineViz({
   schema: 3,
@@ -351,22 +351,22 @@ export default defineViz({
       chip: "Today",
       tier: "today",
       summary:
-        "Three unbuffered Worker inboxes accept one request each. Balance then blocks trying to send a fourth, so it cannot drain done.",
+        "Three unbuffered Worker inboxes accept one request each. Balance blocks while sending the fourth request. It cannot receive done.",
       model: {
         nodes: scaffoldNodes(),
         insight: todayInsight,
         stops: [
           {
             when: { op: "block", g: "balance" },
-            say: "The fourth dispatch waits on a busy Worker's unbuffered inbox. Balance is now stuck outside its select.",
+            say: "The fourth send waits on a busy Worker inbox. Balance is stuck outside its select.",
           },
           {
             when: { op: "block", g: "worker[1]", node: "done" },
-            say: "A Worker finishes at 5 ms, sends its result, then blocks reporting done because Balance is still stuck.",
+            say: "A Worker finishes at 5 ms. It sends its result, then blocks on done because Balance is stuck.",
           },
           {
             when: { op: "fire", node: "timeout" },
-            say: "At 2 s request 4 still has not been dispatched. The test fails; the Workers and Balance remain blocked.",
+            say: "At 2 s request 4 is still not dispatched. The test fails. The Workers and Balance stay blocked.",
           },
         ],
         tests,
@@ -380,22 +380,22 @@ export default defineViz({
       chip: "Goal",
       tier: "goal",
       summary:
-        "Balance keeps requests it cannot hand off in its own queue. The select still receives work and done, and the Workers keep running.",
+        "Balance queues requests it cannot send now. The select still receives work and done. The Workers keep running.",
       model: {
         nodes: fixedNodes(false),
         insight: goalInsight,
         stops: [
           {
             when: { op: "set", node: "queue", nth: 2 },
-            say: "The queue is doing its job: requests wait inside Balance while both Workers are already running.",
+            say: "The queue is working. Requests wait inside Balance while Workers run.",
           },
           {
             when: { op: "block", g: "balance" },
-            say: "No inbox can receive yet, so this select waits. It still has work and done among its cases.",
+            say: "No inbox can receive yet, so the select waits. It still watches work and done.",
           },
           {
             when: { op: "recv", g: "balance", node: "done", nth: 1 },
-            say: "A Worker reports done. Balance updates its load and can offer the first queued request to the freed Worker.",
+            say: "A Worker reports done. Balance updates its load. It can then offer the first queued request to the freed Worker.",
           },
         ],
         tests,
@@ -408,23 +408,23 @@ export default defineViz({
       chip: "Queue",
       tier: "inside",
       summary:
-        "The fix queues each request first. dispatch is nil with an empty queue, and it points at the least-loaded inbox only when there is a head.",
+        "The fix queues each request first. dispatch is nil when the queue is empty. It points to the least-loaded inbox only when there is a head.",
       model: {
         nodes: fixedNodes(true),
         insight:
-          "With an empty backlog, dispatch stays nil and that select case is disabled. Once backlog is non-empty, Balance peeks pool[0] and enables the send. A done report can still wake the select and free a Worker first. The end is a leak only because the resident Balance and Workers outlive the test.",
+          "With an empty backlog, dispatch stays nil, so that select case is disabled. When backlog has an item, Balance peeks pool[0] and enables the send. A done report can still wake the select first. The run ends as a leak because the test leaves Balance and Workers running.",
         stops: [
           {
             when: { op: "set", node: "queue", nth: 2 },
-            say: "A request waits in backlog. The next iteration points dispatch at the least-loaded Worker's inbox.",
+            say: "A request waits in backlog. The next loop points dispatch at the least-loaded Worker inbox.",
           },
           {
             when: { op: "block", g: "balance" },
-            say: "The inbox is not ready yet, but dispatch is only one select case. work and done remain live.",
+            say: "The inbox is not ready yet. The dispatch case is only one part of the select. work and done are still live.",
           },
           {
             when: { op: "recv", g: "balance", node: "done", nth: 1 },
-            say: "done arrives before the queued send. Balance decrements pending, fixes the heap, then retries dispatch.",
+            say: "The done report arrives before the queued send. Balance lowers pending and fixes the heap. It then retries dispatch.",
           },
         ],
         tests,
@@ -438,19 +438,19 @@ export default defineViz({
       chip: "Heap",
       tier: "inside",
       summary:
-        "pending rises when dispatch succeeds and falls when done arrives. pool is re-ordered after each change, so the next request goes to the least-loaded Worker.",
+        "pending rises when a dispatch succeeds. It falls when done arrives. pool is reordered after each change. The next request goes to the least-loaded Worker.",
       model: {
         nodes: fixedNodes(true),
         insight:
-          "A successful dispatch increments the chosen Worker's pending count and calls heap.Fix. A done report decrements it and calls the same primitive, so pool[0] tracks the least-loaded Worker. The final leak is the resident pool outliving the completed test, not a blocked request.",
+          "A successful dispatch increments the chosen Worker's pending count. It calls heap.Fix. A done report decrements the count and calls the same function. pool[0] stays the least-loaded Worker. The final leak happens because the pool stays alive after the test ends. No request is blocked.",
         stops: [
           {
             when: { op: "put", node: "pool", nth: 4 },
-            say: "Dispatch increments pending, then Fix moves the changed Worker deeper so pool[0] remains the least loaded.",
+            say: "Dispatch increments pending. Fix moves the changed Worker deeper, so pool[0] stays least loaded.",
           },
           {
             when: { op: "recv", g: "balance", node: "done", nth: 1 },
-            say: "done lowers pending. Fix restores the min-heap order without a Pop/Push round trip.",
+            say: "The done report lowers pending. Fix restores heap order without removing and re-adding the Worker.",
           },
         ],
         tests,

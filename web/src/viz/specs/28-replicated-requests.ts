@@ -179,7 +179,7 @@ const solutionCode = (withMake: boolean, main: boolean): string =>
 const cancelTests: Record<string, TestDef> = {
   closed: {
     name: "TestFetchFastestClosedDoneCancelsEarly",
-    short: "closed done",
+    short: "done closed",
     // Both replicas observed done and neither ran to completion, and the
     // synctest bubble closed with no goroutine left blocked.
     judge: (run) => run.vars.cancelled === TEST.length && (run.vars.completed ?? 0) === 0 && run.outcome === "ok",
@@ -211,23 +211,23 @@ export default defineViz({
       id: "today",
       chip: "Today",
       tier: "today",
-      summary: `Every replica gets a nil done. replica-B answers at ${K.bMs.value} ms, but replica-A and replica-C run out their full ${K.aMs.value} ms and ${K.cMs.value} ms timers.`,
+      summary: `Every replica gets a nil done. replica-B answers at ${K.bMs.value} ms. replica-A and replica-C still run until ${K.aMs.value} ms and ${K.cMs.value} ms.`,
       model: {
         ...demo("nil", DEMO.length, K.demoSleepMs.value, "r(nil)"),
-        insight: `Each replica waits on its timer or its done, but done is nil, and a nil channel never fires. replica-B wins at ${K.bMs.value} ms, yet replica-A and replica-C keep waiting to ${K.aMs.value} ms and ${K.cMs.value} ms, and their answers land in results unread.`,
+        insight: `Each replica waits on its timer or done. Here done is nil, so it never fires. replica-B wins at ${K.bMs.value} ms. A and C keep waiting to ${K.aMs.value} ms and ${K.cMs.value} ms. Their answers land in results with no reader.`,
         stops: [
           {
             // replica-B's send hands its value to the waiting caller.
             when: { op: "send", g: "replica[1]" },
-            say: `At ${K.bMs.value} ms replica-B answers first with B, and the caller has its value.`,
+            say: `At ${K.bMs.value} ms replica-B answers first with B. The caller now has its value.`,
           },
           {
             when: { op: "fire", node: "timerA" },
-            say: `At ${K.aMs.value} ms replica-A's timer runs out anyway. Nobody wants A, but nil could never tell it to stop.`,
+            say: `At ${K.aMs.value} ms replica-A's timer still fires. No one wants A, but nil cannot stop it.`,
           },
           {
             when: { op: "fire", node: "timerC" },
-            say: `At ${K.cMs.value} ms replica-C finishes too. No loser stopped early when replica-B won.`,
+            say: `At ${K.cMs.value} ms replica-C finishes too. No loser stopped early after replica-B won.`,
           },
         ],
         tests: loserTests,
@@ -240,18 +240,18 @@ export default defineViz({
       id: "goal",
       chip: "Goal",
       tier: "goal",
-      summary: `Every replica gets stop. The instant replica-B answers at ${K.bMs.value} ms, stop closes, and replica-A and replica-C return early.`,
+      summary: `Every replica gets stop. replica-B answers at ${K.bMs.value} ms. stop closes at once, and replica-A and replica-C return early.`,
       model: {
         ...demo("stop", DEMO.length, K.demoSleepMs.value, "r(stop)"),
-        insight: `Every replica now waits on its timer or stop. When replica-B wins at ${K.bMs.value} ms, the caller closes stop on its way out, so replica-A and replica-C wake at once, stop their timers, and return early.`,
+        insight: `Each replica now waits on its timer or stop. replica-B wins at ${K.bMs.value} ms. The caller closes stop as it returns. A and C wake at once, stop their timers, and return early.`,
         stops: [
           {
             when: { op: "close", node: "stop" },
-            say: `replica-B wins at ${K.bMs.value} ms, and the caller closes stop as it returns.`,
+            say: `replica-B wins at ${K.bMs.value} ms. The caller closes stop as it returns.`,
           },
           {
             when: { op: "stop", node: "timerC" },
-            say: `replica-A and replica-C see stop closed and stop their timers. ${K.aMs.value} ms and ${K.cMs.value} ms never run out.`,
+            say: `replica-A and replica-C see that stop is closed. They stop their timers. Their ${K.aMs.value} ms and ${K.cMs.value} ms timers never fire.`,
           },
         ],
         tests: loserTests,
@@ -263,18 +263,18 @@ export default defineViz({
       id: "winner",
       chip: "Winner",
       tier: "inside",
-      summary: `replica-B wins; defer close(stop) wakes the losers, and their empty results fit in the ${DEMO.length} slots of results.`,
+      summary: `replica-B wins. defer close(stop) wakes the losers. Their empty results fit in the ${DEMO.length} results slots.`,
       model: {
         ...demo("stop", DEMO.length, K.fixedSleepMs.value, "r(stop)"),
-        insight: `defer close(stop) runs on every return path, so the losers wake the moment replica-B's value arrives. Each one still sends an empty result, and results has a slot for every replica, so no send blocks.`,
+        insight: `defer close(stop) runs on every return path. The losers wake when B's value arrives. Each loser sends an empty result. results has one slot per replica, so no send blocks.`,
         stops: [
           {
             when: { op: "close", node: "stop" },
-            say: "The caller has replica-B's value. On the way out, defer close(stop) runs.",
+            say: "The caller has B. On the way out, defer close(stop) runs.",
           },
           {
             when: { op: "send", g: "replica[2]" },
-            say: `The losers return "" and send it. results has ${DEMO.length} slots, so their sends do not block.`,
+            say: `The losers return an empty string and send it. The ${DEMO.length} results slots accept every send.`,
           },
         ],
         clock,
@@ -286,7 +286,7 @@ export default defineViz({
       id: "cancel",
       chip: "Cancel",
       tier: "inside",
-      summary: "done is closed before the call, so the select takes done at once; defer close(stop) still tells both replicas to stop.",
+      summary: "done is already closed. The select takes done at once. defer close(stop) still tells both replicas to stop.",
       model: {
         nodes: {
           ...replicaNodes(TEST, "stop", "r(stop)"),
@@ -310,16 +310,16 @@ export default defineViz({
           stop: channel({ label: "stop", pos: POS.stop, cap: 0 }),
           done: channel({ label: "done", pos: POS.done, cap: 0 }),
         },
-        insight: `done is already closed, so the select returns the error at once. defer close(stop) covers this return path too, so replicas a and b see stop and stop their ${K.testAMs.value} ms and ${K.testBMs.value} ms timers before they fire.`,
+        insight: `done is already closed, so the select returns an error at once. defer close(stop) runs on this path too. Replicas a and b see stop and stop their timers. Their ${K.testAMs.value} ms and ${K.testBMs.value} ms timers never fire.`,
         stops: [
           {
             when: { op: "close", node: "stop" },
-            say: "The select takes done at once. On the way out, defer close(stop) runs anyway.",
+            say: "The select takes done at once. On the way out, defer close(stop) still runs.",
           },
           {
             // b runs after a, so its return is the last one.
             when: { op: "return", g: "replica[1]" },
-            say: `a and b saw stop, stopped their timers, and returned. At ${K.checkMs.value} ms the test checks them.`,
+            say: `a and b see stop, stop their timers, and return. At ${K.checkMs.value} ms the test checks them.`,
           },
         ],
         tests: cancelTests,
@@ -332,19 +332,19 @@ export default defineViz({
       id: "leak",
       chip: "Leak",
       tier: "inside",
-      summary: "The same fix with an unbuffered results. replica-B's value reaches the caller, but the losers' empty sends find no receiver and block forever.",
+      summary: "This is the same fix with an unbuffered results. replica-B's value reaches the caller. The losers' empty sends have no receiver and block.",
       model: {
         ...demo("stop", 0, K.fixedSleepMs.value, "r(stop)"),
         insight:
-          "Closing stop is only half the fix. The losers wake and return, then send on results. Without a buffer each send needs a receiver, and the caller has gone, so replica-A and replica-C block forever: a send leak in place of a timer leak.",
+          "Closing stop is only half the fix. The losers wake and return. They then send on results. Without a buffer, each send needs a receiver. The caller is gone, so A and C block forever. This replaces a timer leak with a send leak.",
         stops: [
           {
             when: { op: "close", node: "stop" },
-            say: "replica-B hands B straight to the caller, which closes stop and leaves.",
+            say: "replica-B hands B to the caller. The caller closes stop and leaves.",
           },
           {
             when: { op: "block", g: "replica[2]" },
-            say: "replica-A and replica-C wake and send on results. Nobody will ever receive, so they block.",
+            say: "replica-A and replica-C wake and send on results. No receiver will come, so they block.",
           },
         ],
         clock,

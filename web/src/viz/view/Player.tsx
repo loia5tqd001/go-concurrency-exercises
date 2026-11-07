@@ -4,9 +4,9 @@
 // position along that run's timeline, so Step back, the scrubber, and a
 // replay all show the same schedule.
 
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { memo, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import type { KeyboardEvent } from "react";
-import type { Params, SceneDef, Value, VizSpec } from "../engine/model.ts";
+import type { MicroStep, Params, SceneDef, Value, VizSpec } from "../engine/model.ts";
 import { defaultParams, parseCode, resolveModel, runModel, runScene, valueText } from "../engine/sim.ts";
 import { layout } from "../engine/layout.ts";
 import {
@@ -130,16 +130,14 @@ export function Player({ spec, scenes, hideChips = false, autoplay = false }: Pr
   const event = step === undefined ? undefined : run.steps[step]?.event;
   // Playback moves in batches, so every row of the batch that just played is
   // "now"; the last of them is the step the player names.
-  const current = new Set(
-    step === undefined ? [] : (timeline.beats.find((b) => b.kind === "batch" && b.steps.includes(step))?.steps ?? []),
+  const current = useMemo(
+    () =>
+      new Set(
+        step === undefined ? [] : (timeline.beats.find((b) => b.kind === "batch" && b.steps.includes(step))?.steps ?? []),
+      ),
+    [step, timeline],
   );
   const caption = captionAt(timeline, p, model.stops?.map((stop) => stop.say) ?? []);
-
-  // Keep the current row in view while the list is open.
-  useEffect(() => {
-    if (!logOpen) return;
-    figRef.current?.querySelector(".sim-log [aria-current]")?.scrollIntoView({ block: "nearest" });
-  }, [logOpen, step]);
 
   // Playback is silent for screen readers; pausing or ending says where it
   // stopped, so a listener who pressed Play hears the caption or the verdict.
@@ -155,15 +153,22 @@ export function Player({ spec, scenes, hideChips = false, autoplay = false }: Pr
     if (atEnd) setP(0);
     setPlaying(true);
   };
-  const goTo = (target: number, announce: boolean): void => {
-    setPlaying(false);
-    setP(Math.max(0, Math.min(timeline.total, target)));
-    if (announce) {
-      const s = stepAt(timeline, target);
-      const text = s === undefined ? "Start." : run.steps[s]?.event.text ?? "";
-      setSaid(target >= timeline.total - 0.5 && run.verdict !== "" ? `${text} ${run.verdict}` : text);
-    }
-  };
+  const goTo = useCallback(
+    (target: number, announce: boolean): void => {
+      setPlaying(false);
+      setP(Math.max(0, Math.min(timeline.total, target)));
+      if (announce) {
+        const s = stepAt(timeline, target);
+        const text = s === undefined ? "Start." : run.steps[s]?.event.text ?? "";
+        setSaid(target >= timeline.total - 0.5 && run.verdict !== "" ? `${text} ${run.verdict}` : text);
+      }
+    },
+    [run, timeline],
+  );
+  const selectStep = useCallback(
+    (index: number): void => goTo(positionOfStep(timeline, index), true),
+    [goTo, timeline],
+  );
   const stepForward = (): void => goTo(nextStop(timeline, p), true);
   const stepBack = (): void => goTo(prevStop(timeline, p), true);
   const restart = (): void => {
@@ -273,14 +278,15 @@ export function Player({ spec, scenes, hideChips = false, autoplay = false }: Pr
   const printed = world.printed.map((id) => run.world.tokens[id]);
   // A clean run can still fail a test (06 Today returns every goroutine, too
   // late). The end line says both, and reads as a failure.
-  const failing = tests.filter(([id]) => run.world.tests[id] === "fail").map(([, test]) => test.short);
-  const returned = `Every goroutine returned${model.clock !== undefined ? ` at ${run.t} ms` : ""}`;
+  const failing = [...new Set(tests.filter(([id]) => run.world.tests[id] === "fail").map(([, test]) => test.short))];
+  const finished = `The run finished${model.clock !== undefined ? ` in ${run.t} ms` : ""}.`;
+  const limit = budget === undefined ? "" : ` The limit was ${budget.at} ms.`;
   const okVerdict =
     run.outcome !== "ok"
       ? run.verdict
       : failing.length > 0
-        ? `${returned}, but ${failing.join(" and ")} ${failing.length === 1 ? "fails" : "fail"}.`
-        : `${returned}.`;
+        ? `${finished}${limit} ${failing.length} ${failing.length === 1 ? "test" : "tests"} failed: ${failing.join(", ")}.`
+        : `${finished}${limit} ${tests.length > 0 ? "All tests passed." : "The run is complete."}`;
   // An exit can be the goal (04 ends with os.Exit(1)); it reads as a
   // failure only when a test fails.
   const bad = failing.length > 0 || (run.outcome !== "ok" && run.outcome !== "exit");
@@ -373,8 +379,8 @@ export function Player({ spec, scenes, hideChips = false, autoplay = false }: Pr
                 setSeed((s) => s + 1);
                 setPlaying(!reduce);
               }}
-              aria-label="Another schedule"
-              title="Another schedule: the scheduler picks a different order"
+              aria-label="Try another order"
+              title="Try another valid order"
             >
               <Icon name="shuffle" />
             </button>
@@ -490,7 +496,7 @@ export function Player({ spec, scenes, hideChips = false, autoplay = false }: Pr
                     {result === "pass" ? "✓" : result === "fail" ? "✕" : "○"}
                   </span>
                   {test.short}
-                  <span className="sr-only">{result === undefined ? "not decided yet" : result === "pass" ? "passes" : "fails"}</span>
+                  <span className="sr-only">{result === undefined ? "no result yet" : result === "pass" ? "passes" : "fails"}</span>
                 </li>
               );
             })}
@@ -510,21 +516,7 @@ export function Player({ spec, scenes, hideChips = false, autoplay = false }: Pr
           Every step <span className="sim-muted">({run.steps.length})</span>
         </summary>
         {logOpen && (
-          <ol>
-            {run.steps.map((s, i) => (
-              <li key={i}>
-                <button
-                  type="button"
-                  className={current.has(i) ? "is-now" : undefined}
-                  aria-current={step === i ? "step" : undefined}
-                  onClick={() => goTo(positionOfStep(timeline, i), true)}
-                >
-                  {model.clock !== undefined && <span className="sim-muted">{s.event.t} ms</span>}
-                  {s.event.text}
-                </button>
-              </li>
-            ))}
-          </ol>
+          <StepLog steps={run.steps} current={current} showTime={model.clock !== undefined} onSelect={selectStep} />
         )}
       </details>
 
@@ -536,6 +528,53 @@ export function Player({ spec, scenes, hideChips = false, autoplay = false }: Pr
   );
 }
 
+interface StepLogProps {
+  steps: readonly MicroStep[];
+  current: ReadonlySet<number>;
+  showTime: boolean;
+  onSelect: (index: number) => void;
+}
+
+// Playback changes `p` every animation frame. Keep the long transcript out of
+// that render path, and move only its own scroll container when the current
+// row needs to be followed.
+const StepLog = memo(function StepLog({ steps, current, showTime, onSelect }: StepLogProps) {
+  const listRef = useRef<HTMLOListElement>(null);
+  const currentStep = [...current].at(-1);
+
+  useEffect(() => {
+    const list = listRef.current;
+    const row = list?.querySelector<HTMLElement>('[aria-current="step"]');
+    if (list === null || list === undefined || row === null || row === undefined) return;
+    const listBox = list.getBoundingClientRect();
+    const rowBox = row.getBoundingClientRect();
+    const pad = 8;
+    if (rowBox.top < listBox.top + pad) {
+      list.scrollTop += rowBox.top - listBox.top - pad;
+    } else if (rowBox.bottom > listBox.bottom - pad) {
+      list.scrollTop += rowBox.bottom - listBox.bottom + pad;
+    }
+  }, [current]);
+
+  return (
+    <ol ref={listRef}>
+      {steps.map((s, i) => (
+        <li key={i}>
+          <button
+            type="button"
+            className={current.has(i) ? "is-now" : undefined}
+            aria-current={currentStep === i ? "step" : undefined}
+            onClick={() => onSelect(i)}
+          >
+            {showTime && <span className="sim-muted">{s.event.t} ms</span>}
+            {s.event.text}
+          </button>
+        </li>
+      ))}
+    </ol>
+  );
+});
+
 function Legend({ world }: { world: { g: Record<string, { status: string }> } }) {
   const states = new Set(Object.values(world.g).map((view) => view.status));
   const items: [string, string][] = [
@@ -544,7 +583,7 @@ function Legend({ world }: { world: { g: Record<string, { status: string }> } })
     ["is-done", "returned"],
   ];
   if (states.has("idle")) items.push(["is-idle", "not started"]);
-  items.push(["is-bad", "leaked, deadlocked, or panicked"]);
+  items.push(["is-bad", "stuck forever or crashed"]);
   return (
     <ul className="sim-legend" aria-label="Legend">
       {items.map(([cls, word]) => (

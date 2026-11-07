@@ -1,10 +1,10 @@
 # Actor Model: A Bank Account With No Locks
 
-`Account` is supposed to be safe for concurrent `Deposit`/`Withdraw`/
-`Balance` calls from many goroutines at once. Right now it is not:
-`balance` is read and written directly, with no synchronization of any
-kind, and `Withdraw` doesn't even check funds before letting the
-balance go negative.
+`Account` should handle `Deposit`, `Withdraw`, and `Balance` calls from
+many goroutines safely.
+
+Today, `balance` is read and written directly without protection.
+`Withdraw` also does not check funds. The balance can go below zero.
 
 ```
 today:  goroutine A ─┐
@@ -17,20 +17,19 @@ goal:   goroutine A ─┐        request           actor goroutine
                      ◀───────────── reply ─────┘
 ```
 
-Your task is to reimplement `Account` the "share memory by
-communicating" way, using the actor pattern instead of a mutex:
-`NewAccount` should start a single long-lived goroutine that owns
-`balance` and processes exactly one request at a time from an
-unexported channel of request structs. `Deposit`, `Withdraw`, and
-`Balance` become thin methods that build a request, send it on that
-channel, and block on a reply channel for the result. Correctness
-must come purely from serializing all access to `balance` through
-that single actor goroutine - no `sync.Mutex` (or any other lock) may
-be used anywhere.
+Reimplement `Account` with the actor pattern instead of a mutex.
+`NewAccount` starts one long-lived goroutine. That goroutine owns
+`balance` and handles one request at a time. It reads requests from an
+unexported channel of request structs.
 
-`Withdraw` must return `ErrInsufficientFunds` - and leave `balance`
-unchanged - if `amount` is greater than `balance` at the time the
-actor goroutine processes the request. The function signatures must
+`Deposit`, `Withdraw`, and `Balance` each send one request. They wait
+for the actor's reply before they return. `Deposit` ignores the reply
+value, but it must still receive it. All access to `balance` must go
+through the actor. Do not use `sync.Mutex` or any other lock.
+
+If `amount` is greater than `balance`, `Withdraw` returns
+`ErrInsufficientFunds`. It must leave `balance` unchanged. The actor
+checks this when it handles the request. The function signatures must
 stay the same:
 
 ```go
@@ -40,18 +39,16 @@ func (a *Account) Withdraw(amount int) error
 func (a *Account) Balance() int
 ```
 
-Unlike a mutex, which needs nothing to clean up, the actor goroutine
-you start in `NewAccount` keeps running for as long as the process
-does unless something tells it to stop - so `Account` also needs a
-`Close` method that terminates that goroutine:
+The actor goroutine runs until it is told to stop. `Account` therefore
+needs a `Close` method:
 
 ```go
 func (a *Account) Close()
 ```
 
-After `Close` returns, the actor goroutine must have exited. Calling
-`Deposit`, `Withdraw`, or `Balance` on a closed `Account` is not
-exercised by the tests, so its behavior is up to you.
+`Close` must stop the actor goroutine. The goroutine must exit shortly
+after `Close`. The tests do not call `Deposit`, `Withdraw`, or
+`Balance` after `Close`. Their behavior after close is up to you.
 
 ## Test your solution
 

@@ -1,19 +1,14 @@
 # Tee Channel: Duplicating a Sensor Stream to Two Consumers
 
-Given is a function `StartSensor` (see `mocksensor.go`) that simulates a
-hardware sensor: it emits `count` incrementing integer readings, one
-every 5ms, then closes its channel. Two independent consumers need to
-see the full stream - say, a live display and a logger - and one of
-them might read slower than the other.
+`StartSensor` (see `mocksensor.go`) simulates a sensor. It sends
+`count` readings, one every 5ms. The readings increase by one. Then
+the channel closes. Two consumers need the full stream. One might be
+a live display and the other a logger. One may read more slowly.
 
-`Tee` is supposed to duplicate every value read from `in` so that TWO
-independent consumers can each see the full sequence, even if one
-consumer reads slower than the other. The current implementation does
-nothing of the sort - it just returns the same input channel twice,
-which means the two "outputs" are actually the SAME channel: whichever
-consumer happens to read a given value first gets it, and the other
-consumer never sees that value at all. Values get split between the
-two consumers instead of duplicated to both.
+`Tee` should copy every value from `in` to two independent consumers.
+Today, it returns the same input channel twice. Both outputs are the
+same channel. Each value goes to only one racing reader. The other
+reader loses that value.
 
 ```
 TODAY - both outputs are the same channel; Tee starts no goroutine
@@ -30,15 +25,14 @@ GOAL - one tee goroutine reads in and sends each value to BOTH outputs
   done closed --> both outputs close at once
 ```
 
-Your task is to implement `Tee` properly: every value received from
-`in` must be sent to BOTH output channels, so each output ends up with
-the full, identical sequence of values `in` produced, in order. For
-each value, hold onto it and, using an inner select per output channel
-(so writing to one output doesn't have to happen strictly before the
-other, and a slow reader on one output doesn't stall forever if `done`
-fires), send it to whichever output(s) haven't received it yet, until
-both have. Respect `done` throughout, abandoning early if it closes.
-Close both output channels once `in` is exhausted (or `done` fires).
+Your task is to implement `Tee`. Send every input value to both
+outputs. Each output must receive the same values in the same order.
+For each value, track which outputs have it. Use one inner `select`
+with a case for each output. This lets the outputs receive the value
+independently. Send it to each output until both have it. Respect
+`done` and stop if it closes. Close both outputs when `in` ends or
+`done` closes.
+
 The function signature must stay the same:
 
 ```go

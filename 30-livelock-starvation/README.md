@@ -1,12 +1,13 @@
 # Livelock & Starvation
 
-Two failure modes distinct from deadlock (see [21-dining-philosophers](../21-dining-philosophers)):
+Livelock and starvation are different from deadlock. See
+[21-dining-philosophers](../21-dining-philosophers).
 
-- **Livelock** — goroutines stay busy but make no progress: they keep reacting to
-  each other in lockstep. Looks healthy on a CPU graph, which is what makes it
-  sneaky.
-- **Starvation** — the system makes steady progress overall, but one participant
-  is perpetually denied service by an unfair policy.
+- **Livelock** — goroutines stay busy but make no progress. They keep
+  reacting to each other in lockstep. A CPU graph can look healthy, which
+  hides the problem.
+- **Starvation** — overall progress continues. But an unfair policy denies
+  service to one participant forever.
 
 ## Part 1 — Livelock: `RunLivelockDemo`
 
@@ -14,31 +15,31 @@ Two failure modes distinct from deadlock (see [21-dining-philosophers](../21-din
 func RunLivelockDemo(attempts int) (aProgress, bProgress int)
 ```
 
-Two workers, A and B, each try to acquire-and-release one shared resource up to
-`attempts` times. Every attempt runs this protocol — **keep its shape and the
-`probeWindow` value exactly; `check_test.go`'s timing check is calibrated
-against it**:
+Two workers, A and B, share one resource. Each tries to acquire and
+release it up to `attempts` times. Every attempt follows this protocol.
+Keep its shape and `probeWindow` value exact. The timing check in
+`check_test.go` depends on them:
 
 1. Announce as a contender for this round.
-2. Sleep `probeWindow` (let every contender announce before anyone reads).
+2. Sleep `probeWindow`. Let every contender announce before anyone reads.
 3. Snapshot the contender count.
-4. Sleep `probeWindow` again (let every contender read before anyone withdraws).
-5. Withdraw, then act on the step-3 snapshot: exactly one contender = win; more
-   than one = collision, and every colliding worker backs off before retrying.
+4. Sleep `probeWindow` again. Let every contender read before anyone
+   withdraws.
+5. Withdraw. Then act on the step-3 snapshot. One contender means a win.
+   More than one means a collision. Every colliding worker backs off before
+   retrying.
 
-**The bug:** both workers back off for the *same fixed duration*, so a
-collision reproduces forever — a perfect, self-sustaining lockstep, even
-though both workers stay constantly busy (that's the "livelock," as opposed
-to deadlock, distinction).
+**The bug:** both workers back off for the same fixed time. The collision
+repeats forever. Both workers stay busy, but neither makes progress. This
+is livelock, not deadlock.
 
-**The fix:** make step 5's backoff *independently randomized per worker*.
-Nothing else changes. Give each worker its own seeded RNG (not a shared
-global one) so the jittered run stays reproducible.
+**The fix:** randomize step 5's backoff for each worker. Change nothing
+else. Give each worker its own seeded RNG. Do not use one shared global
+RNG. The jittered run must stay reproducible.
 
-(Running `go run .` against the naive version will visibly churn for
-several real seconds, printing no progress for either worker, before
-giving up - that's the bug. `check_test.go` uses `testing/synctest` so it
-costs no real wall-clock time.)
+The naive `go run .` prints no progress for several real seconds. That is
+the bug. `check_test.go` uses `testing/synctest`, so tests use no real
+wait time.
 
 ## Part 2 — Starvation: `Dispatcher`
 
@@ -49,21 +50,22 @@ func (d *Dispatcher) SubmitLowPriority(job int)
 func (d *Dispatcher) RunDispatchCycles(n int) (highCompleted, lowCompleted int)
 ```
 
-Each call to `RunDispatchCycles(n)` runs `n` cycles; each cycle completes
-exactly one job that's queued *at that instant* (`Submit*` calls may happen
-before or between calls to `RunDispatchCycles`).
+`RunDispatchCycles(n)` is the signature. Each call to `RunDispatchCycles`
+runs `n` cycles.
+Each cycle completes one job queued at that moment. `Submit*` calls may
+happen before or between these calls.
 
-**The bug:** strict priority — a cycle drains a high-priority job if one is
-queued, full stop, and only looks at low-priority once high is completely
-empty. A high-priority backlog that never runs dry starves low-priority work
-forever, even though the dispatcher is always doing useful work.
+**The bug:** the dispatcher uses strict priority. A cycle takes a
+high-priority job if one is queued. It looks at low-priority jobs only
+when high priority is empty. A high-priority backlog can starve low
+priority forever. The dispatcher still does useful work.
 
 **The fix — make it fair:**
 
-- The oldest waiting low-priority job must complete within **10 cycles**, no
-  matter how deep the high-priority backlog is (aging). With several low
-  jobs, they drain in FIFO order on their aging turns.
-- When both queues stay busy, high-priority work must still take **at least
+- The oldest low-priority job must complete within **10 cycles**. This
+  holds for any high-priority backlog. Aging allows this. With several low
+  jobs, FIFO order applies on their aging turns.
+- When both queues stay busy, high-priority work must take **at least
   two-thirds** of completed cycles.
 
 ```

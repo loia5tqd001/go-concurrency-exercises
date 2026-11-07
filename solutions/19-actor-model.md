@@ -1,12 +1,22 @@
-# Actor Model: A Bank Account With No Locks — Suggested Solutions
+# Actor model: a bank account without locks
 
-> **Spoiler warning.** This file contains full worked solutions for `19-actor-model/`. Try solving it yourself first — come back here if you're stuck or want to compare approaches.
+> **Spoiler warning.** This file has full solutions for `19-actor-model/`. Try the exercise first. Come back if you get stuck.
 
 ## The problem
 
-`Account` must be safe for concurrent `Deposit`/`Withdraw`/`Balance` calls from many goroutines. The task specifically asks for the "share memory by communicating" style: `NewAccount` starts a single long-lived goroutine that owns `balance` and processes one request at a time from an unexported channel; `Deposit`, `Withdraw`, and `Balance` become thin methods that send a request and block on a reply channel. The README is explicit that **no `sync.Mutex` (or any other lock) may be used anywhere** — this exercise is about practicing message-passing, not just about making `Account` thread-safe by any means.
+`Account` must be safe when many goroutines call `Deposit`, `Withdraw`, and `Balance`. The task asks for the "share memory by communicating" style.
 
-`Withdraw` must also return `ErrInsufficientFunds`, leaving `balance` unchanged, if `amount` exceeds `balance` at the moment the request is processed — and that check-then-debit must be atomic even under concurrent withdrawal attempts (`TestAccountWithdrawRejectsInsufficientFunds` fires 5 concurrent withdrawals of 30 against a balance of 100 and requires that no more than 3 succeed, with the exact resulting balance and no negative balance).
+`NewAccount` starts one long-lived goroutine. That goroutine owns `balance` and handles one request at a time from an unexported channel.
+
+`Deposit`, `Withdraw`, and `Balance` send a request and wait for a reply. They stay thin.
+
+The README forbids `sync.Mutex` and every other lock. This exercise is about message passing. It is not just about making `Account` safe by any means.
+
+`Withdraw` must return `ErrInsufficientFunds` when `amount` is larger than `balance`. The balance must not change.
+
+The funds check and debit must act as one atomic step under concurrent withdrawals.
+
+`TestAccountWithdrawRejectsInsufficientFunds` starts 5 withdrawals of 30 against a balance of 100. No more than 3 may succeed. The final balance must be exact and not negative.
 
 ## Why the naive version is wrong
 
@@ -21,7 +31,7 @@ func (a *Account) Withdraw(amount int) error {
 }
 ```
 
-`balance` is read and written directly with zero synchronization, and `Withdraw` doesn't even check funds. Verified directly against this test suite, running `go test -race ./...` on the naive version fails in multiple, compounding ways:
+The code reads and writes `balance` with no synchronization. `Withdraw` also checks no funds. I ran `go test -race ./...` against this version. It fails in several ways:
 
 ```
 --- FAIL: TestAccountBasicOperations (0.00s)
@@ -41,11 +51,17 @@ Previous write at 0x00c000010358 by goroutine 16:
     check_test.go:358: goroutine count was 2 before NewAccount and 2 right after (want it to increase)
 ```
 
-`Withdraw(1000)` from a balance of 120 is wrongly allowed, driving the balance to -880. Concurrent deposits lose updates (final balance 10836 instead of 11000, from 1000 concurrent `+1`s on an initial 10000), the race detector flags the unsynchronized read/write on `balance`, unchecked concurrent withdrawals push the balance negative (-50) since there's no atomicity around "check funds, then debit," and `NewAccount` never starts a goroutine at all since there's no actor to serialize through.
+`Withdraw(1000)` from a balance of 120 succeeds and leaves -880. The funds check is missing.
+
+Concurrent deposits lose updates. The final balance is 10836 instead of 11000. The test starts with 10000 and runs 1000 concurrent `+1` deposits.
+
+The race detector reports the unprotected `balance` access. Concurrent withdrawals also reach -50. Nothing keeps the check and debit together.
+
+`NewAccount` starts no goroutine. There is no actor to handle requests one at a time.
 
 ## Approach 1: actor goroutine (message-passing, no locks)
 
-A single goroutine (`run`) owns `balance` as a plain local variable — never shared, never touched by any other goroutine — and processes `request` values one at a time from an unbuffered channel. Since only one goroutine ever reads or writes `balance`, and it processes requests strictly sequentially, there's nothing left to race on and no lock is needed.
+One goroutine, `run`, owns `balance` as a local variable. No other goroutine touches it. `run` reads requests from an unbuffered channel and handles them one at a time. There is no shared access and no race, so no lock is needed.
 
 ```go {42,50,77}
 package main
@@ -168,16 +184,26 @@ func main() {
 }
 ```
 
-**Verified**: `go test -race -count=20 ./...` passes 20/20 with no races and the exact expected balances, including the insufficient-funds test (no more than `initial/amount` withdrawals ever succeed, balance never goes negative) and both `Close`-related tests (the actor goroutine visibly starts in `NewAccount` and is gone again after `Close`).
+`go test -race -count=20 ./...` passes all 20 runs. The balances are exact, and there are no races.
 
-Two correctness details worth calling out because they're easy to get wrong when hand-rolling this pattern:
+This includes the insufficient-funds test. No more than `initial/amount` withdrawals succeed, and the balance never goes negative.
 
-- The `check_test.go` for `Withdraw` requires the funds check and the debit to be atomic together. That falls out for free here: both happen inside the same `case opWithdraw:` in the single actor goroutine, so no other request can interleave between the check and the debit — there's no separate lock to "hold across" the sequence, because there's only ever one goroutine touching `balance` in the first place.
-- `Deposit` sends its request and then unconditionally waits on `<-reply`, even though it discards the result. This isn't optional bookkeeping — `req.reply <- response{...}` inside `run` is a *send* on an unbuffered channel, so if `Deposit` didn't receive it, the actor goroutine would block forever trying to reply to the first deposit and the entire account would wedge. Verified directly: deleting the `<-reply` line and re-running `TestAccountBasicOperations` reports `Balance() did not return within 2s - a wedged actor goroutine blocks every future call too` in about two seconds, confirming the drain is load-bearing, not decorative — `check_test.go`'s timeout guards turn what would otherwise be a wedged, minutes-long hang into that fast, readable failure.
+Both `Close` tests also pass. The actor goroutine starts in `NewAccount` and stops after `Close`.
+
+Two details are easy to get wrong:
+
+- `check_test.go` requires the `Withdraw` check and debit to act as one step. They sit in the same `case opWithdraw:` inside one goroutine. No other request can run between them.
+- `Deposit` waits on `<-reply` and discards the value. That wait is required.
+- `req.reply <- response{...}` is a send on an unbuffered channel. If `Deposit` does not receive, `run` blocks while replying.
+- The whole account then stops. I removed `<-reply` and ran `TestAccountBasicOperations`.
+- It reported `Balance() did not return within 2s - a wedged actor goroutine blocks every future call too` after about two seconds.
+- The timeout guard turns a long hang into a short, clear failure.
 
 ## Approach 1b: actor goroutine with typed messages instead of a tagged struct
 
-Same idea as Approach 1 — a single actor goroutine owns `balance` as a local variable, no locks anywhere — but the message shape is different: instead of one `request` struct with a `kind` enum field, each operation gets its own concrete message type, and the actor `switch`es on the message's dynamic type rather than an `int`.
+This uses the same idea as Approach 1. One actor goroutine owns `balance`, and no locks are used.
+
+The message shape changes. Each operation gets its own type, not one `request` with a `kind` field. The actor switches on the dynamic message type, not an `int`.
 
 ```go {12,42}
 package main
@@ -286,17 +312,28 @@ func main() {
 }
 ```
 
-**Verified**: `go test -race -count=20 ./...` passes 20/20, including both `Close`-related tests.
+`go test -race -count=20 ./...` passes all 20 runs. This includes both `Close` tests.
 
-Versus Approach 1:
+Compared with Approach 1:
 
-- **`Deposit` needs no reply channel at all.** `DepositCommand` carries no `replyCh`, and `loop` never tries to send one back for it. This sidesteps Approach 1's documented gotcha entirely — there's no drain to forget, because there's nothing to drain. Correctness doesn't depend on remembering the drain; it falls out of the same unbuffered-channel rendezvous that makes any of these designs work: `Deposit`'s send only completes once `loop` receives it, and `loop` finishes that `case` (updating `balance`) before it goes back to ranging for the next message, so any later `Withdraw`/`Balance` call is guaranteed to see the deposit.
-- **Weaker compile-time safety.** `Command any` accepts any value, and the `switch` has no `default` — a message of a type nobody handles is silently dropped instead of causing a compile error, and if that dropped message carried a reply channel, its caller blocks forever. Approach 1's closed `request` struct can't be constructed with the wrong shape in the first place. This is a real cost of the type-switch style, not just a style preference — it trades a compile-time guarantee for one line less boilerplate per message type.
-- **One fewer indirection to reason about.** There's no `response`/`kind` pair shared across three unrelated operations — each message's fields are exactly what that operation needs (`WithdrawCommand` has an `amount` and an `err`-shaped reply, `GetBalanceCommand` has neither `amount` nor `err`). Whether that's clearer or just "different boilerplate" is a matter of taste; unlike the two points above, it isn't a correctness or safety difference.
+- `Deposit` needs no reply channel. `DepositCommand` has no `replyCh`, and `loop` sends no reply.
+- There is no drain to forget. The unbuffered send completes when `loop` receives the command.
+- `loop` updates `balance` before it handles another message. A later `Withdraw` or `Balance` sees the deposit.
+- The type switch is less safe at compile time. `Command any` accepts any value.
+- The `switch` has no `default`. An unknown message is dropped with no error.
+- If that message has a reply channel, its caller waits forever.
+- The closed `request` struct in Approach 1 cannot have the wrong shape.
+- The type-switch version saves one line of setup per message, but loses a compile-time guarantee.
+- It has one less layer. There is no `response` and `kind` pair shared by all operations.
+- `WithdrawCommand` has an `amount` and a reply for `err`. `GetBalanceCommand` has neither amount nor `err`.
+- The actor sends a `response` on the `reply` channel in Approach 1.
+- This is a style choice, not a correctness or safety change.
 
-## Approach 2: mutex-based (also valid — but not for this exercise)
+## Approach 2: mutex-based, valid but not for this exercise
 
-This does **not** satisfy the exercise: the README explicitly forbids `sync.Mutex` (or any lock) here, and this approach uses one directly, so it fails the letter of the assignment even though the tests (which don't inspect implementation, only behavior) pass against it. It's included because a plain mutex guarding `balance` is how this exact problem is solved in most production Go code, and it's worth understanding both the parity and the differences.
+This does not satisfy the exercise. The README forbids `sync.Mutex` and every other lock. This version uses a mutex.
+
+The behavior tests still pass because they do not inspect the implementation. A plain mutex around `balance` is common in production Go. The comparison is still useful.
 
 ```go
 package main
@@ -372,20 +409,34 @@ func main() {
 }
 ```
 
-**Verified**: this one now fails the suite on two separate grounds, not just the letter-of-the-assignment one the paragraph above already calls out: `TestMainDoesNotUseLocks` fails as expected (it imports `sync.Mutex`), and — even with the no-op `Close` above added just to make it compile — `TestNewAccountStartsActorGoroutineAndCloseStopsIt` also fails, because `NewAccount` never raises the goroutine count the way an actor's `NewAccount` must. That second failure isn't a technicality: it's the same property the "concrete differences" list below already named as the structural difference between the two approaches, now enforced by a test rather than left as prose.
+This version fails two checks, not just the lock ban. `TestMainDoesNotUseLocks` fails because the file imports `sync.Mutex`.
 
-Concrete differences worth knowing, all readable straight off the two implementations above:
+I added the no-op `Close` so the code would compile. `TestNewAccountStartsActorGoroutineAndCloseStopsIt` still fails.
 
-- **Resource lifecycle.** The actor's `requests` channel is closed by `Close`, which ends `run`'s range loop and lets the goroutine exit. The mutex version has nothing to leak or clean up — it's just a struct, so its `Close` is a no-op — but that also means it can never satisfy `TestNewAccountStartsActorGoroutineAndCloseStopsIt`, which requires `NewAccount` to visibly start a goroutine.
-- **Zero value usability.** `var a Account` is a perfectly usable, empty mutex-based account. The actor version's zero value is not: `a.requests` is a nil channel, so any method call blocks forever sending on it. `NewAccount` is mandatory for the actor version in a way it isn't for the mutex version.
-- **Per-call cost.** Each actor call does two channel operations (one send, one receive) plus a `reply` channel allocation; the mutex version does one uncontended `Lock`/`Unlock` pair, which is typically cheaper per call, especially under low contention.
-- **What doesn't differ:** don't read "message passing" as buying you FIFO fairness across callers — Go's channel send-queue ordering is a runtime implementation detail, not a language guarantee, and `sync.Mutex` explicitly allows barging (a newly-arriving goroutine can grab the lock ahead of one that's been waiting). Neither approach gives you an ordering guarantee here; both just give you correctness (no lost updates, no torn reads, atomic check-then-mutate).
+`NewAccount` never raises the goroutine count. That is the main structural difference between the two designs.
 
-When to reach for which: use the actor style when you want to practice or lean into "share memory by communicating," when the owned state needs to coordinate with other goroutines via the same channel-based protocol anyway, or when the operations naturally compose as a sequence of messages (e.g. feeding into a larger pipeline). Use a mutex when the state is simple, contained, and doesn't need a background goroutine's lifecycle — which describes most bank-account-shaped problems in real code, and is exactly why this is billed as "also valid," not a lesser answer.
+Here are the concrete differences:
+
+- Resource lifecycle: `Close` closes the actor's `requests` channel. That ends `run`'s range loop and lets the goroutine exit.
+- The mutex version has no background work. Its `Close` is a no-op. Its struct needs no cleanup.
+- That also means it cannot pass `TestNewAccountStartsActorGoroutineAndCloseStopsIt`. That test requires `NewAccount` to start a goroutine.
+- Zero-value use: `var a Account` works with the mutex design. It does not work with the actor design.
+- The actor zero value has a nil `a.requests`. A method call blocks forever on that channel. The actor needs `NewAccount`.
+- Per-call cost: each actor call sends one message, receives one reply, and allocates a reply channel.
+- The mutex version uses one uncontended `Lock` and `Unlock` pair. It is usually cheaper under low contention.
+- Message passing does not guarantee FIFO fairness across callers. Channel queue order is a runtime detail, not a Go guarantee.
+- `sync.Mutex` allows barging. A new goroutine can take the lock before an older waiter.
+- Neither design guarantees caller order. Both prevent lost updates, torn reads, and split check-then-mutate steps.
+
+Use the actor style when you want message passing. Use it when tasks already coordinate by channel or messages form a natural sequence, such as a larger pipeline.
+
+Use a mutex when the state is simple and local. Use it when no background goroutine needs a lifecycle. That fits most bank-account code.
 
 ## Key takeaways
 
-- Correctness in the actor approach comes entirely from the invariant that exactly one goroutine (`run`) ever touches `balance`; there's no lock because there's no shared access to protect in the first place.
-- `Withdraw`'s check-then-debit atomicity falls out for free from that same invariant — both steps happen in one `case` inside the single-threaded actor loop, with no other request able to interleave.
-- Every request/reply round trip in the actor must actually complete: `Deposit` looks like it wastes a receive on a value it discards, but skipping `<-reply` deadlocks the actor on the very next unbuffered send — verified empirically by removing it and watching `TestAccountBasicOperations` fail fast on `check_test.go`'s timeout guard instead of running to Go's default 10-minute test timeout.
-- The mutex-based version is a real, commonly-reached-for, equally correct solution to the underlying concurrency problem — it just isn't what this exercise is asking you to practice. Know both: the actor pattern for when you want explicit message-passing semantics or a coordinating background goroutine, and a mutex for the common case where you just need to guard some in-process state.
+- The actor is correct because only `run` touches `balance`. No lock is needed because there is no shared access.
+- `Withdraw` gets one-step check and debit from the same rule. Both steps sit in one `case` in one goroutine.
+- Every request and reply must finish. `Deposit` looks like it wastes a receive, but skipping `<-reply` stops the actor.
+- I removed the receive and ran `TestAccountBasicOperations`. The timeout guard failed it fast.
+- The mutex version also solves the concurrency problem. It is common and correct, but this exercise does not ask for it.
+- Use an actor for explicit message passing or a background owner. Use a mutex for simple in-process state.

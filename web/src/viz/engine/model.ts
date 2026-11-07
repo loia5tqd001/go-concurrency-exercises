@@ -450,8 +450,8 @@ export interface Run extends RunSummary {
   initial: World;
   steps: MicroStep[];
   edges: Edge[];
-  // The outcome sentence: "Leak: gen is blocked on out <- with nobody left
-  // to receive." It is empty for a plain ok.
+  // The outcome sentence: "The program leaked a goroutine. gen is still
+  // blocked on out <-. Main has already returned." Empty for a plain ok.
   verdict: string;
   // Mistakes in the spec: an unknown node, a wait group below zero that the
   // scene did not expect, a loop with no end. viz-check fails on any.

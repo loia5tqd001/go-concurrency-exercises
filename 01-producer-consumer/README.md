@@ -1,6 +1,8 @@
 # Producer-Consumer Scenario
 
-A producer reads tweets one at a time from a mockstream; a consumer checks each one for Go-related content. Right now `main.go` runs them back-to-back: the producer fills a whole slice before the consumer looks at a single tweet, so the total cost is additive, not overlapped.
+A producer reads tweets from a mock stream. A consumer checks each
+tweet for Go content. Right now the producer finishes first. Only then
+does the consumer start. The two parts do not overlap.
 
 ```
 today (serial):
@@ -14,7 +16,9 @@ goal (pipelined):
             └ 1 read ┴──── overlapped, paced by the slower stage ─────┘   ≈ 1.98s total
 ```
 
-Your task: change `main.go` so producer and consumer run concurrently and hand off tweets as they're ready, instead of the producer finishing entirely first.
+Change `main.go` so the producer and consumer run together. The
+producer should pass each tweet to the consumer as soon as it is
+ready.
 
 ## Expected results:
 Before: 

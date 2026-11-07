@@ -1,15 +1,11 @@
 # Limit Service Time for Free-Tier Users
 
-Your video processing service has a freemium model: every **free**
-user gets 10 seconds of processing time total, accumulated across
-*all* of their requests, not 10 seconds per call. Once that lifetime
-quota is spent, the next request gets killed the instant the 10s mark
-is hit - even mid-run. **Premium** users are never limited.
+Each free user gets 10 seconds of processing time total. This limit
+covers all requests, not each request. Premium users have no limit.
 
-Go has no way to forcibly stop a running goroutine, so "killing" a
-process really means racing a timeout against completion and walking
-away the moment the timeout wins - the process goroutine itself keeps
-running, orphaned, in the background:
+Go cannot force a goroutine to stop. The code can stop waiting for the
+work. The work may still run in the background. `HandleRequest` receives
+a `*User`:
 
 ```
 HandleRequest(process, u)
@@ -31,8 +27,8 @@ HandleRequest(process, u)
                                                 anyway, orphaned
 ```
 
-Right now `HandleRequest` does none of this - it calls `process()`
-synchronously and always returns `true`:
+Right now `HandleRequest` does none of this. It calls `process()` and
+waits for it. It always returns `true`:
 
 ```go
 func HandleRequest(process func(), u *User) bool {
@@ -41,14 +37,13 @@ func HandleRequest(process func(), u *User) bool {
 }
 ```
 
-No timeout, no premium/free distinction, no per-user quota tracking at
-all - a free user's request runs to completion no matter how long it
-takes.
+There is no timeout and no quota tracking. A free request always runs
+to the end.
 
 ## The double-spend trap
 
-Checking "is there quota left?" and spending it can't be two separate
-steps once requests for the same user can overlap:
+Requests for one user can overlap. Checking the quota and using it
+must happen as one safe step:
 
 ```
 request A: check remaining (10s left) ──▶ ... sleeps 6s ...
@@ -56,33 +51,25 @@ request B: check remaining (10s left) ──▶ ... sleeps 6s ...
                      both saw room - together they need 12s of a 10s quota
 ```
 
-A request must reserve/record its share atomically with the check, or
-two concurrent 6s requests against a 10s quota can both slip through.
+Two 6 second requests must not both pass a 10 second quota.
 
 ## Your task
 
 Fix `HandleRequest` so that:
 
-- **Premium** users (`u.IsPremium == true`) always run `process` to
-  completion - never killed, no timeout.
-- **Free** users get 10 seconds of processing time total, accumulated
-  across every call `HandleRequest` makes for that `*User` - not 10s
-  per individual request.
-- Once a request would push a free user's lifetime usage past 10s, it
-  gets killed right at the 10s mark - not allowed to run to
-  completion, and not killed before it needed to be.
-- Only the time actually used before a kill gets credited against the
-  quota - not a full timeout's worth.
-- Safe to call concurrently for the same `*User`: two overlapping
-  requests must not both succeed if together they'd exceed the quota,
-  and a request must be judged against a sibling's *real* usage, not a
-  worst-case guess about how long it might still run.
+- Premium users have `u.IsPremium == true`. They always run `process`
+  to the end.
+- Free users get 10 seconds total across all calls.
+- Stop a free request exactly when its quota reaches the limit.
+- Count only the time the request actually used.
+- Make calls for the same user safe to run at the same time.
+- Judge each request against real usage so far. Do not reserve the rest
+  of the quota just because another request is running.
 
-`HandleRequest`'s signature stays the same. `User` may gain unexported
-fields (its existing fields are built with keyed literals, e.g.
-`&User{ID: 1, IsPremium: false}`, so this is safe) and `TimeUsed`'s
-type is yours to choose - seconds-as-`int64` loses precision the
-moment a kill happens partway through a call:
+Keep the `HandleRequest` signature. You may add private fields to
+`User`. You may choose the type of `TimeUsed`. An `int64` of seconds
+is not precise enough for a partial call. Keyed test literals such as
+`&User{ID: 1, IsPremium: false}` still work.
 
 ```go
 func HandleRequest(process func(), u *User) bool

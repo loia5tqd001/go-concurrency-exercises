@@ -1333,8 +1333,8 @@ class Sim {
   }
 
   conclude(): { outcome: Outcome; verdict: string } {
-    if (this.halted === "panic") return { outcome: "panic", verdict: `Panic: ${this.haltText}.` };
-    if (this.halted === "exit") return { outcome: "exit", verdict: `${this.haltText}: the process exits at once.` };
+    if (this.halted === "panic") return { outcome: "panic", verdict: `The program panicked. ${this.haltText}.` };
+    if (this.halted === "exit") return { outcome: "exit", verdict: `The program exited. ${this.haltText}.` };
     const live = [...this.goroutines.values()].filter((g) => g.started && g.status !== "done" && g.status !== "panicked");
     if (live.length === 0) return { outcome: "ok", verdict: "" };
     const busy = live.filter((g) => g.status === "working" || g.wake !== undefined || g.status === "running");
@@ -1342,8 +1342,8 @@ class Sim {
     // a deadlock; only a goroutine still working or sleeping makes a timeout.
     if (busy.length > 0) {
       const who = (busy[0] ?? live[0])!;
-      const doing = who.status === "working" ? (who.label ?? "working") : `blocked on ${who.why ?? "something"}`;
-      return { outcome: "timeout", verdict: `Still running at ${this.t} ms (${this.name(who.key)}: ${doing}).` };
+      const doing = who.status === "working" ? `running ${who.label ?? "its work"}` : `blocked on ${who.why ?? "something"}`;
+      return { outcome: "timeout", verdict: `The run stopped at ${this.t} ms. ${this.name(who.key)} is still ${doing}.` };
     }
     const main = [...this.goroutines.values()].find((g) => g.def.main === true);
     const leak = main !== undefined && main.status === "done";
@@ -1355,20 +1355,21 @@ class Sim {
         outcome: "leak",
         verdict:
           live.length === 1
-            ? `Leak: ${named[0]} forever, with nobody left to wake it.`
-            : `Leak: ${named.slice(0, 2).join("; ")}${named.length > 2 ? `; +${named.length - 2} more` : ""}. Nobody is left to wake them.`,
+            ? `The program leaked a goroutine. ${named[0]}. Main has already returned.`
+            : `The program leaked ${live.length} goroutines. Main has already returned, so nobody can wake them.`,
       };
     }
     const cycle = this.lockCycle(live);
     if (cycle !== undefined) {
+      const names = cycle.map((key) => this.name(key));
       return {
         outcome: "deadlock",
-        verdict: `Deadlock: ${cycle.map((key) => this.name(key)).join(" → ")}, each waiting for a lock the next one holds.`,
+        verdict: `Deadlock. ${names.slice(0, -1).map((name, i) => `${name} waits for ${names[i + 1]}`).join(", ")}.`,
       };
     }
     return {
       outcome: "deadlock",
-      verdict: `Deadlock: every goroutine is blocked: ${named.slice(0, 3).join("; ")}${named.length > 3 ? `; +${named.length - 3} more` : ""}.`,
+      verdict: "Deadlock. Every goroutine is blocked. Nothing can wake them.",
     };
   }
 }
@@ -1493,7 +1494,7 @@ export function runModel(model: Model, options: RunOptions = {}): Run {
   } catch (error) {
     // The closing step itself can pass the step limit.
     if (!(error instanceof Halt)) throw error;
-    concluded = { outcome: "panic", verdict: `Panic: ${sim.haltText}.` };
+    concluded = { outcome: "panic", verdict: `The program panicked. ${sim.haltText}.` };
   }
   const { outcome, verdict } = concluded;
 
@@ -1515,7 +1516,7 @@ export function runModel(model: Model, options: RunOptions = {}): Run {
   if (judged || sim.steps.length === 0 || sim.last.t !== sim.t) {
     const world = sim.snapshot();
     sim.steps.push({
-      event: { t: sim.t, g: "", op: "end", text: verdict === "" ? "Every goroutine has returned." : verdict },
+      event: { t: sim.t, g: "", op: "end", text: verdict === "" ? "The run finished." : verdict },
       moves: [],
       changed: [],
       world,

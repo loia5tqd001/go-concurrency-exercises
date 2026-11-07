@@ -1,12 +1,11 @@
 # Settle Once: CompareAndSwap Between a Timeout and a Completion
 
-A request can settle two different ways: its own work finishes, or its
-deadline fires first. `Responder` is supposed to make sure whichever
-happens first is the *only* one that ever reports an outcome —
-`Complete` and `Timeout` each call `notify` with what happened, but
-`notify` must fire **exactly once** per request, no matter how close
-the race is. Right now both guard `notify` with a plain `bool` and no
-synchronization at all:
+A request can settle in two ways. Its work finishes, or its deadline
+fires first. `Responder` must let only the first outcome report.
+`Complete` and `Timeout` both call `notify` with their outcome. `notify`
+must run **exactly once** per request. This must hold even when the two
+paths are close. Today, both paths check a plain `bool` with no
+synchronization:
 
 ```go {2,5}
 func (r *Responder) Complete(result string) bool {
@@ -25,60 +24,56 @@ goroutine B (deadline fires): reads settled (false) ──▶ notify("timed out"
                                  ↑ both read settled before either wrote it - notify fires TWICE
 ```
 
-Read-then-write are two separate steps. If `Complete` and `Timeout`
-both read `settled` as `false` before either writes it, both think
-they won, both call `notify` — the request gets reported as both
-succeeded *and* timed out. In a real server this is exactly how
-`http: superfluous response.WriteHeader call` happens: a handler
-goroutine writes the success response at the very moment a timeout
-middleware writes an error response to the same connection.
+`Complete` and `Timeout` both read `settled` as `false`. They read
+before either writes it. Both think they won. Both call `notify`. The
+request is reported as both completed and timed out.
+
+In a real server, this can cause
+`http: superfluous response.WriteHeader call`. A handler writes success
+while timeout middleware writes an error to the same connection.
 
 ## Why this one is a genuine CAS problem
 
-A tempting shortcut for a "claim one thing" race is a plain counter:
-`atomic.AddInt64(&n, -1)`, undone with `+1` if it went negative. That
-trick works when the update has a trivial inverse — decrementing by
-one does. **A settle-once transition has no inverse at all.** Once
-`notify` has run, there is no operation that un-runs it — the state
-only ever moves one way, `pending → settled`. That's the shape
-`CompareAndSwap` exists for: *install this value, but only if nothing
-already changed it* — not "adjust by a fixed delta and hope you can
-undo it."
+A plain counter can look tempting for a one-winner race. For example,
+code can call `atomic.AddInt64(&n, -1)` and undo it with `+1` if the
+value went negative. That works only when the update has a simple
+inverse.
 
-It's also not something a channel `select` can solve, the way
-[31](../31-serve-timeout-race) and [32](../32-fanout-deadline-race)
-solve this exact timeout-vs-completion shape. Those exercises have a
-single arbitrating *reader* choosing between a result channel and
-`ctx.Done()`. Here there is no reader to arbitrate — `Complete` and
-`Timeout` are two independent *writers*, each about to perform a side
-effect (`notify`) directly, with nothing in between them to pick a
-winner. Only a shared, atomically-guarded flag can do that.
+A settle-once change has no inverse. Once `notify` runs, no operation
+can undo it. The state moves only one way: `pending → settled`. This is
+where `CompareAndSwap` fits. It installs a value only if nothing
+changed it first. It does not adjust by a delta and hope for an undo.
+
+A result channel and one `select` cannot choose the winner here.
+Exercises [31](../31-serve-timeout-race) and
+[32](../32-fanout-deadline-race) use a single reader. It chooses
+between a result channel and `ctx.Done()`. Here, `Complete` and
+`Timeout` are two independent writers. Each is about to call `notify`.
+There is no reader between them to choose a winner. They need a shared
+atomic claim.
 
 ### Why not `sync.Once`?
 
-`once.Do(f)` really does guarantee `f` runs at most once — that part
-would work here too. The problem is what happens to the *loser*:
-`Once`'s fast path is an atomic load, but the first time through, a
-losing call falls to `doSlow`, which blocks on `Once`'s internal mutex
-until the *winning* call's `f` has fully returned. A timeout path's
-entire job is to bail out fast — it must not queue up behind however
-long the winner's own `notify` call happens to take. `CompareAndSwap`
-gives the loser an instant, non-blocking answer instead of making it
-wait its turn.
+`once.Do(f)` does guarantee that `f` runs at most once. That part would
+work here. The problem is the loser. `Once` first checks an atomic load.
+On the first call, a losing call falls into `doSlow`. It waits on an
+internal mutex until the winner's `f` returns.
+
+A timeout path must return fast. It cannot wait behind a long `notify`.
+`CompareAndSwap` gives the loser an instant, non-blocking answer.
 
 ## Your task
 
 Fix `Responder` so that:
 
-- Exactly one of `Complete` or `Timeout` ever calls `notify`, for any
-  single `Responder` — whichever reaches the settle point first.
-- The loser returns `false` immediately — without calling `notify`,
-  and without waiting for the winner to finish whatever it's doing.
+- Exactly one of `Complete` or `Timeout` calls `notify`. The first to
+  reach the settle point wins.
+- The loser returns `false` at once. It does not call `notify`. It does
+  not wait for the winner.
 
-**No `sync.Mutex`, `sync.RWMutex`, or any other lock.** Use
-`sync/atomic`'s `CompareAndSwap` idiom instead — here it's a single
-check-and-flip, not even a retry loop, since the state only ever moves
-one way:
+**No `sync.Mutex`, `sync.RWMutex`, or `sync.Map`.** Use the
+`CompareAndSwap` idiom from `sync/atomic`. This is a single check and
+flip. It needs no retry loop because the state moves in one direction.
 
 ```
 won := CAS(&settled, 0, 1)   // install 1, but ONLY if it was still 0
@@ -86,7 +81,7 @@ if won:  notify, return true
 else:    someone else already settled it - return false, don't wait
 ```
 
-Signatures stay the same:
+Keep the signatures the same:
 
 ```go
 func NewResponder(notify func(outcome string)) *Responder
@@ -96,20 +91,19 @@ func (r *Responder) Timeout() bool
 
 ## A note on the demo
 
-Running `main()` will usually print a clean `0/30 requests settled
-more than once` — even against the broken version above. That's not a
-sign it's already fine: with only *one* `Complete` and *one* `Timeout`
-racing per request, the unsynchronized window is a handful of
-nanoseconds, easy for two goroutines to simply miss even with zero
-synchronization. That's normal for this class of bug, and it's exactly
-why the test suite doesn't rely on eyeballing a demo run:
+Running `main()` usually prints a clean
+`0/30 requests settled more than once`, even with the broken code. This
+does not prove it is fixed. Each request has only one `Complete` and one
+`Timeout`. The unsynchronized window is a few nanoseconds. The two
+goroutines can miss it, even with no synchronization. This is normal for
+this bug. The tests do not rely on a demo run.
 
-- Plain `go test` pits **hundreds of simultaneous contenders** against
-  one `Responder` per round, specifically to widen a two-contender race
-  into one that fails reliably within the first few dozen rounds.
-- `go test --race` doesn't need the bug to visibly misfire at all — it
-  flags the raw unsynchronized read/write on `settled` outright, on
-  the very first `Complete`/`Timeout` pair, every time.
+- Plain `go test` uses **hundreds of simultaneous contenders** with one
+  `Responder` per round. This widens the two-caller race. It should fail
+  reliably within a few dozen rounds.
+- `go test --race` does not need a visible double call. It finds the
+  unsynchronized read and write on `settled` on the first
+  `Complete`/`Timeout` pair, every time.
 
 ## Test your solution
 

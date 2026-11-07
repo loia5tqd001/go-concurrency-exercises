@@ -1,13 +1,11 @@
 # Replicated Requests: Racing Redundant Calls for Lower Tail Latency
 
-`FetchFastest` sends the same request to several redundant `Replica`
-handlers (see `mockreplica.go`) concurrently and returns whichever one
-answers first, so that no single replica's unpredictable tail latency
-slows the caller down - the "hedged request" pattern behind Google's
-tail-at-scale paper and every multi-region client that races replicas
-instead of trusting the nearest one to be fast.
+`FetchFastest` sends one request to several `Replica` handlers at the
+same time. See `mockreplica.go`. It returns the first answer. One slow
+replica does not hold back the caller. This is a hedged-request pattern.
+It is used to limit slow tail responses.
 
-Today it gets the headline behavior right but leaks every loser:
+Today, the code returns the first answer. But it leaks every loser:
 
 ```
                      ┌─▶ replica-A r(nil) ── sleeps full latency ── (nobody's listening)
@@ -15,14 +13,12 @@ FetchFastest(done) ──┼─▶ replica-B r(nil) ── answers first ──�
                      └─▶ replica-C r(nil) ── sleeps full latency ── (nobody's listening)
 ```
 
-Every replica goroutine is started with a `nil` done channel, so none
-of them has any way to learn that `FetchFastest` already has its
-answer and moved on - a `nil` channel never fires. Each loser just
-keeps sleeping out its full artificial latency long after the caller
-stopped caring, leaking a goroutine per call until it self-heals.
+Each replica starts with a `nil` `done` channel. A nil channel never
+closes. Losers cannot learn that the caller has an answer. They sleep
+for their full delay and leak goroutines.
 
-Goal - every loser stops the instant there's a winner, or the instant
-the caller's own `done` fires first:
+Goal: every loser stops as soon as one replica wins, or when the
+caller's `done` closes:
 
 ```
                      ┌─▶ replica-A r(stop) ── sees stop closed ──▶ exits early
@@ -33,13 +29,11 @@ FetchFastest(done) ──┼─▶ replica-B r(stop) ── answers first ──
 
 ## Your task
 
-Fix `FetchFastest` so that as soon as a winner is picked (or the
-caller-supplied `done` is closed), every other in-flight replica is
-told to stop via its own `done` channel - and make sure a replica
-that's already lost the race actually reacts to that, rather than
-continuing to run to completion regardless.
+Fix `FetchFastest`. Once there is a winner, or the caller's `done`
+closes, stop every other replica. Pass a stop channel to each replica.
+Make sure a lost replica reacts to it. Do not let it run to completion.
 
-The signatures must stay the same:
+Keep the signatures the same:
 
 ```go
 type Replica func(done <-chan struct{}) (string, error)
@@ -47,22 +41,18 @@ type Replica func(done <-chan struct{}) (string, error)
 func FetchFastest(done <-chan struct{}, replicas ...Replica) (string, error)
 ```
 
-- `FetchFastest` calls every replica concurrently (one goroutine each)
-  and returns the value and error from whichever one sends on its own
-  result channel FIRST. Once there's a winner, ignore/discard any
-  later stragglers.
-- If the caller-supplied `done` is closed before any replica responds
-  (including if it's already closed when `FetchFastest` is called),
-  `FetchFastest` returns promptly with an error and no winner.
-- Two separate triggers both mean "stop now" for every in-flight
-  replica: a replica winning the race, and the caller-supplied `done`
-  firing before anyone won. Either way, every replica still running
-  (via the `done` it receives as its own argument) must be told to
-  stop instead of being left running for its full artificial latency.
+- `FetchFastest` calls every replica concurrently. It returns the first
+  `(value, error)` result. Ignore later results.
+- If the caller's `done` closes before any replica answers, return
+  promptly with an error and no winner. This includes a `done` that is
+  already closed at the start.
+- There are two stop triggers. One replica wins. Or the caller's `done`
+  fires first. In both cases, every running replica must be told to stop
+  through its own `done` argument.
 
 ## Test your solution
 
-To complete this exercise, you must pass the tests:
+The tests must pass:
 ```
 go test
 go test --race

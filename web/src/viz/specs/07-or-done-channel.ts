@@ -83,7 +83,7 @@ export default defineViz({
       id: "today",
       chip: "Today",
       tier: "today",
-      summary: `orDone returns c, so out is c: closing done reaches nobody, and out never closes. The test waits ${K.netMs.value} ms for it and fails.`,
+      summary: `orDone returns c, so out is c. Closing done reaches nobody. out never closes, so the test waits ${K.netMs.value} ms and fails.`,
       model: {
         nodes: {
           feed: goroutine({ label: "feed", pos: [0, 1], spawned: true, program: feed }),
@@ -103,10 +103,10 @@ export default defineViz({
           }),
           net: net([2, 0]),
         },
-        insight: `out IS c, so closing done changes nothing the reader can see. The feed stops on its own when done closes, but nobody closes c, so the last read waits the full ${K.netMs.value} ms and the test fails.`,
+        insight: `out is c. Closing done changes nothing the reader can see. The feed stops when done closes, but nobody closes c. The last read waits the full ${K.netMs.value} ms. The test fails.`,
         stops: [
-          { when: { op: "close", node: "done" }, say: "done closes. orDone has no goroutine, so nothing here reacts to it." },
-          { when: { op: "fire", node: "net" }, say: `${K.netMs.value} ms pass and out is still open. The test fails.` },
+          { when: { op: "close", node: "done" }, say: "done closes, but orDone has no goroutine, so nothing reacts." },
+          { when: { op: "fire", node: "net" }, say: `${K.netMs.value} ms pass. out is still open. The test fails.` },
         ],
         tests: midTests,
         clock: { unit: "ms" },
@@ -124,7 +124,7 @@ export default defineViz({
       id: "goal",
       chip: "Goal",
       tier: "goal",
-      summary: `A forwarder goroutine selects on c or done, and on out or done. Closing done unblocks it wherever it waits, and it closes out.`,
+      summary: "A forwarder waits on c or done. It also waits on out or done. Closing done wakes it, and it closes out.",
       model: {
         nodes: {
           feed: goroutine({ label: "feed", pos: [0, 1], spawned: true, program: feed }),
@@ -160,10 +160,10 @@ export default defineViz({
           }),
           net: net([4, 0]),
         },
-        insight: `While done is open the forwarder carries each value from c to out. When done closes it is parked in the send select, so that case fires, it returns, and out closes. The last read sees a closed out at once.`,
+        insight: "While done is open, the forwarder moves each value from c to out. When done closes, the forwarder is waiting to send. The done case fires, the goroutine returns, and out closes. The last read sees out closed at once.",
         stops: [
-          { when: { op: "block", g: "forwarder", nth: 1 }, say: "Nobody is reading out, so the forwarder waits to send the value it holds. This select also watches done." },
-          { when: { op: "close", node: "done" }, say: "done closes: the parked select fires, the forwarder returns, and out closes behind it." },
+          { when: { op: "block", g: "forwarder", nth: 1 }, say: "Nobody is reading out, so the forwarder waits to send. It also watches done." },
+          { when: { op: "close", node: "done" }, say: "done closes. The waiting select fires. The forwarder returns and closes out." },
         ],
         tests: midTests,
         clock: { unit: "ms" },
@@ -174,7 +174,7 @@ export default defineViz({
       id: "oneselect",
       chip: "1 select",
       tier: "inside",
-      summary: `A forwarder that ranges over c and selects only on the send never sees done while it waits on c, so out never closes and the test fails.`,
+      summary: "This forwarder ranges over c and watches done only while sending. It never sees done while waiting on c, so out never closes.",
       model: {
         nodes: {
           c: channel({ label: "c", pos: [0, 1], cap: 0 }),
@@ -218,10 +218,10 @@ export default defineViz({
           }),
           net: net([3, 2]),
         },
-        insight: `In this test c is never written to. The forwarder is parked in range c, which does not watch done, so closing done cannot reach it. out stays open, the reader hangs, and the test fails. This leak is the learner's bug: every blocking point needs its own select.`,
+        insight: "In this test, nobody writes to c. The forwarder waits in range c, and that wait ignores done. Closing done cannot reach it. out stays open, the reader hangs, and the test fails. This is the learner's bug: every blocking point needs its own select.",
         stops: [
-          { when: { op: "close", node: "done" }, say: "done closes, but the forwarder is waiting on c, and that receive has no done case." },
-          { when: { op: "fire", node: "net" }, say: `${K.netMs.value} ms pass and out is still open. The test fails.` },
+          { when: { op: "close", node: "done" }, say: "done closes, but the forwarder waits on c. That receive has no done case." },
+          { when: { op: "fire", node: "net" }, say: `${K.netMs.value} ms pass. out is still open. The test fails.` },
         ],
         tests: idleTests,
         clock: { unit: "ms" },

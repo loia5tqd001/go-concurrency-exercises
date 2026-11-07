@@ -35,7 +35,7 @@ const GIVE_UP_AT = SECOND_AT + K.exitTimeoutS.value * 1000;
 const tests: Record<string, TestDef> = {
   second: {
     name: "TestSecondSigintForcesPromptExit",
-    short: "2nd SIGINT exits",
+    short: "2nd signal exit",
     // Stop was reached, both SIGINTs went out, and the process ended.
     judge: (run) => run.outcome === "exit" && run.vars.stopping === 1 && run.vars.sent === SIGINTS,
   },
@@ -89,7 +89,7 @@ export default defineViz({
       id: "today",
       chip: "Today",
       tier: "today",
-      summary: "main runs proc.Run() and asks for no signals, so the first Ctrl-C ends the process at once and proc.Stop() never runs.",
+      summary: "main runs proc.Run() and never listens for signals. The first Ctrl-C ends the process at once.",
       model: {
         nodes: {
           os: OS(),
@@ -103,11 +103,11 @@ export default defineViz({
           }),
         },
         insight:
-          "main sits inside proc.Run() forever, and nothing asks for SIGINT. So the first Ctrl-C takes the OS default: the process dies mid-work. proc.Stop() never runs, and the test never sees \"Stopping process\".",
+          "main stays in proc.Run() forever. Nothing listens for SIGINT. The first Ctrl-C takes the OS default, so the process dies mid-work. proc.Stop() never runs, and the test never sees \"Stopping process\".",
         stops: [
           {
             when: { op: "exit" },
-            say: "The 1st Ctrl-C arrives. Nothing handles SIGINT, so the OS ends the process at once. proc.Stop() never runs.",
+            say: "The first Ctrl-C arrives. Nothing handles SIGINT, so the OS ends the process. proc.Stop() never runs.",
           },
         ],
         tests,
@@ -129,7 +129,7 @@ export default defineViz({
       id: "goal",
       chip: "Goal",
       tier: "goal",
-      summary: "The 1st Ctrl-C starts proc.Stop() on its own goroutine and the process keeps running; the 2nd Ctrl-C ends it at once.",
+      summary: "The first Ctrl-C starts proc.Stop() on another goroutine. The process keeps running. The second Ctrl-C ends it at once.",
       model: {
         nodes: {
           os: OS(),
@@ -159,15 +159,15 @@ export default defineViz({
           }),
         },
         insight:
-          "The OS now hands each Ctrl-C to a channel instead of killing the process. proc.Stop() runs on its own goroutine and never returns, but main stays free, so the 2nd Ctrl-C still reaches it and ends the program.",
+          "The OS now sends each Ctrl-C to a channel. It does not kill the process. proc.Stop() runs on another goroutine and never returns. main stays free, so the second Ctrl-C reaches it and ends the program.",
         stops: [
           {
             when: { op: "go", g: "main", nth: 2 },
-            say: "The 1st Ctrl-C reaches main. main starts proc.Stop() on its own goroutine, so main is still free to listen.",
+            say: "The first Ctrl-C reaches main. main starts proc.Stop() on another goroutine, so main can still listen.",
           },
           {
             when: { op: "exit" },
-            say: "The 2nd Ctrl-C reaches main while proc.Stop() still runs. main ends the program at once.",
+            say: "The second Ctrl-C reaches main while proc.Stop() still runs. main ends the program.",
           },
         ],
         tests,
@@ -178,7 +178,7 @@ export default defineViz({
       id: "trap",
       chip: "Trap",
       tier: "inside",
-      summary: "main calls proc.Stop() itself. Stop never returns, so the 2nd Ctrl-C waits in sigChan unread and the process never exits.",
+      summary: "main calls proc.Stop() itself. Stop never returns. The second Ctrl-C waits in sigChan unread, so the process never exits.",
       model: {
         nodes: {
           os: OS(),
@@ -197,16 +197,16 @@ export default defineViz({
           }),
           run: RUN([2, 1]),
         },
-        insight: `Calling proc.Stop() on main looks right, but Stop never returns. main never reads sigChan again, so the 2nd Ctrl-C sits in the buffer, and ${K.exitTimeoutS.value} s later the test gives up.`,
+        insight: `Calling proc.Stop() on main looks right. But Stop never returns, so main never reads sigChan again. The second Ctrl-C sits in the buffer. After ${K.exitTimeoutS.value} s, the test gives up.`,
         stops: [
           {
             when: { op: "work", g: "main" },
-            say: "The 1st Ctrl-C wakes main, and main calls proc.Stop() itself. Stop never returns.",
+            say: "The first Ctrl-C wakes main. main calls proc.Stop() itself. Stop never returns.",
           },
           {
             // Counted after stop 1, so this is the 2nd SIGINT.
             when: { op: "notify" },
-            say: "The 2nd Ctrl-C lands in sigChan's buffer. main is inside Stop, so nobody reads it.",
+            say: "The second Ctrl-C lands in sigChan's buffer. main is inside Stop, so nobody reads it.",
           },
         ],
         tests,
@@ -219,7 +219,7 @@ export default defineViz({
       id: "fixed",
       chip: "Fixed",
       tier: "inside",
-      summary: `proc.Stop() runs on its own goroutine; main waits in select on stopped and sigChan, and the 2nd Ctrl-C reaches ${EXIT}.`,
+      summary: `proc.Stop() runs on another goroutine. main waits in select on stopped and sigChan. The second Ctrl-C reaches ${EXIT}.`,
       model: {
         nodes: {
           os: OS(),
@@ -254,15 +254,15 @@ export default defineViz({
         },
         // On a narrow screen the straight go edge would cut stopped's label.
         routes: { "main>stop": "above" },
-        insight: `select lets main wait for two things at once: Stop finishing, which closes stopped, or a 2nd Ctrl-C on sigChan. Stop never returns, so the 2nd Ctrl-C wins and ${EXIT} ends the program.`,
+        insight: `select lets main wait for two things. It can wait for Stop to close stopped. It can also wait for a second Ctrl-C on sigChan. Stop never returns, so the second Ctrl-C wins. Then ${EXIT} ends the program.`,
         stops: [
           {
             when: { op: "go", g: "main", nth: 2 },
-            say: "The 1st Ctrl-C: main starts proc.Stop() in its own goroutine, then waits in select on stopped and sigChan.",
+            say: "The first Ctrl-C makes main start proc.Stop() on another goroutine. Then main waits in select on stopped and sigChan.",
           },
           {
             when: { op: "exit" },
-            say: `The 2nd Ctrl-C wins the select. ${EXIT} ends the program, although proc.Stop() is still running.`,
+            say: `The second Ctrl-C wins the select. ${EXIT} ends the program, even though proc.Stop() is still running.`,
           },
         ],
         tests,

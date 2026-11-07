@@ -1,10 +1,10 @@
-# Safe Pool Shutdown: Closing a Multi-Producer Job Queue Without Panicking — Suggested Solution
+# Safe Pool Shutdown: Close a Multi-Producer Queue Without Panics — Suggested Solution
 
-> **Spoiler warning.** Try solving it yourself first — come back if you're stuck.
+> **Spoiler warning.** Try the exercise first. Come back if you are stuck.
 
 ## The problem
 
-Zero coordination between `Submit` and `Close`:
+There is no coordination between `Submit` and `Close`:
 
 ```go
 func (p *Pool) Submit(job func()) (accepted bool) {
@@ -17,20 +17,20 @@ func (p *Pool) Close() {
 }
 ```
 
-**Verified**: this fails deterministically, every run, no `-race`
-needed — `TestSubmitAfterCloseIsRejectedNotPanicked` submits a few
-jobs, calls `Close`, **waits for it to fully return**, then fires a
-burst of `Submit` calls against an already-closed channel:
+**Verified**: this fails every run. It does not need `-race`.
+`TestSubmitAfterCloseIsRejectedNotPanicked` submits a few jobs. It
+calls `Close` and **waits for it to return**. Then it runs many
+`Submit` calls on the closed channel:
 
 ```
 --- FAIL: TestSubmitAfterCloseIsRejectedNotPanicked
     Submit panicked: send on closed channel (× 50, once per post-close Submit call)
 ```
 
-`TestConcurrentSubmitDuringCloseNeverPanics` is the messier real-world
-version (submitters racing a concurrent `Close`) and needs `-race`'s
-scheduling slowdown to hit reliably — but the test above proves the
-bug without depending on luck.
+`TestConcurrentSubmitDuringCloseNeverPanics` is a messier real-world
+case. Submitters race a concurrent `Close`. It often needs `-race`'s
+scheduling slowdown to fail reliably. The test above proves the bug
+without luck.
 
 ## The fix: `sync.RWMutex`-guarded `closed` flag
 
@@ -81,35 +81,35 @@ Close:              Lock() ◀── blocks until EVERY RLock above is released
                  wg.Wait() ──▶ close(p.jobs)   ← only now, guaranteed no Submit still sending
 ```
 
-- **`Submit` holds a read lock across its whole body, including the
-  blocking send** — not just the `closed` check. Multiple `Submit`
-  calls hold that read lock concurrently (the point of `RWMutex` over
-  plain `Mutex`), but every one is guaranteed to have either fully sent
-  or not started, whenever no read lock is held at all.
-- **`Close` takes the write lock just to flip `closed = true`.**
-  `mu.Lock()` can't succeed while any `Submit` still holds a read lock
-  — so by the time `Close` gets past it, every already-started `Submit`
-  has finished its send (and its `wg.Add(1)`) before `closed` became
-  visible as `true`. No `Submit` can see `closed == false`, pass the
-  check, and then have the channel yanked out before it sends.
-- **Once `closed` is `true`**, every later `Submit` sees it and returns
-  `false` before touching `p.jobs` — so `close(p.jobs)` only ever runs
-  once nobody could possibly still be sending.
-- **`wg.Wait()` before `close(p.jobs)`** is what makes `Close`
-  synchronous — not safety (the mutex already guarantees no sender),
-  but correctness of "returns only once every job has *finished*", not
-  merely dequeued. `Add` happens inside the same critical section as
-  the send, so it always happens-before any possible `Wait`.
-- **Every accepted job has one matching `wg.Done()` after it finishes.**
-  Without that call in `worker`, the supposedly verified fix blocks in
-  `Close` forever.
+- **Read lock:** `Submit` holds a read lock for its whole body,
+  including the blocking send. It does not release the lock after the `closed`
+  check. Multiple `Submit` calls can hold the read lock together. That
+  is why this uses `RWMutex` instead of `Mutex`. When no read lock is
+  held, every `Submit` has finished its send or not started.
+- **Write lock:** `Close` takes the write lock only to set
+  `closed = true`.
+  `mu.Lock()` cannot succeed while a `Submit` holds a read lock. By the
+  time `Close` passes it, every started `Submit` has finished its send
+  and its `wg.Add(1)`. No `Submit` can see `closed == false`, pass the
+  check, and lose `p.jobs` before its send.
+- **Later calls:** Once `closed` is `true`, every later `Submit`
+  returns `false` before touching `p.jobs`. So `close(p.jobs)` runs only when no
+  sender can still exist.
+- **Wait:** `wg.Wait()` before `close(p.jobs)` makes `Close` synchronous.
+  The mutex already prevents senders, so this is not a safety fix. It
+  makes `Close` wait until every job has finished, not just left the
+  queue. `Add` is in the same critical section as the send. So it
+  happens before any possible `Wait`.
+- **Done pairing:** Every accepted job needs one matching `wg.Done()`
+  after it finishes. Without that call in `worker`, the fix blocks in `Close`
+  forever.
 
-**Verified** clean, repeatedly: `go test -count=20 .` and
-`go test -race -count=20 .`, both 20/20.
+**Verified** repeatedly: `go test -count=20 .` and
+`go test -race -count=20 .` both passed 20 of 20 runs.
 
 ## The `recover`-in-`Submit` trap
 
-The single most tempting near-miss:
+Here is the most tempting near miss:
 
 ```go {7,8}
 func (p *Pool) Submit(job func()) (accepted bool) {
@@ -133,21 +133,21 @@ wg.Add(1) ──▶ jobs<-job ──▶ PANIC ──▶ recover() swallows it, a
                               Close's wg.Wait() hangs forever
 ```
 
-This stops the panic escaping `Submit`, but `wg.Add(1)` already ran
-before the panicking send, and nothing ever `Done()`s it — `Close`
-hangs forever. `check_test.go`'s `closeWithTimeout` helper exists
-specifically to turn that hang into a fast, readable failure
-(`"Close did not return within 3s"`) instead of a silent 10-minute `go
-test` timeout. Fixing `recover` properly means adding a compensating
-`p.wg.Done()` on the recovered path — at which point you've rebuilt,
-by hand with panic/recover as control flow, something strictly worse
-than just checking a flag before attempting the send.
+This stops the panic from leaving `Submit`. But `wg.Add(1)` already ran
+before the failed send. Nothing calls `Done()` for it. `Close` hangs
+forever. The `closeWithTimeout` helper in `check_test.go` turns that
+hang into a quick failure. The message is
+`"Close did not return within 3s"` instead of a silent 10-minute
+`go test` timeout. A proper `recover` fix would call `p.wg.Done()` on
+the recovered path. That rebuilds the same check with panic and
+recover as control flow. It is worse than checking a flag before the
+send.
 
 ## A related trap, seen in a real-world version of this pattern
 
 This exercise is modeled on a production `sync.RWMutex`-guarded worker
-pool whose non-blocking `Offer` variant has a genuine ordering bug,
-easy to introduce when refactoring `Submit` into a non-blocking form:
+pool. Its non-blocking `Offer` variant has a real ordering bug. The
+bug is easy to add when `Submit` becomes non-blocking.
 
 ```go {2,3}
 select {
@@ -159,25 +159,21 @@ default:
 }
 ```
 
-Compare this exercise's `Submit`, which does `wg.Add(1)` **before**
-`p.jobs <- job`. The moment a value is sent, a worker can receive it,
-run it, and call `wait.Done()` — all before the sender's own next
-line, `wait.Add(1)`, executes. `sync.WaitGroup`'s docs are explicit:
-`Add` with a positive delta must happen before the corresponding
-`Wait` observes zero — a `Done` racing ahead of its own `Add` can drive
-the counter negative (panics) or let a concurrent `Wait` return while
-that job is still in flight. If you write a non-blocking `Offer`
-alongside this exercise's `Submit`, double-check `Add` still comes
-first in both.
+Compare this with the exercise's `Submit`, which calls `wg.Add(1)`
+**before** `p.jobs <- job`. A worker can receive a job as soon as it is
+sent. It can run it and call `wait.Done()` before the sender reaches
+`wait.Add(1)`. The `sync.WaitGroup` docs say a positive `Add` must
+happen before a matching `Wait` sees zero. A `Done` that runs before
+its `Add` can make the counter negative and panic. It can also let a
+concurrent `Wait` return while the job is in flight. If you add a
+non-blocking `Offer`, make sure `Add` still comes first in both paths.
 
 ## Key takeaways
 
-- `RWMutex` held across a blocking send is a legitimate pattern here:
-  many readers (`Submit`s) may proceed concurrently, but the single
-  writer (`Close`) is guaranteed none are mid-send once it gets the
-  lock.
-- `recover` hides a panic's *symptom*; it doesn't undo the bookkeeping
-  that already ran before the panic. Prevent the race instead of
-  catching its crash.
-- `wg.Add` must happen-before the send that could let the corresponding
-  `wg.Done` run — never after.
+- Here, holding an `RWMutex` across a blocking send is valid. Many
+  `Submit` calls can run together. The single `Close` writer gets the
+  lock only after no `Submit` is mid-send.
+- `recover` hides a panic's symptom. It does not undo bookkeeping that
+  already ran. Prevent the race instead of catching its crash.
+- `wg.Add` must happen before the send that can let the matching
+  `wg.Done` run. Never after.

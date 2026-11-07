@@ -285,22 +285,22 @@ export default defineViz({
       id: "today",
       chip: "Today",
       tier: "today",
-      summary: `The heartbeat pulses once and nobody reads it. The flat ${flatMs} ms timer catches the ${stallStartsAt} ms stall only at ${flatMs} ms, past the ${deadline} ms deadline.`,
+      summary: `The worker sends one heartbeat. No one reads it. The ${flatMs} ms timer catches the ${stallStartsAt} ms stall at ${flatMs} ms. This is after the ${deadline} ms deadline.`,
       model: {
         ...scaffoldModel(K.stallAfter.value, false),
-        insight: `The worker's one heartbeat sits unread in its slot. The watcher waits only on results and timedOut, armed once for the whole job, so the stall at ${stallStartsAt} ms goes unnoticed until ${flatMs} ms.`,
+        insight: `The worker's only heartbeat sits unread. The watcher waits on results and timedOut. It sets timedOut once for the whole job. The ${stallStartsAt} ms stall goes unseen until ${flatMs} ms.`,
         stops: [
           {
             when: { op: "select", g: "worker" },
-            say: "The one heartbeat goes into the buffer. The watcher never receives from heartbeat.",
+            say: "The worker sends one heartbeat into the buffer. The watcher never reads heartbeat.",
           },
           {
             when: { op: "block", g: "worker" },
-            say: `Unit 2 stalls at ${stallStartsAt} ms. No result comes, but timedOut still counts down to ${flatMs} ms.`,
+            say: `Unit 2 stalls at ${stallStartsAt} ms. No result arrives, but timedOut keeps running until ${flatMs} ms.`,
           },
           {
             when: { op: "fire", node: "timedOut" },
-            say: `timedOut fires at ${flatMs} ms, ${flatMs - deadline} ms past the test's ${deadline} ms deadline.`,
+            say: `timedOut fires at ${flatMs} ms. This is ${flatMs - deadline} ms after the test's ${deadline} ms deadline.`,
           },
         ],
         tests: { stall: tests.stall },
@@ -334,22 +334,22 @@ export default defineViz({
       id: "goal",
       chip: "Goal",
       tier: "goal",
-      summary: `Every heartbeat or result resets the watcher's ${perPulseMs} ms timer, so the ${stallStartsAt} ms stall is caught at ${stallStartsAt + perPulseMs} ms.`,
+      summary: `Every heartbeat or result resets the watcher timer. The ${perPulseMs} ms timer catches the ${stallStartsAt} ms stall at ${stallStartsAt + perPulseMs} ms.`,
       model: {
         ...fixedModel(K.stallAfter.value, false),
-        insight: `The worker pulses between slices of each unit, and every pulse or result resets the timer. Once unit 2 stalls, nothing resets it, so it fires ${perPulseMs} ms after the last sign of life.`,
+        insight: `The worker sends a pulse between unit slices. Each pulse or result resets the timer. Unit 2 then stalls. Nothing resets the timer. It fires ${perPulseMs} ms after the last pulse or result.`,
         stops: [
           {
             when: { op: "reset", node: "timer" },
-            say: `Each heartbeat resets the timer to ${perPulseMs} ms, so it never gets close to firing.`,
+            say: `Each heartbeat resets the timer to ${perPulseMs} ms. The timer never gets close to firing.`,
           },
           {
             when: { op: "block", g: "worker" },
-            say: `Unit 2 stalls at ${stallStartsAt} ms: no heartbeat, no result, so nothing resets the timer.`,
+            say: `Unit 2 stalls at ${stallStartsAt} ms. There is no heartbeat and no result, so nothing resets the timer.`,
           },
           {
             when: { op: "fire", node: "timer" },
-            say: `After ${perPulseMs} ms of silence the timer fires at ${stallStartsAt + perPulseMs} ms, inside the ${deadline} ms deadline.`,
+            say: `The timer fires after ${perPulseMs} ms of silence. That is ${stallStartsAt + perPulseMs} ms, inside the ${deadline} ms deadline.`,
           },
         ],
         tests: { stall: tests.stall },
@@ -365,14 +365,14 @@ export default defineViz({
       id: "flat",
       chip: "Flat",
       tier: "inside",
-      summary: `With no stall, the naive flat ${flatMs} ms deadline fires in the middle of unit 3 of a healthy ${N * unitMs} ms job, so the no-stall test fails.`,
+      summary: `There is no stall. The naive ${flatMs} ms deadline fires during unit 3. The healthy job needs ${N * unitMs} ms, so the no-stall test fails.`,
       model: {
         ...scaffoldModel(-1, true),
-        insight: `The other half of the flat deadline's trouble: a healthy job needs ${N * unitMs} ms, but timedOut fires at ${flatMs} ms. No whole-job deadline can be under the stall test's ${deadline} ms and over a healthy job's ${N * unitMs} ms at once.`,
+        insight: `This is the other problem with a flat deadline. The healthy job needs ${N * unitMs} ms. timedOut fires at ${flatMs} ms. No whole-job deadline can satisfy both tests.`,
         stops: [
           {
             when: { op: "fire", node: "timedOut" },
-            say: `timedOut fires at ${flatMs} ms with 3 of ${N} results in. The worker was fine, only slow.`,
+            say: `timedOut fires at ${flatMs} ms with 3 of ${N} results done. The worker was healthy, only slow.`,
           },
         ],
         tests: { noStall: tests.noStall },
@@ -403,18 +403,18 @@ export default defineViz({
       id: "healthy",
       chip: "Healthy",
       tier: "inside",
-      summary: `With no stall, the worker pulses every ${pulseMs} ms and the timer resets each time, so the ${N * unitMs} ms job finishes with all ${N} results.`,
+      summary: `There is no stall. The worker sends a pulse every ${pulseMs} ms. Each pulse resets the timer. The ${N * unitMs} ms job finishes with all ${N} results.`,
       model: {
         ...fixedModel(-1, true),
-        insight: `checkIn sends a pulse between slices, and the watcher resets the timer on each pulse and each result. The gap never reaches ${perPulseMs} ms, so a job of any length runs to the end.`,
+        insight: `checkIn sends a pulse between slices. The watcher resets the timer on each pulse and result. The gap never reaches ${perPulseMs} ms. A job of any length runs to the end.`,
         stops: [
           {
             when: { op: "reset", node: "timer", nth: 2 },
-            say: `Pulses come every ${pulseMs} ms. The timer restarts at ${perPulseMs} ms each time.`,
+            say: `Pulses arrive every ${pulseMs} ms. The timer restarts at ${perPulseMs} ms each time.`,
           },
           {
             when: { op: "close", node: "results" },
-            say: `All ${N} results are in at ${N * unitMs} ms. The worker closes results; the timer never fired.`,
+            say: `All ${N} results arrive at ${N * unitMs} ms. The worker closes results, and the timer never fires.`,
           },
         ],
         tests: { noStall: tests.noStall },

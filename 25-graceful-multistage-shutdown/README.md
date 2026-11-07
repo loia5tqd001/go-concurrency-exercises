@@ -1,20 +1,16 @@
 # Graceful Multi-Stage Shutdown: Knowing When a Worker Pool Has REALLY Finished
 
-Given is `Start`, which launches a small, fixed-size pool of worker
-goroutines that read items off a shared `jobs` channel and call a
-caller-supplied `process` function on each one, until `jobs` is
-closed. This has nothing to do with reacting to an OS signal like
-Ctrl-C - there's no signal here at all. It's a purely internal
-handshake: once the producer closes `jobs`, how does the pool tell the
-caller "every job that was ever submitted has now been fully
-processed, it's safe to move on"?
+`Start` launches a small fixed-size pool of worker goroutines. Each
+worker reads items from a shared `jobs` channel. It calls the caller's
+`process` function on each item. This continues until `jobs` is closed.
 
-That matters because callers often want to tear something down right
-after the pool finishes - closing a downstream file, database
-connection, or socket that `process` writes results into. Doing that
-teardown too early, while a worker is still mid-call to `process` on
-some item it already pulled off `jobs`, silently corrupts or drops
-whatever that in-flight call was about to do.
+This does not react to an OS signal such as Ctrl-C. There is no signal
+in this exercise. The question is internal: after `jobs` closes, how
+does the pool report that all work is done?
+
+The answer matters. A caller may close a file, database connection, or
+socket after the pool finishes. If the caller closes it too early,
+`process` may still be using it. Results can then be lost or corrupted.
 
 ```
 jobs producer ──▶ jobs (chan int) ──▶ closed after the last send
@@ -36,30 +32,25 @@ GOAL    done closes only once EVERY worker has returned from range
         was writing into
 ```
 
-`Start` is supposed to return a `done` channel that only closes once
-`jobs` has been closed AND every job ever sent to it has been FULLY
-processed. Right now it does nothing of the sort: the returned `done`
-channel is closed immediately, before any worker has necessarily even
-started, let alone processed a single job - so a caller who waits on
-it and then tears down whatever `process` was writing into can easily
-do so while jobs are still silently being worked on in the background.
+`Start` must return a `done` channel. That channel must close only after
+`jobs` is closed and every job is fully processed. Today, `done` closes
+at once. Workers may not have started, and jobs may still be running.
 
-Your task is to fix `Start` so the returned `done` channel closes only
-once every worker goroutine has fully returned from its `range jobs`
-loop - i.e. every worker has finished calling `process` on its
-last-received item. `Start` itself must still return immediately -
-whatever waits for the workers has to happen concurrently with that
-return, not block it. The function signature must stay the same:
+Fix `Start` so `done` closes only after every worker leaves its
+`range jobs` loop. That means each worker has finished its last
+`process` call. `Start` must still return at once. Waiting for the
+workers must happen concurrently. The function signature must stay the
+same:
 
 ```go
 func Start(jobs <-chan int, process func(item int)) <-chan struct{}
 ```
 
-so that it remains a drop-in replacement for the naive version below.
+It must remain a drop-in replacement for the current version.
 
 ## Test your solution
 
-To complete this exercise, you must pass the tests:
+The tests must pass:
 
 ```
 go test

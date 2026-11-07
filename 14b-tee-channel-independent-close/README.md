@@ -1,10 +1,21 @@
 # Tee Channel, Independent Closing: Racing a Fast Consumer Past a Silent One
 
-This exercise picks up right where [14](../14-tee-channel) left off. `StartSensor` (see `mocksensor.go`) emits `count` incrementing integer readings, one every 5ms, then closes its channel. `Tee` duplicates every value it reads from `in` onto two independent output channels, so two consumers - say a live display and a logger - can each observe the full, identical sequence in order, even if one reads much slower than the other.
+This exercise follows [14](../14-tee-channel). `StartSensor` (see
+`mocksensor.go`) sends `count` readings, one every 5ms. Then it closes
+its channel. `Tee` copies every input value to two output channels.
+Two consumers can then receive the full sequence in order. One may
+read much more slowly.
 
-Given is a complete, correct answer to exercise 14 itself: for each value, an inner `select` with a nilled-out-on-send local channel per output sends it to whichever of `out1`/`out2` hasn't received it yet, so writing to one output never has to happen strictly before the other. `done` is respected throughout - if it fires, both outputs are abandoned and closed right away. None of that needs fixing.
+Exercise 14 already has a correct `Tee`. For each value, it uses one
+inner `select` with one local channel per output. It sets a local
+channel to nil after that output gets the value. The outputs can
+receive each value independently. If `done` closes, both outputs stop
+and close. You do not need to fix that part.
 
-What's missing is a stricter requirement on **closing**. Right now, closing is gated on the slowest consumer - a single goroutine holds value N until *both* outputs have received it before it even looks at value N+1, and only closes both channels together, once, after every value has gone to both:
+The new requirement is closing. Today, one goroutine waits for both
+outputs to get a value before it reads the next value. If `out2` is
+never read, the goroutine waits forever. `out1` then blocks and
+cannot close.
 
 ```
 today:  in ──▶ [one goroutine: holds v until BOTH out1 AND out2 took it] ──┬──▶ out1
@@ -18,14 +29,24 @@ goal:   in ──┬──▶ [out1's own delivery, own completion-tracking] ─
                                                                      instant OUT2 has it all
 ```
 
-So if one consumer has already received everything the sensor will ever produce, but the other hasn't read a single value yet, the fast consumer's channel still won't close.
+So one consumer may receive every value. The other may read none. The
+fast consumer's channel still will not close.
 
-Your task is to make each output close **on its own**, the moment every value has actually reached it, independent of the other output:
+Your task is to make each output close on its own. Each channel must
+close as soon as it receives every value. It must not wait for the
+other output.
 
-- If `done` fires, keep abandoning everything and closing both outputs right away, regardless of how much of `in` has been delivered - this part is already correct.
-- Otherwise, once `in` is exhausted, `out1` must close as soon as it - specifically - has received every value, without waiting for `out2` to catch up, and vice versa. A fast consumer that has already received every value must see its channel close immediately, even if the other consumer hasn't read anything and is sitting on a full backlog. Gating both outputs' close on whichever consumer is slowest is not good enough.
+- If `done` closes, stop everything and close both outputs at once.
+  This part already works.
+- Otherwise, after `in` ends, close `out1` as soon as `out1` receives
+  every value. Do not wait for `out2`. Do the same for `out2` if it
+  finishes first. A fast consumer must get its close even if the other
+  consumer has read nothing and has a full backlog.
 
-This needs more than a tweak to the closing code: holding each value until both outputs receive it, one value at a time, in a single goroutine, structurally cannot let one output run arbitrarily far ahead of a completely unread other. Making closing independent means letting delivery to each output progress independently too.
+This needs more than a small change to the close code. One goroutine
+cannot hold each value until both outputs receive it. That design
+cannot let one output move far ahead of an unread output. Each output
+must make delivery progress on its own.
 
 The function signature must stay the same:
 

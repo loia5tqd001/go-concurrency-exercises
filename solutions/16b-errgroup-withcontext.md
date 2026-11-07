@@ -1,10 +1,10 @@
-# errgroup.WithContext: Cancel-on-First-Error — Suggested Solution
+# errgroup.WithContext: Stop after the first error
 
-> **Spoiler warning.** This file contains a full worked solution for `16b-errgroup-withcontext/`. Try solving it yourself first — come back here if you're stuck or want to compare approaches.
+> **Spoiler warning.** This file has a full solution for `16b-errgroup-withcontext/`. Try the exercise first. Come back if you get stuck.
 
 ## The problem
 
-This exercise picks up where [16](../16-errgroup-failfast) left off. `Go`/`Wait` already do everything 16 asked for — launch concurrently, track via `sync.WaitGroup`, safely capture the first error via `sync.Once` — and that `Go`/`Wait` part is given as already correct:
+This exercise builds on [16](../16-errgroup-failfast). The supplied `Go` and `Wait` code already works. It starts tasks, uses `sync.WaitGroup`, and records the first error with `sync.Once`.
 
 ```go {8}
 type Group struct {
@@ -37,20 +37,33 @@ func (g *Group) Wait() error {
 
 `WithContext` must:
 
-- Derive a cancelable child `Context` from `ctx` (via `context.WithCancel`) and return it alongside a new `*Group`.
-- Cancel that derived `Context` the instant the *first* task fails, via `Go`, so cooperating siblings selecting on `ctx.Done()` notice and can return early.
-- Cancel that derived `Context` again — or rather, unconditionally — once `Wait` returns, even when every task succeeded, so the `Context`'s resources are never leaked.
-- Stay cooperative: nothing here can forcibly kill a running goroutine. A task that never checks `ctx.Done()` keeps running to completion no matter what.
+- Create a child `Context` with `context.WithCancel`. Return it with a new `*Group`.
+- Cancel the child when the first task fails. A sibling can then stop after it sees `ctx.Done()`.
+- Always cancel again after `Wait` returns, even when every task succeeds. This releases resources.
+- Stay cooperative. The code cannot kill a task. A task that ignores `ctx.Done()` runs to completion.
 
 ## Why the naive version is wrong
 
-`WithContext` hands back the exact `ctx` it was given, with no derived cancelable child at all. That means:
+`WithContext` returns the same `ctx` it receives. It creates no cancelable child.
 
-- `Go`'s error-capture logic has nothing to cancel — even after wiring it up to *try* to cancel, there's no `cancel` field to call.
-- A cooperating task selecting on `ctx.Done()` is selecting on whatever `Done()` the *caller's* context provides. If the caller passed a `context.Background()` with nothing else going on (as the exercise's own `main()` does), `Done()` never fires, ever — so the task always falls through to its own timeout instead of noticing a sibling's failure.
-- Even on a fully successful run, nothing about the returned `ctx` changes state after `Wait()` — there's no resource to release because none was created.
+- `Go` has no `cancel` field to call when a task fails.
+- A task waits on the caller's context. The exercise's `main()` passes `context.Background()`, so `Done()` never fires.
+- A task then falls back to its own timeout. It never sees a sibling fail.
+- A successful run leaves the returned `ctx` unchanged. No resource exists to release.
 
-Verified: running the current `check_test.go` against this naive `main.go` in a throwaway scratch copy fails exactly `TestFailFastCancelsSiblingContext` (`Wait took 1s; want well under 100ms`), `TestWaitCancelsContextEvenOnSuccess` (`ctx` never cancelled), and the `ctx.Err() == nil` assertion inside `TestFirstErrorAndCancelRaceSafe`. The baseline `TestGroupRunsAllTasksAndCapturesFirstError` passes regardless, since it doesn't touch `ctx` at all — the bug is entirely in the `Context` half of the type, not the error-capture half carried over from 16. `TestWithContextDerivesFromParent` also passes against this naive version, but only because handing back `ctx` unchanged trivially satisfies "derived from the parent" — it exists to catch a *different*, easy-to-miss mistake: deriving a fresh cancelable `Context` from `context.Background()` instead of from the `ctx` actually passed in. Every other test here happens to call `WithContext(context.Background())`, so that particular mistake would otherwise slip through undetected; this test passes a parent carrying a value and its own independent cancellation, so only a genuinely derived child passes both checks.
+I ran `check_test.go` against the naive `main.go` in a scratch copy. Three checks fail:
+
+- `TestFailFastCancelsSiblingContext` reports `Wait took 1s; want well under 100ms`.
+- `TestWaitCancelsContextEvenOnSuccess` reports that `ctx` never cancels.
+- `TestFirstErrorAndCancelRaceSafe` fails its `ctx.Err() == nil` check.
+
+`TestGroupRunsAllTasksAndCapturesFirstError` passes because it does not use `ctx`. The bug is only in the context half of the type.
+
+`TestWithContextDerivesFromParent` also passes against the naive code. Returning the same context makes that test trivially true.
+
+The test catches another mistake: creating the child from `context.Background()` instead of the passed `ctx`.
+
+Every other test calls `WithContext(context.Background())`. The parent test passes a value and its own cancellation. Only a real child passes both checks.
 
 ## The fix: `context.WithCancel` + calling `cancel` from both `Go` and `Wait`
 
@@ -103,16 +116,35 @@ func (g *Group) Wait() error {
 
 Design notes:
 
-- **The `cancel` call lives inside the same `errOnce.Do` closure as the `firstErr` write.** This is what makes "first error wins" and "cancel exactly once on failure" happen atomically together — there's no separate synchronization needed to guarantee `cancel` is called exactly once from the failure path, because `sync.Once` already guarantees that for the whole closure.
-- **`Wait` calls `g.cancel()` unconditionally, not just when `firstErr != nil`.** This mirrors real `errgroup.WithContext`, whose `Wait` also calls its internal cancel func regardless of outcome. `context.CancelFunc` is idempotent — calling it a second time (e.g., once from a failing `Go`, then again from `Wait`) is a documented no-op, so there's no double-cancel hazard to guard against.
-- **Why `Wait` must cancel even on success:** `context.WithCancel`'s own doc comment states the `CancelFunc` must be called once the derived `Context` is no longer needed, or its resources (and, if it has a `Done()`-watching parent, the goroutine tracking that association) are not released promptly. Skipping this on the success path is exactly the mistake `go vet`'s `lostcancel` analyzer looks for in ordinary code — a `context.WithCancel` (or `WithTimeout`/`WithDeadline`) whose `cancel` isn't called on some code path.
-- **This is cooperative, not preemptive, cancellation.** `Go`/`Wait` only ever close a channel (`ctx`'s `Done()`) — they have no way to stop a goroutine that isn't itself selecting on that channel. A task ignoring `ctx` entirely (like exercise 16's own demo tasks) keeps running to completion regardless; only tasks written to check `ctx.Done()` "fail fast."
+- The `cancel` call sits inside the same `errOnce.Do` closure as `firstErr = err`.
+- `sync.Once` makes both actions run exactly once on the failure path.
+- No second lock is needed for this pair.
+- `Wait` does not check `firstErr != nil` before it calls `g.cancel()`. Real `errgroup.WithContext` does the same.
+- Every `Wait()` call cancels the child, whether tasks failed or all succeeded.
+- `context.CancelFunc` is idempotent. A second call is a safe no-op.
+- `context.WithCancel`, `WithTimeout`, and `WithDeadline` say to call `CancelFunc` when the child is no longer needed.
+- Skipping this call can keep resources and the parent watcher alive.
+- `go vet` reports this problem as `lostcancel`.
+- Cancellation is cooperative. `Go` and `Wait` only close the `Done()` channel.
+- A task that never selects on that channel keeps running. Exercise 16's demo tasks do this.
 
-**Verified**: copied this exercise into a throwaway scratch directory, confirmed the naive `main.go` fails the three tests described above, then dropped in this solution. `go vet ./...` is clean, and `go test -race -count=20 ./...` passes repeatably — including `TestFailFastCancelsSiblingContext` (via `synctest`, so the ~1s-vs-under-100ms timing assertion is exact rather than a flaky wall-clock race), `TestWaitCancelsContextEvenOnSuccess`, and `TestWithContextDerivesFromParent`. Also verified the *other* failure mode `TestWithContextDerivesFromParent` exists for: swapping `context.WithCancel(ctx)` for `context.WithCancel(context.Background())` (ignoring the parameter) still passes all four of the other tests but fails `TestWithContextDerivesFromParent` specifically, confirming the test earns its place.
+I tested the solution in a scratch copy. The naive `main.go` fails the three checks above. The solution passes these commands:
+
+- `go vet ./...`
+- `go test -race -count=20 ./...`
+
+The passing checks include `TestFailFastCancelsSiblingContext`, `TestWaitCancelsContextEvenOnSuccess`, and `TestWithContextDerivesFromParent`. The fail-fast test uses `synctest`, so its timing check is exact.
+
+I also changed `context.WithCancel(ctx)` to `context.WithCancel(context.Background())`. The other four tests still pass. Only `TestWithContextDerivesFromParent` fails. This shows why that test exists.
 
 ## Key takeaways
 
-- Real `errgroup.WithContext` isn't magic preemption — it's a shared `context.CancelFunc`, called from inside the same `sync.Once` that already guards "first error wins," plus one more unconditional call from `Wait`. Nothing forcibly stops a goroutine; a task only "fails fast" if it's written to select on `ctx.Done()` in the first place.
-- Guarding a side effect (`cancel()`) inside the same `sync.Once.Do` closure as a state write (`firstErr = err`) is a clean way to make two things happen atomically-together-exactly-once, without a second mutex or flag.
-- `context.CancelFunc` is safe to call more than once — idiomatic code (including this solution, and real `errgroup`) relies on that to call `cancel` from both an error path and an unconditional cleanup path without needing to track whether it already ran.
-- Forgetting to call a `context.WithCancel`/`WithTimeout`/`WithDeadline` cancel func on *every* return path — not just the error one — is a real, `go vet`-flagged resource leak (`lostcancel`), not just a style nit. `Wait`'s unconditional `g.cancel()` is what closes that gap here.
+- `errgroup.WithContext` does not use magic preemption. It shares a `context.CancelFunc`.
+- The first error path calls `cancel` inside the same `sync.Once` that records the error.
+- `Wait` also calls `cancel`, with no condition.
+- Nothing can force a goroutine to stop. A task must select on `ctx.Done()` to fail fast.
+- Keep `cancel()` in the same `sync.Once.Do` closure as the `firstErr` write. Both actions then run exactly once.
+- `context.CancelFunc` is safe to call many times. This solution and real `errgroup` rely on that.
+- Call the cancel func on every return path. Do not call it only after an error.
+- Missing a cancel call is a resource leak. `go vet` reports it as `lostcancel`.
+- `Wait`'s unconditional `g.cancel()` closes that gap here.

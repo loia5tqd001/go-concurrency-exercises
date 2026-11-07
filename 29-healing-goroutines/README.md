@@ -1,10 +1,9 @@
 # Healing Unhealthy Goroutines: A Steward That Restarts a Wedged Ward
 
-Given is a `NewSteward` that is supposed to watch over a long-running
-"ward" goroutine (see `mockward.go` for the test double standing in
-for it) through the heartbeat it pulses, and transparently restart it
-if it ever goes quiet for too long - but right now it does nothing of
-the sort.
+`NewSteward` should watch a long-running ward goroutine. It uses
+heartbeats to check that the ward is alive. If the ward is silent for
+too long, the steward should restart it. Today, it does not do this.
+See `mockward.go` for the test double.
 
 A ward is any goroutine matching this shape:
 
@@ -12,12 +11,13 @@ A ward is any goroutine matching this shape:
 type StartGoroutineFn func(done <-chan struct{}, pulseInterval time.Duration) (heartbeat <-chan struct{})
 ```
 
-Starting a ward gives it a `done` channel it should stop on, and how
-often (`pulseInterval`) it's expected to pulse on the `heartbeat`
-channel it returns. Real wards can wedge: hang or deadlock and stop
-pulsing forever, without ever exiting and without honoring `done`
-being closed. Right now, if the one ward a steward is watching wedges,
-the steward's own heartbeat goes silent right along with it, forever.
+Starting a ward gives it a `done` channel and a `pulseInterval`. The
+ward sends heartbeats at that interval on its returned `heartbeat`
+channel.
+
+A real ward can stop responding. It may hang or deadlock. It may
+ignore `done` and never exit. If the ward goes silent, the steward's
+heartbeats also stop today.
 
 ```
 TODAY (scaffold): 1 ward generation, no monitor goroutine, no timer
@@ -43,38 +43,33 @@ GOAL (fixed): 1 steward monitor goroutine, fresh done per generation
   steward keeps pulsing across every restart; caller's done ends it
 ```
 
-Your task is to implement `NewSteward` so it actually monitors and
-heals the ward it wraps:
+Implement `NewSteward` so it monitors and heals the ward it wraps:
 
 ```go
 func NewSteward(timeout time.Duration, ward StartGoroutineFn) StartGoroutineFn
 ```
 
-`NewSteward` returns a `StartGoroutineFn` - a steward has the exact
-same shape as the thing it watches, so stewards compose (a steward can
-watch a steward watching a ward, and so on). When that returned
-function is called with `(done, pulseInterval)`, it must:
+`NewSteward` returns a `StartGoroutineFn`. A steward has the same shape
+as the thing it watches. Stewards can therefore wrap other stewards.
+When the returned function is called with `(done, pulseInterval)`, it
+must:
 
-- Start a ward generation by calling `ward(wardDone, pulseInterval)`
-  with a fresh, **steward-owned** `wardDone` - never the steward's own
-  incoming `done` passed straight through.
-- Forward the current generation's heartbeats onto the steward's own
-  returned heartbeat without letting a slow caller stall health checks;
-  coalescing pending pulses is allowed.
-- Track the time elapsed since the last observed pulse. If more than
-  `timeout` elapses with no pulse from the current generation, close
-  that generation's `wardDone` (telling it to stop - even though a
-  truly wedged ward may never actually honor that, so the steward must
-  **not** block waiting for it to) and immediately start a brand-new
-  generation with a brand-new `wardDone`, continuing to forward its
-  pulses from then on.
-- If the steward's own incoming `done` is closed, close whatever the
-  current generation's `wardDone` is and stop everything, including no
-  longer sending on its own heartbeat.
+- Start a ward generation with `ward(wardDone, pulseInterval)`. Use a
+  fresh `wardDone` owned by the steward. Never pass the steward's own
+  `done` straight to the ward.
+- Forward the current ward's heartbeats to the steward's output. A slow
+  caller must not block health checks. It is fine to merge pending
+  pulses.
+- Track time since the last pulse. If more than `timeout` passes with no
+  pulse, close that generation's `wardDone`. Do not wait for a stuck
+  ward. Start a new generation at once with a fresh `wardDone`. Keep
+  forwarding its pulses.
+- When the steward's own `done` closes, close the current `wardDone` and
+  stop. Do not send more heartbeats.
 
 ## The mock ward
 
-`mockward.go` (do not edit) provides a `MockWard` you'll see used in
+`mockward.go` (do not edit) provides a `MockWard` used in
 `check_test.go`:
 
 ```go
@@ -84,22 +79,21 @@ func (w *MockWard) Generations() int
 func (w *MockWard) Dones() []<-chan struct{}
 ```
 
-`(*MockWard).Start` has the exact shape of `StartGoroutineFn`, so it
-can be passed straight in as `NewSteward(timeout, ward.Start)`. Each
-generation it starts pulses normally for `pulsesBeforeWedge` pulses,
-then wedges: it goes silent and stops reacting to `done` for the rest
-of that generation's life, simulating a real deadlock. `Generations()`
-reports how many separate generations have been started in total, so
-a test (or you, in `main`) can confirm a restart genuinely happened
-rather than guessing from pulse timing alone. `Dones()` reports the
-actual `done` channel each generation was started with, in order, so
-a test can also confirm each generation got its own fresh,
-steward-owned `wardDone` rather than the steward's own incoming `done`
-reused unchanged across every generation.
+`(*MockWard).Start` has the shape of `StartGoroutineFn`. You can pass it
+to `NewSteward(timeout, ward.Start)`.
+
+Each generation sends normal pulses. Then it goes silent at
+`pulsesBeforeWedge`. It ignores `done` for the rest of that generation.
+This simulates a deadlock.
+
+`Generations()` returns the number of ward generations started. A test
+or `main` can use it to confirm a real restart. `Dones()` returns each
+generation's `done` channel in start order. Use it to confirm each
+generation has its own steward-owned `wardDone`.
 
 ## Test your solution
 
-To complete this exercise, you must pass the tests:
+The tests must pass:
 ```
 go test
 go test --race

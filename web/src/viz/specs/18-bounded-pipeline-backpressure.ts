@@ -26,7 +26,7 @@ const tests: Record<string, TestDef> = {
   all: { name: "TestRunPipelineProcessesAllItems", short: "all items", judge: (run: RunSummary) => run.vars.consumed === N },
   bp: {
     name: "TestRunPipelineAppliesBackpressure",
-    short: `gap ≤ ${K.maxGap.value}`,
+    short: `gap max ${K.maxGap.value}`,
     judge: (run: RunSummary) => (run.vars.maxGap ?? 0) <= K.maxGap.value,
   },
 };
@@ -66,11 +66,11 @@ function goal(P: Params): Model {
     },
     insight:
       cap >= N
-        ? `With room for all ${N} items, the producer never waits, and the gap climbs to ${N - 1} just as it does today. Only a small buffer pushes back.`
-        : `When ch is full and the caller is still in consume, the next send waits. The producer can never get more than ${cap + 1} items ahead, so the gap stays at ${cap + 1}.`,
+        ? `The buffer can hold all ${N} items. The producer never waits. The gap reaches ${N - 1}, just like today. Only a small buffer pushes back.`
+        : `The channel is full. The next send waits while the caller consumes. The producer gets at most ${cap + 1} items ahead. The gap stays at ${cap + 1}.`,
     stops:
       cap > 0 && cap < N
-        ? [{ when: { op: "block", g: "producer" }, say: `Both slots of ch are full, so the producer waits on ch <- while the caller consumes.` }]
+        ? [{ when: { op: "block", g: "producer" }, say: "Both slots of ch are full. The producer waits to send while the caller consumes." }]
         : [],
     tests,
     clock: { unit: "ms" },
@@ -89,7 +89,7 @@ export default defineViz({
       id: "today",
       chip: "Today",
       tier: "today",
-      summary: `The caller produces all ${N} items into a slice before it consumes one, so the gap reaches ${N - 1}.`,
+      summary: `The caller makes all ${N} items before it consumes one. The gap reaches ${N - 1}.`,
       model: {
         nodes: {
           caller: goroutine({
@@ -110,7 +110,7 @@ export default defineViz({
           items: slice({ label: "items", pos: [1, 0], size: N }),
           gap: gapNode,
         },
-        insight: `All ${N} items land in memory before consume runs once, so production gets ${N - 1} items ahead. Nothing makes the producer wait for the slow consumer.`,
+        insight: `All ${N} items are in memory before consume runs. Production gets ${N - 1} items ahead. Nothing makes the producer wait for the slow consumer.`,
         tests,
         clock: { unit: "ms" },
         code: {
@@ -134,7 +134,7 @@ export default defineViz({
       id: "goal",
       chip: "Goal",
       tier: "goal",
-      summary: `A producer goroutine sends into ch with ${K.cap.value} slots; a full ch makes it wait, so the gap stays small.`,
+      summary: `A producer sends into ch with ${K.cap.value} slots. A full ch makes it wait. The gap stays small.`,
       knobs: [{ key: "cap", label: "cap(ch)", options: [0, K.cap.value, N], value: K.cap.value }],
       model: goal,
     },

@@ -24,12 +24,11 @@ export function Home() {
         <section className="hero">
           <h1>Practice Go concurrency in your browser</h1>
           <p className="lede">
-            {site.exercises.length} exercises on goroutines, channels, <code>select</code>, <code>sync</code> and <code>context</code>.
-            Each one gives you a buggy <code>main.go</code> and a test suite. Fix <code>main.go</code> until <code>go test</code> passes.
+            {site.exercises.length} short Go exercises. Each one has a broken <code>main.go</code> and tests. Fix the code until the
+            tests pass.
           </p>
           <p>
-            The real Go {site.goVersion} compiler and linker run in this tab as WebAssembly. You do not need to install or clone
-            anything, and no server runs your code. Your work stays in this browser.
+            The real Go {site.goVersion} compiler runs in this tab. Nothing is installed. No server runs your code.
           </p>
           <div className="hero-actions">
             <a className="btn primary large" href={`/${first.id}`} onClick={onLinkClick}>
@@ -40,11 +39,10 @@ export function Home() {
             </a>
           </div>
           <p className="muted small">
-            One difference from your machine: browsers cannot run the race detector, so run <code>go test -race</code> locally before
-            you call a solution done.
+            The browser cannot run Go's race detector. Before you finish, run <code>go test -race</code> on your computer.
           </p>
         </section>
-        {error ? <p className="muted">Could not load the overview: {error}</p> : readme ? <Markdown src={readme} ctx={{ dir: "/" }} /> : null}
+        {error ? <p className="muted">The overview did not load: {error}</p> : readme ? <Markdown src={readme} ctx={{ dir: "/" }} /> : null}
       </div>
     </div>
   );

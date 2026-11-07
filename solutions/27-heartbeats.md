@@ -1,21 +1,23 @@
-# Heartbeats: Detecting a Stalled Worker Before It's Too Late - Suggested Solutions
+# Heartbeats: Detecting a Stalled Worker - Suggested Solutions
 
-> **Spoiler warning.** This file contains full worked solutions for `27-heartbeats/`. Try solving it yourself first — come back here if you're stuck or want to compare approaches.
+> **Spoiler warning.** This file has full solutions for `27-heartbeats/`. Try the exercise first. Come back if you are stuck or want to compare approaches.
 
 ## The problem
 
-The starting point is `DoWork`, a simulated long-running worker, and `WorkWithTimeout`, which is supposed to use `DoWork`'s heartbeat to detect a stalled worker quickly instead of only ever being able to wait for its eventual result:
+The starting code has `DoWork`, a simulated long-running worker. It also has `WorkWithTimeout`. `WorkWithTimeout` should use `DoWork`'s heartbeat to detect a stall quickly:
 
 ```go
 func DoWork(done <-chan struct{}, pulseInterval time.Duration, workUnits int) (heartbeat <-chan struct{}, results <-chan int)
 func WorkWithTimeout(workUnits int, stallAfter int, perPulseTimeout time.Duration) ([]int, error)
 ```
 
-`DoWork` is supposed to process `workUnits` units of work one at a time (see `mockworker.go`'s `SimulateUnit`), sending one result per completed unit on `results` and closing `results` when the job finishes. While actively working on a unit, it must also pulse on `heartbeat` roughly every `pulseInterval`, for as long as that unit takes — that pulse is the only way a caller can tell "still working, just slow" apart from "wedged forever," since a slow-but-healthy unit and a stalled one otherwise look identical to anyone who can only wait for a result.
+`DoWork` must process `workUnits` one at a time. See `mockworker.go`'s `SimulateUnit`. It sends one result per unit and closes `results` when done.
 
-`WorkWithTimeout` is supposed to run `DoWork`, reset a timer to `perPulseTimeout` on every heartbeat or result received, and return a non-nil error the instant `perPulseTimeout` elapses with neither — detecting a stall within roughly one `perPulseTimeout` window of it starting, not after however long the stalled unit would otherwise have taken.
+`DoWork` must also pulse on `heartbeat` about every `pulseInterval` while a unit is active. The pulse separates "slow but working" from "stuck forever." A caller waiting only for a result cannot tell them apart.
 
-`stallAfter` (a parameter of `WorkWithTimeout`, not of `DoWork`) selects which work-unit index should simulate a stall via `mockworker.go`'s package-level `SetStallUnit`; a negative or out-of-range value means "run normally" — that's the normal-path test case.
+`WorkWithTimeout` must run `DoWork`. It must reset a timer to `perPulseTimeout` on every heartbeat or result. If neither arrives before the timer fires, it must return a non-nil error. It should detect a stall within about one `perPulseTimeout` window.
+
+`stallAfter` is a `WorkWithTimeout` parameter. It selects a unit index for a simulated stall through `mockworker.go`'s `SetStallUnit`. A negative or out-of-range value runs normally.
 
 ## Why the naive version is wrong
 
@@ -51,7 +53,9 @@ func DoWork(done <-chan struct{}, pulseInterval time.Duration, workUnits int) (h
 }
 ```
 
-`DoWork` sends exactly one heartbeat, at startup, then never again — the `checkIn` callback it hands to `SimulateUnit` (exactly where the exercise wants a real, per-slice pulse) is a no-op that just returns `true`. `WorkWithTimeout` compounds the problem: it never even reads from `heartbeat`, and instead of resetting a timer on every heartbeat/result, it sets a single flat `perPulseTimeout * workUnits` deadline once, up front, and never touches it again:
+`DoWork` sends one heartbeat at startup. The `checkIn` callback returns `true`, but it never sends a pulse. `WorkWithTimeout` also never reads `heartbeat`.
+
+Instead of resetting a timer, `WorkWithTimeout` sets one flat deadline: `perPulseTimeout * workUnits`. It never changes that deadline:
 
 ```go {1}
 timedOut := time.After(perPulseTimeout * time.Duration(workUnits))
@@ -65,14 +69,14 @@ for {
 }
 ```
 
-That single flat deadline can't win either test in this suite, and the arithmetic shows why:
+One flat deadline cannot pass both timing tests:
 
-- `TestNoStallCompletesSuccessfully` needs the deadline to be **longer** than a full healthy job: `UnitDuration(400ms) * workUnits(5) = 2000ms`.
-- `TestStallDetectedPromptly` needs the deadline to fire **no later than** `stallStartsAt(800ms) + perPulseTimeout(300ms) + slack ≈ 1300ms` once a stall begins.
+- `TestNoStallCompletesSuccessfully` needs a deadline longer than `UnitDuration(400ms) * workUnits(5) = 2000ms`.
+- `TestStallDetectedPromptly` needs a deadline no later than `stallStartsAt(800ms) + perPulseTimeout(300ms) + slack ≈ 1300ms`.
 
-The naive deadline is `perPulseTimeout(300ms) * workUnits(5) = 1500ms` — simultaneously too short to satisfy the first requirement and too long to satisfy the second. No choice of a single flat, whole-job timeout can satisfy both at once; only a timer that resets on every sign of life can.
+The naive deadline is `perPulseTimeout(300ms) * workUnits(5) = 1500ms`. It is too short for the first test and too long for the second. Only a timer that resets on activity can pass both.
 
-Verified: running `go test -race -timeout 30s -v ./...` (`GOROOT` pointed at the go1.25.6 toolchain `go.mod` requires) against this naive `main.go`:
+Verified with the `go1.25.6` toolchain. Set `GOROOT` to that toolchain. `go test -race -timeout 30s -v ./...` fails all three tests against the naive `main.go`:
 
 ```
 === RUN   TestNoStallCompletesSuccessfully
@@ -92,7 +96,9 @@ FAIL
 FAIL	github.com/loia5tqd001/go-concurrency-exercises/27-heartbeats	1.035s
 ```
 
-`TestConcurrentSafety` uses `workUnits = 3`, so its flat deadline is `300ms * 3 = 900ms` — again shorter than the real `3 * 400ms = 1200ms` job, so even the plain concurrent-safety smoke test (no stall configured at all) fails on pure spurious-timeout grounds. All three failures point at the same root cause, with clean diagnostic messages — no hangs, no `synctest` deadlock panics, no `-race` reports.
+`TestConcurrentSafety` uses `workUnits = 3`. Its flat deadline is `300ms * 3 = 900ms`. The healthy job takes `3 * 400ms = 1200ms`. The test therefore times out even without a stall.
+
+All three failures have the same cause. They fail cleanly, with no hang, `synctest` panic, or race report.
 
 ## The fix
 
@@ -207,15 +213,19 @@ func WorkWithTimeout(workUnits int, stallAfter int, perPulseTimeout time.Duratio
 
 Design notes:
 
-- **The pulse lives where the work happens, not on an independent ticker.** `checkIn` is only ever invoked by `SimulateUnit` *between* the small time-slices a healthy unit is broken into. Crucially, `mockworker.go`'s stalled path never calls `checkIn` at all — it blocks in one single, un-checkpointed wait. That's what makes a stall actually stop the heartbeats: if pulsing were driven by a `DoWork`-level `time.Ticker` racing in the same `select` as "is the unit done yet", it would keep firing on schedule no matter what the unit was actually doing, and no implementation — correct or naive — could ever detect a stall from the caller side. Tying the pulse to genuine, cooperative progress is the whole point of the heartbeat pattern.
-- **`hb` goes back to unbuffered here, on purpose.** The naive `DoWork` needed `hb` buffered (capacity 1) purely so its one startup pulse could complete against a `WorkWithTimeout` that never reads `heartbeat` at all - without that buffer, the send would block forever and the naive worker would never even reach its first unit of work. Once `WorkWithTimeout` actually selects on `heartbeat`, that crutch is unnecessary: an unbuffered channel is what makes a pulse mean "someone was listening and received this the instant it was sent," a real synchronous liveness signal, rather than a fire-and-forget write into a buffer nobody may ever drain.
-- **`checkIn` respects `done` with a `select`, never a blocking bare send.** `WorkWithTimeout` always `close(done)`s via `defer` before it returns, including on the stall-detected path, while the worker goroutine may still be mid-unit. Without the `<-done` case in `checkIn` (and in the two `res <- i` sends), a heartbeat or result send with nobody left receiving would leak the worker goroutine forever, parked on a channel operation that can never complete.
-- **`heartbeat` is read as a value-only receive (`case <-heartbeat:`), not `v, ok := <-heartbeat`.** `DoWork` never closes `heartbeat` — only `results` gets a `defer close`. Handling a hypothetical `!ok` branch that the implementation can never actually produce would be dead code pretending to be a real case; the plain receive says exactly what's true: "a pulse arrived," full stop.
-- **A single shared `timer.Reset` replaces the naive flat deadline**, and it's why both failing tests above pass here: the timer restarts on *either* channel activity, so it never measures "how long has the whole job been running" — only "how long has it been since we last heard *anything*." A healthy job that runs long keeps resetting the timer every `workerPulseInterval` (100ms) or so; a stalled unit stops resetting it the moment the stall begins, so the timer fires almost exactly `perPulseTimeout` after the last sign of life, regardless of how long the job as a whole would otherwise take.
-- **Reusing one `time.Timer` via `Reset` instead of allocating a fresh one every loop iteration is safe here specifically because of the Go version this module is pinned to.** Before Go 1.23, `Timer.Reset` on a timer that might already have fired required first calling `Stop` and draining `timer.C` if `Stop` returned `false`, or a stale tick could sit in the channel and make the next `Reset` appear to fire instantly. `go.mod` pins this module to `go 1.25.6`, well past that change, so `timer.Reset(perPulseTimeout)` alone — with no `Stop`/drain — is documented as safe: any receive from `timer.C` after `Reset` returns is guaranteed not to observe a value from the previous duration.
-- **`DoWork`'s work loop and `WorkWithTimeout`'s watch loop are two separate goroutines communicating only over channels.** Neither blocks the other from making unrelated progress, and `WorkWithTimeout` never needs to know *why* the pulses stopped — only that they did. That decoupling is also what makes the whole pattern composable: any caller that only cares about liveness, not the reason for its absence, can reuse the same watch-loop shape against a different heartbeat-emitting worker.
+- **Tie the pulse to real work progress.** `SimulateUnit` calls `checkIn` between a healthy unit's small time slices. The stalled path never calls `checkIn`.
+- A `checkIn` result of `false` stops a healthy unit early.
+- **Do not use an independent `time.Ticker` for the pulse.** It would keep sending even when the unit is stuck. The caller could never detect a stall.
+- **Use an unbuffered `hb`.** A heartbeat then means a receiver got the pulse immediately. This is a real liveness signal. The naive code needs a capacity-1 buffer only for its one startup pulse.
+- **Use `select` with `<-done` for every send.** `WorkWithTimeout` puts `defer` before `close(done)` on every return path. The worker may still be active. A blocked heartbeat or `res <- i` send would leak the worker.
+- **Receive `heartbeat` as `case <-heartbeat:`.** `DoWork` never closes `heartbeat`. Only `results` gets `defer close`. The test suite also avoids `v, ok := <-heartbeat` and a `!ok` branch.
+- **Reset one shared timer on every heartbeat or result.** Use `Timer.Reset` on each activity. A healthy job resets it about every `workerPulseInterval`. A stalled unit stops resetting it.
+- **The timer fires about `perPulseTimeout` after the last event.** The exact call is `timer.Reset(perPulseTimeout)`.
+- **`Timer.Reset` is safe in Go 1.25.6.** Before Go 1.23, a fired timer needed `Stop` and a drain. In this version, `Reset` removes old values from `timer.C`.
+- The repo's `go.mod` selects Go 1.25.6.
+- **Keep work and watching in separate goroutines.** They communicate only through channels. The watcher only needs to know that pulses stopped, not why.
 
-**Verified**: confirmed the naive `main.go` fails all three tests exactly as captured above (`go test -race -timeout 30s -v ./...`, `GOROOT` set to the go1.25.6 toolchain `go.mod` requires), then copied the exercise into a throwaway scratch directory (with its own standalone `go.mod` so it builds outside the monorepo module) and dropped in the fix shown above in place of the shipped naive `main.go`. In that scratch copy: `go build ./...`, `go vet ./...`, and `gofmt -l .` are all clean, and `go test -race -count=5 -v ./...` passed all three tests five times in a row (15 test executions total) with zero flakes:
+**Verified:** `go build ./...`, `go vet ./...`, and `gofmt -l .` are clean. `go test -race -count=5 -v ./...` runs all three tests five times. They passed every time:
 
 ```
 === RUN   TestNoStallCompletesSuccessfully
@@ -229,19 +239,23 @@ PASS
 ok  	scratch27heartbeats	7.749s
 ```
 
-`TestNoStallCompletesSuccessfully` and `TestStallDetectedPromptly` run inside `synctest.Test` with a fake clock, so their `(0.00s)` timings are real — the ~2s and ~1.1s of *simulated* time they exercise cost no actual wall-clock time. `TestConcurrentSafety` runs 20 concurrent callers with real (short) durations under `-race` and took ~1.2s of genuine wall time, matching `workUnits=3 * UnitDuration=400ms` run largely in parallel.
+`TestNoStallCompletesSuccessfully` and `TestStallDetectedPromptly` use `synctest.Test`. Their `(0.00s)` times are real. The simulated 2s and 1.1s runs cost no wall-clock time.
 
-The concrete timing math behind `TestStallDetectedPromptly`'s bound, for reference: with `UnitDuration=400ms`, `stallAfter=2`, and `testPerPulseTimeout=300ms`, the stalled unit begins at `2*400ms = 800ms` into the job; the last reset event before that is the result for unit 1, delivered at exactly `800ms`; the correct implementation therefore times out at `800ms + 300ms = 1.1s` — comfortably inside the test's `stallStartsAt + perPulseTimeout + 2*workerPulseInterval = 1.3s` bound, and nowhere near the `2s` a normal job takes or the `24h` `StallDuration` the stalled unit is configured for. The naive version's flat `perPulseTimeout*workUnits = 1.5s` deadline sits just outside that 1.3s bound, which is exactly why `TestStallDetectedPromptly` catches it — and, as shown above, it also sits *inside* the ~2s a healthy job legitimately needs, which is why `TestNoStallCompletesSuccessfully` catches it too.
+`TestConcurrentSafety` runs 20 callers under `-race`. It takes about 1.2s. This matches `workUnits=3 * UnitDuration=400ms` running mostly in parallel.
 
-The repo's real `27-heartbeats/main.go` was left untouched (still the naive version above) throughout this verification; only the throwaway scratch copy ever received the fix.
+Here is the timing math for `TestStallDetectedPromptly`. `UnitDuration=400ms`, `stallAfter=2`, and `testPerPulseTimeout=300ms`. The stall starts at `2*400ms = 800ms`. The last reset is the result for unit 1 at `800ms`. The correct code times out at `800ms + 300ms = 1.1s`.
+
+The test bound is `stallStartsAt + perPulseTimeout + 2*workerPulseInterval = 1.3s`. The healthy run takes about `2s`. The stalled unit uses a `24h` `StallDuration`.
+
+The naive flat deadline is `perPulseTimeout*workUnits = 1.5s`. It is above the 1.3s stall bound, so `TestStallDetectedPromptly` fails. It is below the 2s healthy run, so `TestNoStallCompletesSuccessfully` also fails.
+
+The real `27-heartbeats/main.go` stayed unchanged during verification. Only the scratch copy received the fix.
 
 ## Alternative approach: a fresh `time.After` per iteration instead of one reused timer
 
-The fix above allocates a single `time.Timer` before the loop and calls
-`Reset` on it from both firing branches. A commonly-reached-for
-alternative skips `Reset` (and the version-sensitivity that comes with
-it) entirely and just re-arms with a fresh `time.After` every time the
-`select` is re-entered:
+The main fix uses one `time.Timer` before the loop. It calls `Reset` from both activity branches.
+
+A simpler alternative creates a fresh `time.After` each time the `select` runs:
 
 ```go {11}
 for {
@@ -260,37 +274,24 @@ for {
 }
 ```
 
-This is correct, and arguably simpler to read: there's no `Reset` call
-to place correctly on two different branches, and no need to reason
-about `Timer.Reset`'s pre-1.23-vs-1.23+ semantics at all, since a new
-timer is created fresh each time rather than an existing one being
-rearmed. `go doc time.After` explains why that's no longer the
-efficiency trap it once was:
+This version is correct and easier to read. It has no `Reset` call on two branches. It also avoids the Go 1.23 timer change. It creates a new timer each time.
 
-> Before Go 1.23, this documentation warned that the underlying Timer
-> would not be recovered by the garbage collector until the timer
-> fired... As of Go 1.23, the garbage collector can recover
-> unreferenced, unstopped timers. There is no reason to prefer
-> `NewTimer` when `After` will do.
+`go doc time.After` says:
 
-So on this module's pinned `go 1.25.6`, a `time.After` per iteration
-doesn't leak - the abandoned timer from the previous iteration (the
-one that lost the race to whichever case fired) is reclaimed by the
-GC even though nothing ever stops or drains it. The remaining
-difference is allocation churn, not correctness: `timer.Reset` reuses
-one `runtime.timer` for the entire call, while `time.After` inside the
-loop starts a brand-new one on every single heartbeat and every single
-result - potentially dozens per call on a multi-unit job pulsing every
-`workerPulseInterval`. For one `WorkWithTimeout` call that's
-negligible; it stops being negligible if this watch-loop shape were
-lifted into something hotter (many concurrent long-lived watchers,
-each re-arming on every pulse) - which is exactly when reaching for the
-reused, `Reset`-based timer earns its extra complexity.
+> Before Go 1.23, an unreferenced timer was not recovered before it fired.
+> Go 1.23 can recover unreferenced, unstopped timers.
+> Prefer `After` when it fits.
+
+The module uses `go 1.25.6`, so a `time.After` per loop does not leak. The garbage collector can reclaim the unused timer.
+
+The remaining difference is allocation. `timer.Reset` reuses one `runtime.timer`. `time.After` creates a timer for every heartbeat and result. The guide says `NewTimer` is not needed when `After` fits.
+
+One call does not care. Many long-lived watchers do. Use the reused, `Reset`-based timer for hot paths.
 
 ## Key takeaways
 
-- A heartbeat is only meaningful if it's causally tied to genuine progress on the work being monitored. A pulse driven by an independent ticker that fires on a fixed schedule regardless of what the worker is actually doing can't distinguish "still going" from "wedged" — it will happily keep ticking even while the thing it's supposed to be reporting on is completely stuck. The pulse has to originate from the same execution path that would also, eventually, produce the result.
-- The caller-side pattern is symmetric and simple once the heartbeat is trustworthy: reset a single timer on *either* a heartbeat *or* a result, and treat that timer firing as the one and only stall signal. No polling, no separate "is it dead yet" check — just whichever of the three channels (`heartbeat`, `results`, `timer.C`) is ready first.
-- A single flat deadline sized off the *whole* job is a fundamentally different (and weaker) tool than a deadline that resets on every sign of life: it conflates "the job is naturally long" with "the job is stuck," and — as the arithmetic above shows concretely — it often can't be sized correctly for both at once, forcing a choice between killing healthy long jobs and being too slow to catch real stalls.
-- Always give `done`/cancellation a real exit path out of every blocking send or receive in a heartbeat-driven worker (`select` against `done`, never a bare channel op) — a heartbeat pattern that can't be told to stop leaks exactly the kind of goroutine it was built to help you detect.
-- `time.Timer.Reset`'s safety rules changed in Go 1.23 — know which Go version a module targets before deciding whether you need the older Stop-then-drain-then-Reset dance or can just call `Reset` directly on a live timer.
+- A heartbeat must come from real work progress. A fixed ticker keeps firing when the worker is stuck.
+- Reset one timer on a heartbeat or a result. Treat that timer as the only stall signal.
+- A whole-job deadline confuses a long job with a stuck job. One value usually cannot fit both cases.
+- Give every blocking send and receive a `done` exit path. Use `select`.
+- Go 1.23 changed the safe use of `time.Timer.Reset`. Check the module's Go version first.

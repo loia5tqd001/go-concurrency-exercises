@@ -164,15 +164,15 @@ const today: Model = {
       },
     }),
   },
-  insight: `Bridge takes one shard off chanStream and never reads it again. LogHub waits forever to hand over shard 1, and shard 1 waits forever on its first line, so main prints ${LINES} of ${TOTAL} lines.`,
+  insight: `Bridge takes one shard from chanStream and never reads it again. LogHub waits forever to hand over shard 1. Shard 1 waits forever on its first line. main prints ${LINES} of ${TOTAL} lines.`,
   stops: [
     {
       when: { op: "block", g: "LogHub" },
-      say: `At ${K.shardMs.value} ms LogHub tries to hand over shard 1, but Bridge never reads chanStream again.`,
+      say: `At ${K.shardMs.value} ms LogHub tries to hand over shard 1. Bridge never reads chanStream again.`,
     },
     {
       when: { op: "close", node: "out" },
-      say: `shard 0 closes its lines at ${END_TODAY} ms, so Bridge closes out. The other ${TOTAL - LINES} lines never arrive.`,
+      say: `Shard 0 closes its lines at ${END_TODAY} ms, so Bridge closes out. The other ${TOTAL - LINES} lines never arrive.`,
     },
   ],
   // LogHub runs mock code, so it owns only the line that starts it; its
@@ -259,15 +259,15 @@ const goal: Model = {
       },
     }),
   },
-  insight: `Bridge keeps reading chanStream and starts one fwd per shard, so all five shards drain at once. out closes only after chanStream has closed and every fwd has finished: main prints all ${TOTAL} lines.`,
+  insight: `Bridge keeps reading chanStream and starts one fwd per shard. All ${SHARDS} shards drain at once. out closes only after chanStream closes and every fwd finishes. main prints all ${TOTAL} lines.`,
   stops: [
     {
       when: { op: "go", g: "Bridge", nth: SHARDS },
-      say: `By ${(SHARDS - 1) * K.shardMs.value} ms Bridge has started a fwd for each shard. From here on the lines of all five interleave on out.`,
+      say: `By ${(SHARDS - 1) * K.shardMs.value} ms Bridge has started one fwd per shard. The lines from all ${SHARDS} shards now interleave on out.`,
     },
     {
       when: { op: "close", node: "out" },
-      say: `The last shard closes at ${END_GOAL} ms and its fwd finishes. Only now does Bridge close out.`,
+      say: `The last shard closes at ${END_GOAL} ms, and its fwd finishes. Bridge closes out only now.`,
     },
   ],
   clock: { unit: "ms" },
@@ -285,14 +285,14 @@ export default defineViz({
       id: "today",
       chip: "Today",
       tier: "today",
-      summary: `The naive Bridge reads only shard 0, so main prints ${LINES} of ${TOTAL} lines while LogHub and shard 1 block forever.`,
+      summary: `The naive Bridge reads only shard 0. main prints ${LINES} of ${TOTAL} lines. LogHub and shard 1 block forever.`,
       model: today,
     },
     {
       id: "goal",
       chip: "Goal",
       tier: "goal",
-      summary: `Bridge starts one fwd per shard as it arrives; all ${TOTAL} lines reach main, and out closes once every fwd finishes.`,
+      summary: `Bridge starts one fwd per shard as each arrives. All ${TOTAL} lines reach main. out closes after every fwd finishes.`,
       model: goal,
     },
   ],

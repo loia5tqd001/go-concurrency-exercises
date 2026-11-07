@@ -1,10 +1,11 @@
 # Bounded Pipeline with Backpressure
 
-`RunPipeline` is supposed to stream items from a fast producer to a
-slow consumer through a *bounded* channel, so a consumer that falls
-behind forces the producer to slow down too - backpressure - instead
-of piling up unconsumed work in memory. Right now it does the
-opposite:
+`RunPipeline` should move items from a fast producer to a slow
+consumer. It should use a bounded channel. If the consumer falls
+behind, the producer must slow down. This is backpressure. Memory must
+not fill with unconsumed work.
+
+Today, it does the opposite:
 
 ```
 Today: producer races ahead, buffers the whole run in memory
@@ -17,22 +18,19 @@ Today: producer races ahead, buffers the whole run in memory
   consume(0) consume(1) ... consume(19)      (only now, one at a time)
 ```
 
-Every `produce(i)` call completes and lands in the slice before
-`consume` runs even once - so "fast producer, slow consumer" never
-actually meets. Nothing pushes back on the producer, and the memory
-held for unconsumed work grows linearly with `itemCount`.
+Today, every `produce(i)` call finishes and stores its item before
+`consume` runs. The fast producer and slow consumer never meet.
+Nothing slows the producer. Memory grows with `itemCount`.
 
-`RunPipeline` doesn't know what an item is or what "slow" means - both
-are entirely up to the caller. `produce(i)` generates item `i` and
-returns it; `consume(item)` is handed that value and does whatever
-expensive work it wants with it. In `main()` (and this exercise's
-tests) that's `SlowConsume` (see `mockslowconsumer.go`), sleeping 50ms
-per item to stand in for a slow downstream sink - but `RunPipeline`
-never calls `SlowConsume` itself; it's pure plumbing over a type
-parameter `T`.
+`RunPipeline` does not know what an item is or what slow means. The
+caller defines both. `produce(i)` makes item `i` and returns it.
+`consume(item)` does the expensive work. In `main()` and the tests,
+`consume` uses `SlowConsume` (see `mockslowconsumer.go`). It sleeps
+50ms per item. `RunPipeline` never calls `SlowConsume`. It only moves
+values of type `T`.
 
-Your task is to rewrite `RunPipeline` so production and consumption
-run concurrently, connected by a channel with a small, fixed buffer
+Your task is to rewrite `RunPipeline`. Production and consumption
+must run at the same time. Connect them with a small fixed buffer
 (e.g. size 2) instead of a slice:
 
 ```
@@ -44,20 +42,18 @@ Goal: a bounded channel makes the producer wait on the consumer
   the next  ch <- produce(i)  blocks until consume() drains one.
 ```
 
-Decide how the producer, consumer, and shutdown signal coordinate so
-no send is left blocked and no work is silently dropped. The function
-signature must stay the same:
+Make the producer, consumer, and shutdown signal coordinate. Leave no
+send blocked when `RunPipeline` returns. Do not drop work by accident.
+The function signature must stay the same:
 
 ```go
 func RunPipeline[T any](itemCount int, produce func(i int) T, consume func(item T))
 ```
 
-`produce` and `consume` must each be called exactly once per item
-(`produce(i)` right when item `i` is generated, `consume` right when
-the item `produce` returned is handed off), and may be called from
-different goroutines - the callbacks the tests pass in do their own
-synchronization, so `RunPipeline` doesn't need to worry about that
-itself.
+Call `produce` and `consume` exactly once per item. Call `produce(i)`
+when item `i` is made. Call `consume` when the produced item is handed
+off. These calls may run on different goroutines. The test callbacks
+coordinate their own access, so `RunPipeline` does not need to.
 
 ## Test your solution
 

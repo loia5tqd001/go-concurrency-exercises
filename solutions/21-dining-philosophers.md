@@ -1,18 +1,16 @@
-# Dining Philosophers: Deadlock Avoidance — Suggested Solutions
+# Dining philosophers: avoid deadlock
 
-> **Spoiler warning.** This file contains full worked solutions for `21-dining-philosophers/`. Try solving it yourself first — come back here if you're stuck or want to compare approaches.
+> **Spoiler warning.** This file has full solutions for `21-dining-philosophers/`. Try the exercise first. Come back if you get stuck.
 
 ## The problem
 
-Five philosophers sit around a round table with one fork between each
-adjacent pair (so `numPhilosophers` forks total). To eat, a
-philosopher must hold both their left and right fork at once; when
-done, both go back down so neighbors can use them. `Dine` is supposed
-to let every philosopher finish `mealsToEat` meals without the table
-ever grinding to a halt.
+Five philosophers sit around a round table. There is one fork between each pair, so `numPhilosophers` forks exist in total.
 
-The given implementation always acquires forks in the same order —
-left first, then right, for every philosopher:
+To eat, a philosopher must hold the left and right fork at the same time. Then both forks return to the table.
+
+`Dine` must let every philosopher finish `mealsToEat` meals. The table must not stop forever.
+
+The starter always takes the left fork first, then the right fork:
 
 ```go {5,13}
 func (p *Philosopher) Dine(wg *sync.WaitGroup, mealsEaten *int32) {
@@ -39,46 +37,35 @@ func (p *Philosopher) Dine(wg *sync.WaitGroup, mealsEaten *int32) {
 }
 ```
 
-with each philosopher `i` assigned `left = forks[i]`,
-`right = forks[(i+1)%numPhilosophers]`.
+Philosopher `i` gets `left = forks[i]` and `right = forks[(i+1)%numPhilosophers]`.
 
 ## Why the naive version is wrong
 
-This is the textbook circular-wait deadlock, not a slowness or
-correctness bug: if all `numPhilosophers` goroutines start at roughly
-the same time, every one of them successfully grabs its left fork
-before any of them gets around to trying for its right fork (the
-`time.Sleep(time.Millisecond)` in between makes this reliable rather
-than occasional — it widens the window for every goroutine to get its
-left fork before racing for its right one). At that point philosopher
-`i` holds fork `i` and blocks forever on fork `(i+1)%numPhilosophers`,
-which is held by philosopher `i+1`, who is in turn blocked on fork
-`(i+2)%numPhilosophers` — a complete cycle where nobody can ever make
-progress again. Every philosopher goroutine is now durably parked on a
-`sync.Mutex.Lock()` call that will never return, and `wg.Wait()` in
-`Dine` never returns either.
+This is the classic circular-wait deadlock. It is not slow code and not a wrong answer.
 
-**Why `check_test.go` deliberately avoids `testing/synctest` here.**
-`synctest.Test` detects exactly the condition "every goroutine in the
-bubble is durably blocked" — but its reaction to that condition is to
-panic with `"deadlock: ..."`, taking down the whole test binary, not
-just the one test. That's the right tool in exercise 20, where the
-naive bug is mere *slowness* (goroutines finish, just sequentially) —
-`synctest`'s fake clock can fast-forward through that safely. It's the
-wrong tool here, where the naive bug is a genuine, permanent deadlock:
-a `synctest` bubble around `Dine(5, 3)` would panic-crash the test
-binary the moment every philosopher goroutine parks on a mutex, which
-would fail every test in the file (including
-`TestDineWithVaryingTableSizes`), not just report the one deadlocking
-case cleanly.
+All goroutines start together. Each goroutine can take its left fork before any tries for its right fork.
 
-Instead, `check_test.go` runs `Dine` on a plain goroutine and races it
-against a real-clock `time.After(3 * time.Second)` via `select`. If
-`Dine` deadlocks, that goroutine simply never sends on `done` and is
-leaked forever — which is harmless, because `go test` doesn't wait
-around for leaked goroutines; it moves on the instant the test function
-returns via `t.Fatalf`. That produces a clean, fast, readable failure
-message instead of a hang or a crash:
+`time.Sleep(time.Millisecond)` widens that window. The deadlock then happens every time, not by chance.
+
+Philosopher `i` holds fork `i`. It waits for fork `(i+1)%numPhilosophers`, which philosopher `i+1` holds.
+
+Philosopher `i+1` waits for fork `(i+2)%numPhilosophers`, and the cycle continues. Nobody can move.
+
+Every goroutine waits in a `sync.Mutex.Lock()` call forever. `wg.Wait()` in `Dine` never returns.
+
+**Why `check_test.go` avoids `testing/synctest` here.** `synctest.Test` can detect a bubble where every goroutine is blocked.
+
+It then panics with `"deadlock: ..."`. That panic kills the whole test binary, not one test.
+
+This works in exercise 20, where the bug is only slowness. The fake clock can move past it safely.
+
+It does not work for a real deadlock. `Dine(5, 3)` would panic and fail every test in the file.
+
+`check_test.go` runs `Dine` in a plain goroutine. It races that goroutine with `time.After(3 * time.Second)` through `select`.
+
+If `Dine` deadlocks, the goroutine never sends on `done`. It leaks.
+
+`go test` does not wait for leaked goroutines. The test calls `t.Fatalf` and returns. The result is a clear failure, not a hang or crash:
 
 ```
 --- FAIL: TestDineCompletesWithoutDeadlock (3.00s)
@@ -88,41 +75,25 @@ message instead of a hang or a crash:
     right fork)
 ```
 
-confirmed against the naive version in the checked-in scaffold: it
-fails via this exact 3-second `t.Fatal` timeout, not a panic or a hang
-of the test run itself.
+The naive scaffold fails with this 3-second `t.Fatal` timeout. It does not panic or hang the test run.
 
-**Why `mealsToEat` is `10_000`, not a "natural" handful of meals.**
-The naive implementation's deadlock is only *reliable* because of the
-artificial `time.Sleep(time.Millisecond)` pause between grabbing the
-left and right fork above — that pause is what forces every
-philosopher into lockstep on the very first meal. A solver could
-notice that pause, delete it, and leave the fork-acquisition order
-completely unfixed: with the pause gone, the collision window shrinks
-to whatever's left of ordinary scheduling noise, and at a low meal
-count (the original `mealsToEat = 10`) that still-broken version can
-slip past the test on a lucky run — confirmed: at `mealsToEat = 10`,
-the pause-deleted, still-broken version passes every one of 10
-back-to-back runs. Looping `mealsToEat` up to `10_000` instead gives
-that same still-broken implementation enough independent chances to
-collide that it deadlocks reliably anyway — confirmed: 10/10 runs
-timed out at the 3-second mark with the pause deleted and the fork
-order left broken — while a genuine fix, which never depends on timing
-luck in the first place, still finishes in well under a second (see
-"Verified" below). This is also why the naive scaffold's own "eat"
-delay is a tiny `10 * time.Microsecond` rather than a full
-millisecond: at `10_000` meals per philosopher, a millisecond-scale eat
-delay would make even a *correct* fix take tens of seconds just to
-finish simulating that many meals.
+**Why `mealsToEat` is `10_000`.** The deadlock is reliable because the starter pauses between forks.
+
+That pause puts every philosopher into lockstep on the first meal. A solver could delete the pause and keep the broken fork order.
+
+With no pause, ordinary scheduling hides the collision. At `mealsToEat = 10`, the broken version passed 10 of 10 runs.
+
+At `10_000` meals, the broken version gets enough chances to collide. It timed out in 10 of 10 runs.
+
+A correct fix does not depend on timing. It still finishes in under a second.
+
+The starter's eat delay is only `10 * time.Microsecond`. A millisecond eat delay would make 10,000 meals take too long, even with a fix.
 
 ## Approach 1: Resource ordering (always lock the lower-indexed fork first)
 
-The simplest, most idiomatic fix: instead of always locking "left,
-then right," each philosopher locks whichever of its two forks has the
-**lower index** first, regardless of which one is nominally its left
-or right fork. The artificial "reaching" pause was only ever there to
-make the naive bug reproduce reliably — a genuine fix has no reason to
-keep it:
+This is the simplest fix. Each philosopher locks the lower-indexed fork first.
+
+It does not matter whether that fork is on the left or right. The pause was only there to make the bug repeat. A real fix removes it.
 
 ```go {5,6}
 func (p *Philosopher) Dine(wg *sync.WaitGroup, mealsEaten *int32) {
@@ -147,37 +118,27 @@ func (p *Philosopher) Dine(wg *sync.WaitGroup, mealsEaten *int32) {
 }
 ```
 
-Why this eliminates the deadlock: circular wait requires every
-philosopher in the cycle to be holding one fork while waiting on
-*another philosopher's* fork, forming a closed loop where the acquisition
-order disagrees somewhere around the table. Once every philosopher
-agrees on a single global order — lowest index first, always — that
-disagreement can't arise. Concretely, in a 5-philosopher table, the
-philosopher sitting between forks 4 and 0 now locks fork 0 first (not
-fork 4), same as the philosopher between forks 0 and 1. Whichever of
-those two philosophers gets to fork 0 first is guaranteed to be able to
-also acquire its second fork and complete a full meal (nothing else
-is contending for the *other* fork it needs before it does), which
-breaks the cycle: there's always at least one philosopher who isn't
-stuck waiting on a neighbor who is itself stuck waiting on them.
+Circular wait needs a closed loop. Each philosopher holds one fork and waits for another philosopher's fork.
 
-Verified in the checked-in scaffold: `go test -race -count=20` passed
-cleanly — `TestDineCompletesWithoutDeadlock` consistently in
-~0.57-0.61s (well inside the 3-second timeout) and
-`TestDineWithVaryingTableSizes` across `numPhilosophers` = 2, 5, 8 all
-passing instantly, with no flakiness across twenty repeated runs and
-the race detector silent throughout (the only shared state touched is
-each `Fork`'s own `sync.Mutex` and `mealsEaten` via
-`atomic.AddInt32`).
+A global order removes that loop. Everyone takes the lowest index first.
+
+At a table of 5, the philosopher between forks 4 and 0 takes fork 0 first. The philosopher between forks 0 and 1 also takes fork 0 first.
+
+One global order means the wait graph cannot form a cycle. At least one philosopher can always finish and release forks.
+
+I tested this in the checked-in scaffold. `go test -race -count=20` passed with no flakes.
+
+`TestDineCompletesWithoutDeadlock` took about 0.57 to 0.61 seconds each time. The timeout is 3 seconds.
+
+`TestDineWithVaryingTableSizes` passed at once for `numPhilosophers` 2, 5, and 8. The race detector reported nothing.
+
+The only shared state is each `Fork`'s `sync.Mutex` and `mealsEaten` through `atomic.AddInt32`.
 
 ## Approach 2: Arbitrator / counting semaphore
 
-A genuinely different mechanism, and the other classic textbook
-solution: instead of changing *how* forks are acquired, limit *how many
-philosophers may attempt to pick up forks at once* to
-`numPhilosophers - 1`, via a counting semaphore (a buffered channel
-used as a permit pool). Fork acquisition order is left unchanged —
-still left-then-right:
+This is another classic solution. It does not change fork order. It limits how many philosophers may try to take forks at once.
+
+A counting semaphore controls that limit. The code uses a buffered channel as a permit pool. It allows `numPhilosophers - 1` philosophers. Fork order stays left then right:
 
 ```go {5,17,27}
 func (p *Philosopher) Dine(wg *sync.WaitGroup, mealsEaten *int32, arbitrator chan struct{}) {
@@ -223,93 +184,56 @@ func Dine(numPhilosophers, mealsToEat int) (totalMealsEaten int32) {
 }
 ```
 
-Note this changes `Philosopher.Dine`'s signature (it now takes the
-`arbitrator` channel) — an equally valid alternative is to store the
-arbitrator on the `Philosopher` struct instead and leave the method
-signature untouched. Either way, the *outer* signature the exercise
-constrains, `func Dine(numPhilosophers, mealsToEat int) (totalMealsEaten int32)`,
-is unchanged, so it's still a drop-in replacement.
+This changes the signature of `Philosopher.Dine` by adding the `arbitrator` channel.
 
-**Be precise about the mechanism.** This does *not* eliminate
-hold-and-wait — an admitted philosopher still grabs its left fork and
-then blocks holding it while waiting for its right fork, exactly as in
-the naive version. What it does instead is bound contention: with
-`numPhilosophers` forks but only `numPhilosophers - 1` philosophers ever
-allowed past the arbitrator at once, at least one seat at the table is
-always empty. That guarantees the wait-for graph can never close into a
-full cycle around all `numPhilosophers` forks — with one philosopher
-permanently excluded, there's always at least one admitted philosopher
-whose desired second fork isn't held by another *admitted* philosopher
-who is itself stuck waiting, so someone can always complete both
-acquisitions, eat, and release, which lets the next-most-blocked
-philosopher through in turn.
+You can also store the arbitrator on the `Philosopher` struct. Then the method signature stays the same.
 
-(This exercise's fork assignment, `left = forks[i]`,
-`right = forks[(i+1) % numPhilosophers]`, is only meaningful for
-`numPhilosophers >= 2` — at `numPhilosophers == 1`, `left` and `right`
-resolve to the same fork, so any approach, naive or fixed, would
-self-deadlock locking one mutex twice. That's a degenerate case outside
-what the round-table model represents, not something either fix is
-expected to handle.)
+The required outer signature, `func Dine(numPhilosophers, mealsToEat int) (totalMealsEaten int32)`, does not change. The version remains a drop-in replacement.
 
-Verified in the checked-in scaffold: `go test -race -count=3` passed
-cleanly — `TestDineCompletesWithoutDeadlock` in ~0.82-0.87s and
-`TestDineWithVaryingTableSizes` across `numPhilosophers` = 2, 5, 8 all
-passing quickly, no flakiness across three repeated runs, race detector
-silent throughout. (Slightly slower than Approach 1 because the
-arbitrator channel adds a send/receive per meal on top of the mutex
-pair, and `numPhilosophers - 1` admitted philosophers still contend for
-forks among themselves.)
+This does not remove hold-and-wait. A philosopher still takes the left fork and waits while holding it for the right fork.
+
+The limit bounds contention. There are `numPhilosophers` forks, but only `numPhilosophers - 1` philosophers may pass the arbitrator.
+
+At least one place at the table is always empty. The wait-for graph cannot form a full cycle around all forks.
+
+One admitted philosopher can always get both forks. It eats and releases them. The next philosopher can then move.
+
+The fork assignment needs `numPhilosophers >= 2`.
+
+The code uses `right = forks[(i+1) % numPhilosophers]` and `left = forks[i]`.
+
+At `numPhilosophers == 1`, `left` and `right` are the same fork. Every version would deadlock on the second lock.
+
+That case is outside the round-table model. Neither fix handles it.
+
+I tested this in the checked-in scaffold. `go test -race -count=3` passed with no flakes.
+
+`TestDineCompletesWithoutDeadlock` took about 0.82 to 0.87 seconds. `TestDineWithVaryingTableSizes` passed quickly for 2, 5, and 8 philosophers.
+
+It is slightly slower than Approach 1. The arbitrator sends and receives once per meal. Admitted philosophers still contend for forks.
 
 ## Approach 1 vs. Approach 2
 
-Both break the same underlying cycle, through a different one of the
-four necessary conditions for deadlock:
+Both break the cycle in different ways:
 
-- **Approach 1 (resource ordering)** attacks **circular wait**
-  directly: it makes it structurally impossible for the acquisition
-  graph to form a cycle, by forcing every philosopher to agree on one
-  global lock order.
-- **Approach 2 (arbitrator)** doesn't touch acquisition order at all;
-  it attacks the *scale* of hold-and-wait by guaranteeing the number of
-  simultaneously-contending philosophers is always strictly less than
-  the number of forks, so a full cycle spanning every fork can never
-  form in the first place.
+- Approach 1 changes resource order. It removes circular wait by giving every philosopher one global lock order.
+- Approach 2 keeps acquisition order. It limits hold-and-wait by keeping the number of contenders below the number of forks.
 
-Resource ordering is generally preferred in practice: it needs no extra
-synchronization primitive, scales to any number of resources per
-task (not just two), and doesn't leave a philosopher waiting on a
-semaphore permit that's unrelated to the forks it actually needs. The
-arbitrator/semaphore approach is the more general "limit concurrent
-resource-holders" pattern, useful when resources don't have a natural
-total order to sort by, or when you want a tunable admission-control
-knob independent of resource identity.
+Resource ordering is usually better. It needs no extra primitive and works with more than two resources.
+
+It also does not make a philosopher wait for a permit unrelated to the forks.
+
+The arbitrator is a general "limit concurrent holders" pattern. Use it when resources have no natural order or you need adjustable admission control.
 
 ## Key takeaways
 
-- The naive bug here is a genuine, permanent deadlock (circular wait),
-  not slowness — that's why `check_test.go` uses a real-clock goroutine
-  + `time.After` timeout instead of `testing/synctest`: `synctest`
-  would detect the same "everyone's durably blocked" condition but
-  react by panicking the whole test binary, rather than failing just
-  the one test cleanly. Reach for `synctest` when the naive code merely
-  runs slowly (exercise 20); reach for a real-clock timeout-and-leak
-  pattern when the naive code can genuinely hang forever.
-- `mealsToEat` is cranked up to `10_000` specifically to close a cheat
-  path: deleting the naive scaffold's artificial "reaching" pause
-  without fixing fork order shrinks the deadlock's collision window,
-  but doesn't eliminate the bug — enough repeated attempts still
-  collide reliably (10/10 runs), while a genuine fix's runtime is
-  unaffected by meal count in the first place.
-- Resource ordering (Approach 1) breaks the deadlock by eliminating
-  circular wait: every philosopher agreeing on one global lock order
-  makes a closed wait-cycle structurally impossible.
-- The arbitrator/semaphore (Approach 2) breaks the deadlock differently:
-  it doesn't touch lock order at all, it bounds how many philosophers
-  can be mid-acquisition at once to `numPhilosophers - 1`, so a cycle
-  spanning every fork can never form — it does *not* eliminate
-  hold-and-wait at the individual-philosopher level.
-- Both fixes preserve the `Dine(numPhilosophers, mealsToEat int) (totalMealsEaten int32)`
-  signature and touch shared state only through each `Fork`'s own
-  mutex plus `atomic.AddInt32` on the shared counter, so both are
-  race-free under `-race` with no additional locking needed.
+- The naive bug is a real deadlock, not slowness. That is why `check_test.go` uses a real clock and `time.After`.
+- `synctest` would panic the whole test binary instead of failing one test.
+- Use `synctest` for slow code, as in exercise 20. Use a real timeout for code that can hang forever.
+- `mealsToEat` is `10_000` to close a cheat path. Deleting the pause without fixing order only makes the bug less frequent.
+- The broken version still timed out in 10 of 10 runs. A real fix does not depend on meal count for correctness.
+- Resource ordering removes circular wait. One global lock order makes a cycle impossible.
+- The arbitrator keeps lock order. It limits active philosophers to `numPhilosophers - 1`, so a full cycle cannot form.
+- The arbitrator does not remove hold-and-wait for one philosopher.
+- Both fixes keep the `Dine(numPhilosophers, mealsToEat int) (totalMealsEaten int32)` signature.
+- Both use each `Fork` mutex and `atomic.AddInt32`. Both are race-free under `-race` without more locking.

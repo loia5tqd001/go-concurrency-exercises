@@ -1,14 +1,14 @@
 # Dining Philosophers: Deadlock Avoidance
 
-Five philosophers sit around a round table. Between each adjacent pair
-of philosophers sits exactly one fork, so there are as many forks as
-philosophers. To eat, a philosopher needs to pick up BOTH the fork to
-their left and the fork to their right - only then can they eat, after
-which they put both forks back down so their neighbors can use them.
+Five philosophers sit around a round table. Each adjacent pair shares
+one fork. There are as many forks as philosophers.
 
-Right now every philosopher reaches for forks in the same order -
-left, then right - which lets a circular wait close around the whole
-table:
+A philosopher needs BOTH forks to eat. They need the fork on their left
+and the fork on their right. They put both forks down after eating.
+
+Today, every philosopher takes the left fork first. Everyone can then
+hold one fork and wait for the right fork. That fork belongs to a
+neighbor who is also waiting. This can close a cycle around the table.
 
 ```
 P0 holds F0, wants F1 ──▶ held by P1
@@ -18,17 +18,14 @@ P3 holds F3, wants F4 ──▶ held by P4
 P4 holds F4, wants F0 ──▶ held by P0   ◀── closes the ring back to P0
 ```
 
-If every philosopher succeeds in grabbing their left fork at roughly
-the same time, each is left holding one fork while waiting forever for
-their right fork - held by a neighbor who is, in turn, stuck waiting on
-THEM. Every wanted fork in the ring is already held by someone else
-also waiting, so nobody ever eats again and `Dine` never returns.
+If everyone takes the left fork at about the same time, no one can eat.
+Each philosopher holds one fork and waits for a neighbor's fork. Every
+fork in the ring is already held by someone else. No one can move, and
+`Dine` never returns.
 
-Your task is to fix `Dine` so every philosopher finishes all
-`mealsToEat` meals, no matter how many philosophers sit down or how
-their goroutines happen to get scheduled - using a standard,
-well-known deadlock-avoidance strategy. Whatever mechanism you pick,
-the ring above must never be able to close completely.
+Fix `Dine`. Every philosopher must finish all `mealsToEat` meals. This
+must work for any number of philosophers and any goroutine schedule. Use
+a standard deadlock-avoidance strategy. The ring must never close.
 
 The function signature must stay the same:
 
@@ -36,17 +33,16 @@ The function signature must stay the same:
 func Dine(numPhilosophers, mealsToEat int) (totalMealsEaten int32)
 ```
 
-`numPhilosophers` is at least 2; with one philosopher there is no
-distinct pair of adjacent forks to acquire.
+`numPhilosophers` is at least 2. With one philosopher, there are no two
+adjacent forks.
 
-Note: because of the fork-ordering bug, running `go run .` directly
-will, in practice, hang forever essentially every time. That's the bug
-this exercise is about - the graded artifact is the test suite, which
-guards the run with a timeout instead of waiting on it forever.
+Today, `go run .` will usually hang forever because of the fork-order
+bug. That is the bug in this exercise. The tests guard the run with a
+timeout, so they still finish.
 
 ## Test your solution
 
-To complete this exercise, you must pass the tests:
+The tests must pass:
 
 ```
 go test

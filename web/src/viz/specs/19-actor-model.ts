@@ -54,8 +54,8 @@ const FUNDS_ATTEMPTS = K.fundsAttempts.value;
 const FUNDS_MAX_SUCCESSES = Math.floor(FUNDS_INITIAL / FUNDS_AMOUNT);
 
 const tests = {
-  basic: { name: "TestAccountBasicOperations", short: "basic calls" },
-  funds: { name: "TestAccountWithdrawRejectsInsufficientFunds", short: "funds" },
+  basic: { name: "TestAccountBasicOperations", short: "seven calls" },
+  funds: { name: "TestAccountWithdrawRejectsInsufficientFunds", short: "withdrawals" },
 } as const;
 
 const directWithdraw: Program = function* ({ vars }) {
@@ -218,7 +218,7 @@ export default defineViz({
       id: "today",
       chip: "Today",
       tier: "today",
-      summary: "This animation shows five unchecked withdrawals driving the balance below zero; it does not model a specific read/write race interleaving.",
+      summary: "This animation shows five withdrawals with no funds check. The balance goes below zero. It does not model one exact read/write race.",
       model: {
         nodes: {
           test: goroutine({
@@ -247,11 +247,11 @@ export default defineViz({
           balance: fact({ label: "balance", pos: [2, 0], value: FUNDS_INITIAL }),
           successes: fact({ label: "successes", pos: [2, 2], value: 0, limit: FUNDS_MAX_SUCCESSES }),
         },
-        insight: `This is the unchecked outcome the test rejects: five withdrawals each subtract ${FUNDS_AMOUNT} and return nil, ending at ${FUNDS_INITIAL - FUNDS_AMOUNT * FUNDS_ATTEMPTS}. It does not depict a specific interleaving of the unsynchronized field reads and writes.`,
+        insight: `The test rejects this outcome. Five withdrawals each subtract ${FUNDS_AMOUNT} and return nil. The balance ends at ${FUNDS_INITIAL - FUNDS_AMOUNT * FUNDS_ATTEMPTS}. This is not one exact order of unsynchronized reads and writes.`,
         stops: [
           {
             when: { op: "inc", node: "balance", nth: FUNDS_MAX_SUCCESSES + 1 },
-            say: "A fourth withdrawal succeeds with no funds check. The balance goes below zero and Withdraw still returns nil.",
+            say: "A fourth withdrawal succeeds with no funds check. The balance goes below zero. Withdraw still returns nil.",
           },
         ],
         tests: { funds: tests.funds },
@@ -274,22 +274,22 @@ export default defineViz({
       id: "goal",
       chip: "Goal",
       tier: "goal",
-      summary: `Five concurrent withdrawals reach one actor, which processes them serially and replies on each caller's own channel.`,
+      summary: "Five withdrawals reach one actor. It handles them one at a time. Each reply goes to its caller's own channel.",
       model: {
         nodes: fundsNodes(),
-        insight: `Only the actor reads or writes the balance. It processes one withdrawal at a time: three debit ${FUNDS_AMOUNT} each and the last two receive ErrInsufficientFunds, leaving ${FUNDS_INITIAL - FUNDS_AMOUNT * FUNDS_MAX_SUCCESSES}. This test never closes the account, so the actor remains blocked after the test returns.`,
+        insight: `Only the actor reads or writes the balance. It handles one request at a time. Three withdrawals take ${FUNDS_AMOUNT} each. The last two get ErrInsufficientFunds. The balance is ${FUNDS_INITIAL - FUNDS_AMOUNT * FUNDS_MAX_SUCCESSES}. This test never closes the account, so the actor stays blocked.`,
         stops: [
           {
             when: { op: "set", node: "balance" },
-            say: `The first successful withdrawal moves ${FUNDS_INITIAL} to ${FUNDS_INITIAL - FUNDS_AMOUNT}. No other request can interleave inside this check and debit.`,
+            say: `The first withdrawal moves ${FUNDS_INITIAL} to ${FUNDS_INITIAL - FUNDS_AMOUNT}. No other request can run inside this check and debit.`,
           },
           {
             when: { op: "set", node: "balance", nth: FUNDS_MAX_SUCCESSES - 1 },
-            say: `The third debit reaches ${FUNDS_INITIAL - FUNDS_AMOUNT * FUNDS_MAX_SUCCESSES}. Both remaining withdrawals must now fail.`,
+            say: `The third debit leaves ${FUNDS_INITIAL - FUNDS_AMOUNT * FUNDS_MAX_SUCCESSES}. Both remaining withdrawals must now fail.`,
           },
           {
             when: { op: "send", g: "actor", node: "balanceReply" },
-            say: `The final Balance call reports ${FUNDS_INITIAL - FUNDS_AMOUNT * FUNDS_MAX_SUCCESSES}; successes stops at ${FUNDS_MAX_SUCCESSES}.`,
+            say: `The final Balance call reports ${FUNDS_INITIAL - FUNDS_AMOUNT * FUNDS_MAX_SUCCESSES}. successes stops at ${FUNDS_MAX_SUCCESSES}.`,
           },
         ],
         tests: { funds: tests.funds },
@@ -300,7 +300,7 @@ export default defineViz({
       id: "serial",
       chip: "Serial",
       tier: "inside",
-      summary: "The exact seven calls in TestAccountBasicOperations, each sending one request and waiting for one response before the next call.",
+      summary: "This shows the seven calls in TestAccountBasicOperations. Each call sends one request and waits for one reply.",
       model: {
         nodes: {
           test: goroutine({
@@ -401,11 +401,11 @@ export default defineViz({
           }),
           balance: fact({ label: "balance", pos: [3, 0], value: BASIC_INITIAL }),
         },
-        insight: `All seven calls pass through the one actor in order: Balance 100, Deposit 50, Balance 150, Withdraw 30, Balance 120, rejected Withdraw 1000, Balance 120. Each reply uses the channel created for that call; the actor is still blocked when the test returns.`,
+        insight: `All seven calls pass through one actor in order. Balance starts at 100. Deposit 50 raises it to 150. Withdraw 30 lowers it to 120. The 1000 withdrawal is rejected. Balance stays at 120. Each reply uses that call's channel. The actor is still blocked when the test returns.`,
         stops: [
-          { when: { op: "send", g: "test", node: "requests" }, say: "A method sends its request and then blocks on its own reply channel." },
-          { when: { op: "send", g: "actor", node: "reply" }, say: "The actor sends the result back. It cannot process the next request until it has finished this one." },
-          { when: { op: "recv", g: "actor", node: "requests", nth: 7 }, say: "All seven calls are complete, in sequence. The actor now blocks looking for another request." },
+          { when: { op: "send", g: "test", node: "requests" }, say: "A method sends its request. It then waits on its own reply channel." },
+          { when: { op: "send", g: "actor", node: "reply" }, say: "The actor sends the result. It handles the next request only after this one." },
+          { when: { op: "recv", g: "actor", node: "requests", nth: 7 }, say: "All seven calls are done, in order. The actor now waits for another request." },
         ],
         tests: { basic: tests.basic },
         code: { file: "solution", text: `${SERIAL_TEST}\n…\n${SERIAL_WITHDRAW_TEST}\n…\n${ACTOR_LOOP}` },
@@ -416,22 +416,22 @@ export default defineViz({
       id: "funds",
       chip: "Funds",
       tier: "inside",
-      summary: "The actor checks and debits in one uninterrupted step, so concurrent withdrawals cannot both spend the same funds.",
+      summary: "The actor checks and debits in one step. Two concurrent withdrawals cannot spend the same funds.",
       model: {
         nodes: fundsNodes(),
-        insight: `The five callers block on five different reply channels. The actor takes one request at a time, compares ${FUNDS_AMOUNT} with its owned balance, and only then debits. Three requests fit; two receive ErrInsufficientFunds and leave ${FUNDS_INITIAL - FUNDS_AMOUNT * FUNDS_MAX_SUCCESSES} unchanged.`,
+        insight: `Five callers wait on five reply channels. The actor takes one request at a time. It compares ${FUNDS_AMOUNT} with the balance, then debits. Three requests fit. Two get ErrInsufficientFunds and leave ${FUNDS_INITIAL - FUNDS_AMOUNT * FUNDS_MAX_SUCCESSES} unchanged.`,
         stops: [
           {
             when: { op: "set", node: "balance" },
-            say: `The actor checks ${FUNDS_AMOUNT} against ${FUNDS_INITIAL}, then debits to ${FUNDS_INITIAL - FUNDS_AMOUNT}. No other request can run between those steps.`,
+            say: `The actor checks ${FUNDS_AMOUNT} against ${FUNDS_INITIAL}. It then debits to ${FUNDS_INITIAL - FUNDS_AMOUNT}. No other request can run between those steps.`,
           },
           {
             when: { op: "set", node: "balance", nth: FUNDS_MAX_SUCCESSES - 1 },
-            say: `After the third debit the balance is ${FUNDS_INITIAL - FUNDS_AMOUNT * FUNDS_MAX_SUCCESSES}. The actor will reject both remaining withdrawals without changing it.`,
+            say: `After three successful withdrawals, the balance is ${FUNDS_INITIAL - FUNDS_AMOUNT * FUNDS_MAX_SUCCESSES}. The actor rejects both remaining withdrawals without changing it.`,
           },
           {
             when: { op: "send", g: "actor", node: "balanceReply" },
-            say: `The test's final Balance call reads ${FUNDS_INITIAL - FUNDS_AMOUNT * FUNDS_MAX_SUCCESSES}; three callers reported success.`,
+            say: `The final Balance call reads ${FUNDS_INITIAL - FUNDS_AMOUNT * FUNDS_MAX_SUCCESSES}. Three callers reported success.`,
           },
         ],
         tests: { funds: tests.funds },
@@ -443,7 +443,7 @@ export default defineViz({
       id: "close",
       chip: "Close",
       tier: "inside",
-      summary: "Close closes the request channel; the actor's range loop ends and the actor goroutine returns.",
+      summary: "Close closes the request channel. The actor's range loop ends. The actor goroutine returns.",
       model: {
         nodes: {
           test: goroutine({
@@ -494,10 +494,10 @@ export default defineViz({
           }),
           balance: fact({ label: "balance", pos: [2, 0], value: BASIC_INITIAL }),
         },
-        insight: `Closing requests makes the actor's range receive end, and the actor returns after the deposit and Balance call are complete. The published Close has no separate join signal, so this scene is unjudged and does not claim Close waits before returning.`,
+        insight: `Closing requests ends the actor's range receive. The actor returns after the deposit and Balance call. The published Close has no separate join signal. So this scene is unjudged and does not claim Close waits.`,
         stops: [
-          { when: { op: "close", node: "requests" }, say: "Close closes the one request channel. No later request can be sent safely." },
-          { when: { op: "return", g: "actor" }, say: "The actor's range loop ends, so the long-lived actor goroutine exits." },
+          { when: { op: "close", node: "requests" }, say: "Close closes the request channel. It is not safe to send another request." },
+          { when: { op: "return", g: "actor" }, say: "The actor's range loop ends. The long-lived actor goroutine exits." },
         ],
         code: { file: "solution", text: `${SERIAL_TEST}\n…\n${CLOSE_TEST}\n…\n${ACTOR_LOOP}` },
         expect: { outcome: "ok" },

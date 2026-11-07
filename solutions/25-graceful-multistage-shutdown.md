@@ -1,10 +1,10 @@
-# Graceful Multi-Stage Shutdown: Knowing When a Worker Pool Has REALLY Finished — Suggested Solutions
+# Graceful Shutdown: Knowing When All Workers Have Finished - Suggested Solutions
 
-> **Spoiler warning.** This file contains full worked solutions for `25-graceful-multistage-shutdown/`. Try solving it yourself first — come back here if you're stuck or want to compare approaches.
+> **Spoiler warning.** This file has full solutions for `25-graceful-multistage-shutdown/`. Try the exercise first. Come back if you are stuck or want to compare approaches.
 
 ## The problem
 
-The starting point is `Start`, which launches a small, fixed-size pool of worker goroutines:
+The starting `Start` launches a small, fixed-size worker pool:
 
 ```go {12,13}
 const numWorkers = 4
@@ -24,17 +24,19 @@ func Start(jobs <-chan int, process func(item int)) <-chan struct{} {
 }
 ```
 
-`Start` must:
+`Start` must do these things:
 
-- Return a `done` channel that closes **only** once `jobs` has been closed **and** every worker goroutine has fully returned from its `range jobs` loop — i.e. every worker has finished calling `process` on its last-received item.
-- Still return immediately — whatever waits for the workers has to happen concurrently with that return, not block it.
+- Return a `done` channel. Close it **only** after `jobs` closes **and** every worker finishes its `range jobs` loop.
+- Return immediately. The code that waits for workers must run concurrently.
 - Keep the signature unchanged: `func Start(jobs <-chan int, process func(item int)) <-chan struct{}`.
 
 ## Why the naive version is wrong
 
-`done` is created and immediately closed, with no relationship at all to the worker goroutines started just above it. A caller that waits on `done` gets no guarantee whatsoever that any job — let alone every job — has finished being processed; it only knows that `Start` has returned. If the caller then tears down something `process` writes into (a file, a DB connection, a socket), it can do so while workers are still silently mid-flight on jobs they already pulled off the channel, corrupting or losing that in-flight work.
+The code creates and immediately closes `done`. This has no connection to the workers. A caller waiting on `done` only knows that `Start` returned.
 
-Verified: running the current `check_test.go` against the naive `main.go` in a throwaway scratch copy:
+The caller may then close a resource that `process` uses. That resource could be a file, database connection, or socket. Workers may still be handling jobs. The in-flight work can then fail or be lost.
+
+Verified: the naive `main.go` fails the timing tests:
 
 ```
 === RUN   TestStartProcessesEveryJob
@@ -48,7 +50,11 @@ Verified: running the current `check_test.go` against the naive `main.go` in a t
 FAIL
 ```
 
-`done` closes with **zero** of the 20 jobs actually processed, and separately closes while a worker is still deterministically blocked mid-`process()` call — both confirm it fires essentially instantly, well before any worker has done (or finished) real work. `TestStartDoesNotDoubleProcessOrDropJobs` passes against the naive version too (it deliberately doesn't trust `done` for synchronization, polling the collected results instead), since the naive workers do eventually process every job correctly in the background — it's purely the *signal* that's wrong, not the underlying processing.
+`done` closes with **zero** of the 20 jobs processed. It also closes while a worker is blocked inside `process()`. Both cases show that the signal fires too early.
+
+`TestStartDoesNotDoubleProcessOrDropJobs` still passes. It checks collected results instead of trusting `done`. The naive workers do process every job eventually. The processing is correct, but the completion signal is wrong.
+
+`check_test.go` also runs `TestStartProcessesEveryJob`. That test checks the core completion rule.
 
 ## Approach 1: `sync.WaitGroup` + a small closer goroutine
 
@@ -92,16 +98,21 @@ func Start(jobs <-chan int, process func(item int)) <-chan struct{} {
 
 Design notes:
 
-- **`wg.Add(1)` happens on the calling goroutine, once per worker, before `go func() {...}()` starts** — the standard safe ordering for `sync.WaitGroup`. Incrementing from inside the new goroutine instead would race against the closer goroutine's `wg.Wait()` possibly observing a zero (or partially-incremented) counter before every `Add` has actually run.
-- **`defer wg.Done()` sits at the top of each worker, so it fires exactly when the worker returns from `range jobs`** — which only happens once `jobs` is closed and drained. That's precisely "every worker has finished calling `process` on its last-received item": the `range` loop's last iteration completes its `process` call before the loop exits and the deferred `Done()` runs.
-- **A separate goroutine does `wg.Wait()` then `close(done)`**, rather than the caller of `Start` doing it inline — `Start` must return immediately without blocking (it's meant to hand back a channel the caller waits on whenever it likes), so the wait has to happen concurrently with `Start`'s return.
-- **`done` is closed, not sent on** — closing lets any number of goroutines observe the event via `<-done` without racing over who "gets" the single value a channel send would produce, and receiving from an already-closed channel never blocks, so late-arriving readers still see it fire correctly.
+- **Call `wg.Add(1)` before each `go func(){...}()`.** Use the calling goroutine. This is the safe `sync.WaitGroup` order. Calling `Add` inside the new goroutine can race with `Wait()` and its zero count.
+- **Write the call as `go func() {...}()`.** Both forms start the same goroutine.
+- **Put `defer wg.Done()` at the top of each worker.** Use `defer` so it always runs. The `range` loop ends after `jobs` closes and drains. The last `process` call finishes before the deferred `Done()` runs.
+- **Use a separate goroutine for `wg.Wait()` and `close(done)`.** `Start` must return immediately. The wait has to run beside the caller.
+- **Close `done`; do not send a value.** Readers use `<-done`. Closing lets any number of readers observe the event. A closed channel also never blocks later readers.
 
-**Verified**: copied this exercise into a throwaway scratch directory, confirmed the naive `main.go` fails `TestStartProcessesEveryJob` and `TestDoneWaitsForInFlightProcessCall` (see above), then dropped in this solution. `gofmt -l` is clean, `go vet ./...` is clean, and `go test -race -count=5 ./...` passes repeatably — including `TestStartDoesNotDoubleProcessOrDropJobs`, which stress-tests 50 jobs for drops/duplicates independently of the `done`-timing fix, and `TestDoneWaitsForInFlightProcessCall`, which deterministically blocks a worker mid-`process()` call to confirm `done` doesn't fire early.
+**Verified:** `gofmt -l` and `go vet ./...` are clean. `go test -race -count=5 ./...` passes repeatedly.
+
+The runs include `TestStartDoesNotDoubleProcessOrDropJobs`, which tests 50 jobs for drops and duplicates. They also include `TestDoneWaitsForInFlightProcessCall`, which confirms that `done` does not fire during `process()`.
 
 ## Approach 2: the exercise-16 `Group` pattern instead of a bare `WaitGroup`
 
-A genuinely different composition, worth knowing if you've just come from [exercise 16](../16-errgroup-failfast) (`16-errgroup-failfast/`): that exercise builds a tiny hand-rolled `errgroup.Group` — `Go(f func() error)` launches a task in its own goroutine without blocking, and `Wait() error` blocks until every launched task returns, then returns the first error encountered (via `sync.WaitGroup` + `sync.Once`). That `Group` is a natural fit here too: instead of managing a bare `sync.WaitGroup` by hand in `Start`, launch each worker via `g.Go(...)` and let the coordinator goroutine call `g.Wait()` before closing `done`.
+This version reuses [exercise 16](../16-errgroup-failfast)'s `errgroup.Group` type. The source folder is `16-errgroup-failfast/`. Its `Go(f func() error)` method starts a task without blocking. Its `Wait() error` method waits for every task. It then returns the first error, using `sync.WaitGroup` and `sync.Once`.
+
+Launch each worker with `g.Go(...)`. The coordinator goroutine then calls `g.Wait()` before it closes `done`.
 
 ```go {48,58}
 package main
@@ -169,18 +180,18 @@ func Start(jobs <-chan int, process func(item int)) <-chan struct{} {
 }
 ```
 
-Design notes and tradeoffs versus Approach 1:
+Design notes and differences from Approach 1:
 
-- **Structurally identical under the hood** — `Group.Go` is still a `wg.Add(1)` on the caller's goroutine followed by a tracked goroutine that calls `wg.Done()` via `defer`, and `Group.Wait` is still `wg.Wait()`. The difference is purely one of composition: Approach 1 manages the `WaitGroup` directly inside `Start`, while Approach 2 delegates that bookkeeping to a reusable `Group` type that also happens to carry error-collection semantics this exercise doesn't need.
-- **The worker closures have to return `error` to fit `Group.Go`'s signature**, even though nothing here can fail — hence `return nil` at the end of each worker's loop, and `_ = g.Wait()` discarding the always-`nil` result. That's the real cost of reusing a general-purpose `Group`: it's built for tasks that can fail, and adapting a can't-fail worker to it means threading a trivial `nil` through.
-- **Worth it mainly as a cross-reference, not as an improvement**: if you're already building (or have already built) an `errgroup`-style `Group` elsewhere in a codebase, reusing it here avoids a second, slightly different hand-rolled `WaitGroup` pattern living side by side with it. If this were the only place needing "wait for N goroutines to finish," Approach 1's bare `sync.WaitGroup` is simpler and doesn't require inventing a `nil` return value.
+- **The structure is the same underneath.** `Group.Go` calls `wg.Add(1)` on the caller's goroutine. It then starts a tracked goroutine that defers `wg.Done()`. `Group.Wait` calls `wg.Wait()`.
+- **Each worker must return an `error`.** This exercise cannot fail, so each worker ends with `return nil`. `_ = g.Wait()` throws away the `nil` result. This is the cost of reusing a general-purpose group.
+- **Use this version to reuse code.** It does not improve this exercise. If your codebase already has an `errgroup`-style `Group`, reuse it. For one simple wait, use `sync.WaitGroup`.
 
-**Verified**: same scratch-directory protocol, in a separate throwaway copy from Approach 1. `gofmt -l` is clean, `go vet ./...` is clean, and `go test -race -count=5 ./...` passes repeatably, including `TestStartProcessesEveryJob`, `TestStartDoesNotDoubleProcessOrDropJobs`, and `TestDoneWaitsForInFlightProcessCall`.
+**Verified:** `gofmt -l` and `go vet ./...` are clean. `go test -race -count=5 ./...` passes repeatedly. The runs include all three tests.
 
 ## Key takeaways
 
-- "The channel returned by a function closes eventually" and "the channel closes only after specific work has genuinely finished" are very different guarantees — a `done` channel that's just created-and-closed on the spot satisfies the first trivially while providing none of the second. Always ask what event the close is actually synchronized with.
-- `sync.WaitGroup.Add(1)` must happen on the *calling* goroutine before `go func(){...}()`, never inside the new goroutine — otherwise `Wait()` can race past a counter that hasn't been (fully) incremented yet.
-- `defer wg.Done()` placed at the very top of a goroutine, right after entry, is what ties "the WaitGroup counter reaches zero" to "every one of those goroutines has fully returned" — including from its last unit of real work, not just from having been scheduled.
-- A dedicated goroutine doing `wg.Wait(); close(done)` is the standard way to convert a blocking wait into a channel-based signal that the function itself can return immediately, letting the caller decide when (or whether) to block on it.
-- Reusing a more general pattern (like exercise 16's `errgroup`-style `Group`) in a spot that doesn't need its extra capability (error collection, here) is a legitimate but not free choice — it costs a bit of ceremony (threading a `nil` error through) in exchange for one less bespoke synchronization pattern in the codebase.
+- A channel that closes is not always a completion signal. Ask which work must finish before the close.
+- Call `sync.WaitGroup.Add(1)` on the caller goroutine before starting the worker. Never call it inside the new goroutine.
+- Put `defer wg.Done()` at the start of the worker. It then runs after all worker code, including its last unit of work.
+- Use `wg.Wait(); close(done)` in a goroutine. This turns a blocking wait into a signal while `Start` returns immediately.
+- Reusing an `errgroup`-style `Group` can reduce duplicate patterns. It adds extra code when the workers cannot fail.

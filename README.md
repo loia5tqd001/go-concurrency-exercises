@@ -2,15 +2,28 @@
 
 ## How to take this challenge
 
-1. _Only edit `main.go`_ to solve the problem. Do not touch any of the other files.
-2. If you find a `*_test.go` file, you can test the correctness of your solution with `go test`
-3. Still stuck, or want to compare notes after solving it? [`solutions/`](solutions/) has a verified, worked write-up for every exercise (spoilers, obviously).
+1. _Only edit `main.go`_ to solve the problem. Do not change other files.
+2. If you find a `*_test.go` file, run `go test` to check your answer.
+3. Want help or a comparison? [`solutions/`](solutions/) has a worked answer for every exercise. These contain spoilers.
 
 ## Overview
 
 **Difficulty:** ![warm-up](https://img.shields.io/badge/-warm--up-lightgrey) &nbsp;![easy](https://img.shields.io/badge/-easy-brightgreen) &nbsp;![medium](https://img.shields.io/badge/-medium-blue) &nbsp;![hard](https://img.shields.io/badge/-hard-orange) &nbsp;![extreme](https://img.shields.io/badge/-extreme-red)
 
-The exercises are numbered in the order they were added — difficulty generally increases with the number, but the numbering doesn't exactly follow _Concurrency in Go_'s own chapter order (a few patterns the book introduces earlier, like pipelines, got added to this repo later than patterns that build on them). If you want the book-faithful sequence, see [Suggested order, mapped to _Concurrency in Go_](#suggested-order-mapped-to-concurrency-in-go) below. The table also tags each exercise by topic so you can jump straight to, say, everything about `context` or every `mutex` exercise — see [Browse by topic](#browse-by-topic) for the reverse index. (14b, 16b, and 33b are the exceptions to plain numbering: each is a direct sequel bolted onto its parent exercise rather than a new slot in the sequence, so it keeps the parent's number with a letter suffix instead of pushing every later exercise up by one.)
+The exercises follow the order they were added. Difficulty usually
+increases with the number. The order does not match every chapter in
+_Concurrency in Go_. Some patterns arrived later than the patterns built
+on them. Pipelines are one example.
+
+Use [Suggested order, mapped to _Concurrency in Go_](#suggested-order-mapped-to-concurrency-in-go)
+to follow the book order.
+
+The table also tags each exercise by topic. Use
+[Browse by topic](#browse-by-topic) for the reverse index. You can jump
+to subjects such as `context` or `mutex`.
+
+`14b`, `16b`, and `33b` are sequels. They keep a parent number with a
+letter suffix. They do not renumber later exercises.
 
 | #   | Challenge                                                                                                                                                |                          Difficulty                          | Topics                                                  |
 | --- | -------------------------------------------------------------------------------------------------------------------------------------------------------- | :----------------------------------------------------------: | ------------------------------------------------------- |
@@ -60,7 +73,13 @@ The exercises are numbered in the order they were added — difficulty generally
 
 ## Suggested order, mapped to _Concurrency in Go_
 
-_Concurrency in Go_ builds its own patterns in a specific order, each one leaning on ideas the previous section already established. If you're reading along, work through the exercises in this order rather than by folder number — a few (pipelines before fan-out/fan-in, tee before bridge, livelock/starvation grouped with deadlock, and the whole "at scale" tier) land better this way than strict numeric order would give you.
+_Concurrency in Go_ builds patterns in a set order. Each section uses
+ideas from earlier sections. If you read along, follow this order instead
+of folder number.
+
+This order puts pipelines before fan-out/fan-in. It puts tee before
+bridge. It keeps livelock and starvation near deadlock. It keeps the
+at-scale patterns together.
 
 **Ch. 1 — Why concurrency is hard**
 
@@ -113,125 +132,116 @@ _Concurrency in Go_ builds its own patterns in a specific order, each one leanin
 
 **Beyond the book**
 
-[19](19-actor-model), [22](22-circuit-breaker), and [23](23-sharded-cache) (actor model, circuit breaker, sharded cache) aren't in the book — they're patterns that show up constantly in production Go once its core toolkit is second nature, included here as a natural next step.
+[19](19-actor-model), [22](22-circuit-breaker), and
+[23](23-sharded-cache) are not in the book. They cover the actor model,
+circuit breaker, and sharded cache. These patterns appear often in
+production Go. Use them as a next step after the core material.
 
-[31](31-serve-timeout-race) and [32](32-fanout-deadline-race) are a
-pair on the same theme: enforcing a deadline against code that can't
-enforce it on itself. 31 does it for a single synchronous handler
-(the shape a real RPC server's own timeout mechanism takes); 32 does
-it for a `sync.WaitGroup` fan-out, the same pattern 25 builds, raced
-against `ctx.Done()` instead of just waited on. Both also cover a
-correctness trap that's easy to miss even once the racing itself is
-right: a "loser" goroutine that keeps running to completion in the
-background after you've stopped waiting on it, and — in 32 — why its
-still-in-flight writes mean you must not read the shared result on the
-path where you gave up early.
+[31](31-serve-timeout-race) and [32](32-fanout-deadline-race) share a
+theme. Both add a deadline to code that cannot enforce one. 31 handles
+one synchronous handler. This is the shape an RPC server uses.
 
-[33](33-load-balancer) and [34](34-prime-sieve) are drawn from the
-same 2012 Rob Pike talk ("Go Concurrency Patterns") that the book's
-own pipeline and fan-out/fan-in chapters trace back to, ported into
-this repo's naive-code-with-one-bug format. 33 is Pike's
-self-scheduling load balancer: a `container/heap`-ordered pool of
-workers that report their own completions back to the dispatcher,
-extending the priority-queue idea from [24](24-priority-worker-pool)
-and the dynamic-channel-arrival idea from
-[13](13-channel-of-channels) into a single feedback loop. 34 is
-Pike's concurrent prime sieve, reworked to actually terminate and
-clean up after itself (the original program runs forever by design)
-by reusing the or-done idiom from [07](07-or-done-channel) across a
-pipeline whose depth isn't known until runtime.
+32 handles a `sync.WaitGroup` fan-out. It is the pattern in 25, but it
+also waits on `ctx.Done()`. Both cover a slow loser goroutine. The loser
+keeps running after the caller stops waiting. In 32, do not read the
+shared result after you give up. Its writes may still be running.
 
-[33b](33b-load-balancer-nonblocking-dispatch) is a direct sequel to
-33, the same relationship [16b](16b-errgroup-withcontext) has to
-[16](16-errgroup-failfast): given 33's own fix already wired up, it
-removes the buffer that made it work (`requestBacklogPerWorker` drops
-to `0`) and asks for a dispatcher that's correct without one. The
-underlying lesson generalizes past this one balancer: a single
-goroutine that both sends work out and receives completions back can't
-let the send block, because a blocked send forfeits the very ability
-to receive that would unblock it. The fix leans on the `nil`-channel
-`select` idiom — a channel variable left `nil` makes its `case` never
-fire, which is how a conditional send joins the same `select` as
-everything else instead of running as a blocking statement outside it.
+[33](33-load-balancer) and [34](34-prime-sieve) come from Rob Pike's
+2012 "Go Concurrency Patterns" talk. The book's pipeline and
+fan-out/fan-in chapters also trace back to that talk. Both use this
+repo's format: naive code with one bug.
 
-[35](35-singleflight) is a from-scratch version of
-`golang.org/x/sync/singleflight`: dedupe concurrent duplicate calls for
-the same key so a cache-stampede doesn't turn into N redundant
-backend hits, share both the value AND the error with every waiter,
-and forget the key the instant the call completes rather than caching
-it forever. It's a deliberate contrast with [17](17-future-promise): 17
-memoizes one key permanently once computed; 35 dedupes many keys only
-while a call is genuinely in flight, which is a different lifetime
-policy layered on the same "many goroutines wait for and safely
-observe one goroutine's result" join mechanism.
+33 is Pike's self-scheduling load balancer. It uses a
+`container/heap`-ordered worker pool. Workers report completions to the
+dispatcher. It extends the priority queue in
+[24](24-priority-worker-pool) and the dynamic channels in
+[13](13-channel-of-channels).
 
-[36](36-batch-collector) and [37](37-safe-pool-shutdown) are drawn
-from patterns in a production Go codebase's internal concurrency
-toolkit, included as two more "shows up constantly once the core
-toolkit is second nature" additions. 36 is a reusable scatter-gather
-batch collector, the shape a real batching client actually takes in
-production (a Kafka producer's `linger.ms`, a Pub/Sub publisher's
-count/delay thresholds): many independent goroutines each add one
-request and get back their own per-request result, while a batch
-function underneath fires whenever EITHER a configured count is
-reached OR a deadline elapses since the batch's first request -
-whichever comes first - and then immediately starts collecting the
-next batch, indefinitely, rather than running once and being done.
-Three separate triggers (the count, the deadline, and an explicit
-`Close`) all racing to fire the very same batch exactly once is what
-makes this one `extreme`: a stale deadline timer for a batch that
-already fired by count must never touch whatever newer batch has
-opened in its place, `time.Timer.Stop()` doesn't actually
-guarantee its callback isn't already running, and `Close` - modeled
-directly on `net/http.Server.Shutdown(ctx)` - has to flush whatever's
-still queued and wait for it to finish without blocking forever if the
-caller's own context expires first. 37 tackles a classic,
-easy-to-miss production bug: a worker pool that many unrelated
-goroutines submit to concurrently, shut down safely without a
-"send on closed channel" panic when a submit call races a close call -
-a sharper, multi-producer version of the single-producer shutdown
-handshake [11](11-worker-pool) and [25](25-graceful-multistage-shutdown)
-already cover, solved with a `sync.RWMutex`-guarded flag instead of a
-`sync.WaitGroup` alone.
+34 is Pike's concurrent prime sieve. The original runs forever by
+design. This version must stop and clean up. It reuses the or-done idea
+from [07](07-or-done-channel). The pipeline depth is not known until
+runtime.
 
-[38](38-settle-once) closes a different gap: every exercise above that
-needs to coordinate shared state under concurrency reaches for either
-a mutex ([02](02-race-in-cache), [05](05-session-cleaner),
-[12](12-pub-sub), [20](20-concurrent-map-reduce),
-[21](21-dining-philosophers), [22](22-circuit-breaker),
-[23](23-sharded-cache), [35](35-singleflight),
-[36](36-batch-collector), [37](37-safe-pool-shutdown)) or channels
-([19](19-actor-model)'s actor model) - none of them practice
-`sync/atomic`'s `CompareAndSwap` idiom. [31](31-serve-timeout-race) and
-[32](32-fanout-deadline-race) already solve a timeout-vs-completion
-race, but through a single reader `select`-ing between a result
-channel and `ctx.Done()`; 38 is the sharper version where there's no
-reader to arbitrate at all - a request's completion path and its
-timeout path are two independent *writers*, each about to fire a side
-effect directly, and only one of them is allowed to. A plain bool
-guard races exactly like [02](02-race-in-cache)'s cache does; a mutex
-would work but is overkill for a single one-way flag flip.
-`CompareAndSwap` gives the losing side an instant, non-blocking answer
-instead - which is also why it beats `sync.Once` here: `Once.Do`'s
-loser blocks on an internal mutex until the winner's function returns,
-exactly backwards for a timeout path whose whole job is to bail out
-fast.
+[33b](33b-load-balancer-nonblocking-dispatch) is a sequel to 33. It has
+the same relationship [16b](16b-errgroup-withcontext) has to
+[16](16-errgroup-failfast). The starting code has 33's fix. Then
+`requestBacklogPerWorker` drops to `0`, which removes the buffer.
 
-[39](39-load-shedding) is a standalone scenario built around the exact
-question [18](18-bounded-pipeline-backpressure) and 33b's own design
-both raise but answer oppositely: what should happen when a bounded
-channel feeding a fixed pool of workers is full? 18's producer is
-*supposed* to feel the slowdown, so blocking is correct there. 39's
-caller is on an unrelated hot path (recording a metric about work,
-not doing the work) with somewhere better to go - retry, drop, degrade
-gracefully - so it needs `Submit` to fail fast with `ErrOverloaded`
-instead, on the theory that a caller who'd rather find out immediately
-than wait on a queue with no way to tell "briefly busy" from "wedged."
-The fix itself is a small, single idiom - `select` with a `default`
-case - but it's a genuinely different tool from 33b's `nil`-channel
-trick: a `nil` channel disables a case outright, while `default` fires
-when every real case was ready to try but none of them could proceed
-*this instant*.
+The dispatcher must work without that buffer. One goroutine sends work
+and receives completions. A blocked send stops it from receiving the
+completion that would unblock it.
+
+The fix uses the `nil`-channel `select` idiom. A `nil` channel makes its
+`case` never fire. This lets a conditional send join the same `select`.
+
+[35](35-singleflight) is a hand-built version of
+`golang.org/x/sync/singleflight`. It joins duplicate calls for one key.
+This stops a cache stampede from causing many backend calls. Every
+waiter gets the same value and error. The key is removed when the call
+ends.
+
+This differs from [17](17-future-promise). 17 keeps a result forever.
+35 removes the key after the call finishes.
+
+[36](36-batch-collector) and [37](37-safe-pool-shutdown) come from a
+production Go codebase's internal concurrency toolkit. 36 is a reusable
+scatter-gather batch collector. Real clients use this shape, such as a
+Kafka producer's `linger.ms` or a Pub/Sub publisher's count and delay
+limits.
+
+Many goroutines add one request and get their own result. A batch runs
+when either the count is reached or its deadline passes since its first
+request. It then starts the next batch at once.
+
+The count, deadline, and `Close` all race to fire the same batch once.
+A stale timer must not touch a newer batch. `time.Timer.Stop()` does not
+guarantee its callback is not already running.
+
+`Close` follows `net/http.Server.Shutdown(ctx)`. It flushes queued work
+and waits. It must also stop if the caller's context ends.
+
+37 protects a multi-producer worker pool during shutdown. A submit can
+race a close. The code must avoid a `send on closed channel` panic. It
+is a harder version of the handshake in [11](11-worker-pool) and
+[25](25-graceful-multistage-shutdown). A `sync.RWMutex` flag protects
+it.
+
+[38](38-settle-once) fills a different gap. Many exercises above that
+share state use a mutex or channels. The mutex examples are
+[02](02-race-in-cache),
+[05](05-session-cleaner), [12](12-pub-sub),
+[20](20-concurrent-map-reduce), [21](21-dining-philosophers),
+[22](22-circuit-breaker), [23](23-sharded-cache),
+[35](35-singleflight), [36](36-batch-collector), and
+[37](37-safe-pool-shutdown). Channels appear in
+[19](19-actor-model)'s actor model. None uses `sync/atomic` and
+`CompareAndSwap`.
+
+[31](31-serve-timeout-race) and [32](32-fanout-deadline-race) handle a
+timeout race with one reader. It selects between a result channel and
+`ctx.Done()`. 38 has no reader. Its completion and timeout paths are two
+writers. Only one may cause the side effect.
+
+A bool guard has a race like [02](02-race-in-cache). A mutex works but is
+too much for one flag. `CompareAndSwap` lets the loser return at once.
+It also beats `sync.Once` here. A `Once.Do` loser waits for the winner.
+A timeout should return fast instead.
+
+[39](39-load-shedding) asks one question. What happens when a bounded
+channel feeding a fixed worker pool is full?
+
+[18](18-bounded-pipeline-backpressure) and 33b answer in opposite ways.
+18 should block, because the producer must feel the slowdown. 39's
+caller is on a hot path and only records a metric. It can retry, drop,
+or degrade.
+
+39 uses `Submit` to fail fast with `ErrOverloaded`. The caller then knows
+right away. It does not wait on a queue that cannot show if work is
+briefly busy or stuck.
+
+The fix is one `select` with a `default` case. This differs from 33b's
+`nil` technique. A `nil` channel disables a case. `default` fires when
+no real case can run at that moment.
 
 ## Browse by topic
 
@@ -305,6 +315,17 @@ when every real case was ready to try but none of them could proceed
 
 ## Credit
 
-This repo started as a fork of [loong/go-concurrency-exercises](https://github.com/loong/go-concurrency-exercises) and has since diverged heavily (new exercises, rewritten scaffolds, redesigned problems) — credit to Long Hoang for the original idea and structure.
+This repo started as a fork of
+[loong/go-concurrency-exercises](https://github.com/loong/go-concurrency-exercises).
+It now has new exercises, rewritten scaffolds, and redesigned problems.
+Credit to Long Hoang for the original idea and structure.
 
-Most of the patterns exercised here (and the [Suggested order](#suggested-order-mapped-to-concurrency-in-go) above) follow the structure of Katherine Cox-Buday's [_Concurrency in Go_](https://www.oreilly.com/library/view/concurrency-in-go/9781491941294/) (O'Reilly, 2017) — race conditions, deadlock/livelock/starvation, the `sync` and channel building blocks, the pipeline/fan-out-fan-in/or-done/tee/bridge family, and the at-scale patterns (heartbeats, replicated requests, healing unhealthy goroutines). If an exercise here feels familiar, it's likely because the book covers the same idea in more depth — it's a great companion read.
+Most patterns here follow Katherine Cox-Buday's
+[_Concurrency in Go_](https://www.oreilly.com/library/view/concurrency-in-go/9781491941294/)
+(O'Reilly, 2017). The same applies to the
+[Suggested order](#suggested-order-mapped-to-concurrency-in-go) above.
+
+The book covers races, deadlock, livelock, and starvation. It covers
+`sync`, channels, pipelines, fan-out/fan-in, or-done, tee, and bridge.
+It also covers heartbeats, replicated requests, and worker health. If an
+exercise feels familiar, the book likely explains it in more depth.

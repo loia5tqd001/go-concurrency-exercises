@@ -1,13 +1,12 @@
 # Safe Pool Shutdown: Closing a Multi-Producer Job Queue Without Panicking
 
-`Pool` is a fixed-size worker pool that any number of unrelated
-goroutines can `Submit` jobs to, and that can be shut down via
-`Close`. Picture an HTTP handler submitting a background job on every
-request — dozens can be in-flight, each calling `Submit` from its own
-goroutine, at the exact moment the process starts a graceful shutdown
-and calls `Close`.
+`Pool` is a fixed-size worker pool. Any number of unrelated goroutines
+can call `Submit`. `Close` shuts down the pool. Picture an HTTP handler
+that submits a background job on each request. Dozens of handlers may
+call `Submit` at once. At the same time, graceful shutdown calls
+`Close`.
 
-Right now there's zero coordination between the two:
+Today, the two methods do not coordinate:
 
 ```go
 func (p *Pool) Submit(job func()) (accepted bool) {
@@ -27,26 +26,26 @@ goroutine B: Close()     ──▶ close(p.jobs)  ─────┘
                                                       send on a closed channel → PANIC
 ```
 
-`Close` closes `jobs` with no regard for what's still in flight.
-`Submit` sends on that channel unconditionally. If *any* goroutine calls
-`Submit` while another runs `Close`, that send can race the close —
-and sending on a closed channel panics. This isn't a rare corner case:
-it's the ordinary way `Submit`/`Close` get called wherever more than
-one goroutine might reach for the same `Pool` near shutdown.
+`Close` closes `jobs` without checking for calls in progress. `Submit`
+sends without a guard. If `Submit` runs while `Close` runs, the send can
+race the close. A send on a closed channel panics.
+
+This is not rare. It is the normal result when multiple goroutines use
+`Submit` and `Close` during shutdown.
 
 ## Your task
 
 Fix `Pool` so that:
 
-- `Submit` is safe to call concurrently with `Close`, from any number
-  of goroutines, **without ever panicking**.
-- `Submit` returns `accepted = true` and guarantees `job` **will** run,
-  if called before `Close` finished shutting the pool down; returns
-  `accepted = false` (never runs `job`) if the pool was already closed.
-- `Close` stops accepting new jobs and doesn't return until every
-  accepted job has **fully finished running** — not merely dispatched.
+- `Submit` must be safe to call concurrently with `Close` from any
+  number of goroutines. It must never panic.
+- If `Submit` accepts the job before `Close` marks the pool closed, it
+  returns `accepted = true`. The `job` **will** run. Once the pool is
+  closed, `Submit` returns `accepted = false`. The job never runs.
+- `Close` stops new jobs. It returns only after every accepted job has
+  **fully finished running**. Starting a job is not enough.
 
-Signatures stay the same:
+Keep the signatures the same:
 
 ```go
 func NewPool(workers int) *Pool
@@ -56,9 +55,8 @@ func (p *Pool) Close()
 
 ## Why "wrap the send in `recover`" isn't enough
 
-Say you've added a `sync.WaitGroup` field to `Pool` yourself, to track
-when accepted jobs have actually finished. The single most tempting
-near-miss then looks like this:
+Say you add a `sync.WaitGroup` to `Pool` to track accepted jobs. A
+tempting close solution then looks like this:
 
 ```go {7,8}
 func (p *Pool) Submit(job func()) (accepted bool) {
@@ -85,9 +83,11 @@ p.wg.Add(1) ──▶ p.jobs <- job ──▶ PANIC ──▶ recover() swallows
                               that can never reach zero: hangs forever
 ```
 
-`recover` silences the symptom (the panic) while leaving the property
-you actually need — no lost bookkeeping — unverified. Prevention beats
-cleanup here.
+`recover` hides the panic. The panic happens after `p.wg.Add(1)` and
+before a worker receives the job. `recover` sets `accepted` to false.
+But nothing calls `Done`. `Close` then waits forever for a count that
+cannot reach zero. The job's bookkeeping is lost. Prevent the race
+instead of cleaning up after it.
 
 ## Test your solution
 

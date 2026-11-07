@@ -1,10 +1,10 @@
-# Healing Unhealthy Goroutines: A Steward That Restarts a Wedged Ward - Suggested Solutions
+# Healing Goroutines: Restarting a Wedged Worker - Suggested Solutions
 
-> **Spoiler warning.** This file contains full worked solutions for `29-healing-goroutines/`. Try solving it yourself first — come back here if you're stuck or want to compare approaches.
+> **Spoiler warning.** This file has full solutions for `29-healing-goroutines/`. Try the exercise first. Come back if you are stuck or want to compare approaches.
 
 ## The problem
 
-The starting point is a `NewSteward` that is supposed to watch a "ward" goroutine's heartbeat and transparently restart it if it ever wedges — hangs or deadlocks, stops pulsing forever, and stops honoring its `done` channel too (see `mockward.go`'s `MockWard`, which simulates exactly that). Instead, it does nothing of the sort:
+The starting `NewSteward` should watch a "ward" goroutine. It should restart the ward if it wedges. A wedged ward hangs, stops pulsing, and stops honoring `done`. `mockward.go`'s `MockWard` simulates this:
 
 ```go
 func NewSteward(timeout time.Duration, ward StartGoroutineFn) StartGoroutineFn {
@@ -14,25 +14,30 @@ func NewSteward(timeout time.Duration, ward StartGoroutineFn) StartGoroutineFn {
 }
 ```
 
-`NewSteward` must keep this exact signature — it returns a `StartGoroutineFn`, the same shape as the thing it watches, so stewards compose:
+Keep the exact signature. `NewSteward` returns a `StartGoroutineFn`, so stewards can watch other stewards:
 
 ```go
 type StartGoroutineFn func(done <-chan struct{}, pulseInterval time.Duration) (heartbeat <-chan struct{})
 func NewSteward(timeout time.Duration, ward StartGoroutineFn) StartGoroutineFn
 ```
 
-When the returned function is called with `(done, pulseInterval)`, it must:
+The returned function receives `(done, pulseInterval)`. It must:
 
-- Start a ward generation via `ward(wardDone, pulseInterval)` with a fresh, **steward-owned** `wardDone` — never the steward's own incoming `done` passed straight through.
-- Forward every pulse the current generation's heartbeat sends onto the steward's own returned heartbeat.
-- Track time elapsed since the last forwarded pulse. If more than `timeout` elapses with no pulse, close the current generation's `wardDone` (best effort — a truly wedged ward may never honor it, and the steward must not block waiting for it to) and immediately start a brand-new generation with a brand-new `wardDone`, continuing to forward its pulses.
-- If the steward's own incoming `done` is closed, close whatever the current generation's `wardDone` is and stop everything, including no longer sending on its own heartbeat.
+- Start `ward(wardDone, pulseInterval)` with a fresh **steward-owned** `wardDone`.
+- Forward each pulse from the current heartbeat to the steward's heartbeat.
+- Track time since the last forwarded pulse.
+- If `timeout` passes with no pulse, close the current `wardDone`. Do not wait for a wedged ward.
+- Start a new generation with a new `wardDone`. Keep forwarding pulses.
+- When the steward's `done` closes, close the current `wardDone` and stop.
+- Do not send on the steward's heartbeat after `done` closes.
 
 ## Why the naive version is wrong
 
-`NewSteward`'s returned function is a pure pass-through: it hands the ward its *own* incoming `done` instead of a steward-owned `wardDone`, and returns the ward's heartbeat channel directly as its own. There is no timeout tracking, no "time since last pulse" bookkeeping, and no restart logic anywhere. The moment the one ward generation it started wedges, the heartbeat channel it handed back goes silent right along with it, forever — exactly the single point of failure a steward exists to eliminate.
+The returned function only passes values through. It gives the ward its own incoming `done`. It also returns the ward's heartbeat directly.
 
-Verified: running the current `check_test.go` against this naive `main.go` (both in the repo copy itself, and again after copying into a throwaway scratch directory) fails two tests, for the right reasons:
+There is no timeout tracking and no restart logic. When the first ward wedges, the returned heartbeat stays silent forever. That is the single point of failure the steward should remove.
+
+An older run showed two of the three failures:
 
 ```
 === RUN   TestStewardRestartsWedgedWard
@@ -48,7 +53,15 @@ FAIL	github.com/loia5tqd001/go-concurrency-exercises/29-healing-goroutines	0.426
 FAIL
 ```
 
-`TestStewardRestartsWedgedWard` and `TestStewardUsesFreshPerGenerationDone` both fail because the naive version never starts a second generation at all — it has no restart logic, so there's nothing for either test to observe past the first (pass-through) generation. `TestStewardStopsOnDone` passes even against the naive version — it only exercises a *healthy* ward (`pulsesBeforeWedge = 1000`, effectively never wedging) that also never restarts, and a pure pass-through steward correctly stops forwarding once its own `done` is closed, because closing `done` propagates straight through to the one ward generation it started. That test genuinely needs the restart machinery to fail; it doesn't need a restart, so it passes regardless. `-race` on the naive version shows the same two clean failures, with no hang and no panic — it fails cleanly on the assertions, not on a deadlock.
+`TestStewardRestartsWedgedWard` and `TestStewardUsesFreshPerGenerationDone` fail. The naive code never starts a second generation.
+
+`TestStewardStopsOnDone` passes. It uses a healthy ward with `pulsesBeforeWedge = 1000`. A pass-through steward stops when its `done` closes.
+
+`TestStewardKeepsMonitoringWithoutAReader` also fails. It never starts
+the second generation it expects.
+
+`-race` shows the same three clean assertion failures. There is no hang
+or panic. `check_test.go` supplies all four tests.
 
 ## Approach: one monitoring goroutine, per-generation steward-owned `wardDone`
 
@@ -187,33 +200,49 @@ func main() {
 }
 ```
 
-`main` here is byte-identical to the scaffold's `main` — the entire fix lives in `NewSteward`. Its "no pulse this round" print is deliberately neutral wording that stays true whether or not `NewSteward` has been fixed: against the naive version it prints on every iteration after the first wedge, forever; against the fixed `NewSteward` it marks only the brief gap while a stalled generation is being replaced (the loop still receives 10 pulses total across two-plus generations, instead of going silent for good after the first 4) — the final `ward generations started:` line is what actually distinguishes the two.
+`main` is byte-identical to the scaffold. The fix is entirely inside `NewSteward`.
+
+The `"no pulse this round"` message is neutral. The naive code prints it forever after the first wedge. The fixed code prints it only while it replaces a stalled generation. The fixed loop still gets 10 pulses across at least two generations. The final generation count shows the difference.
 
 ### Design notes
 
-- **One monitoring goroutine owns all the mutable state.** `wardDone`, `wardHeartbeat`, and `timeoutC` are all plain local variables read and written only inside that single goroutine's `for`/`select` loop — there is no shared state between it and the caller, so no mutex is needed anywhere in `NewSteward`. This is the same reasoning that makes the classic "or-done channel" and pipeline-stage patterns single-goroutine-owned: a select loop is naturally a serial state machine, and serial code doesn't need locks.
-- **The invariant that makes this correct: at every point in the loop, `wardDone`/`wardHeartbeat` name exactly one live generation, and closing the old `wardDone` always happens *before* a new generation is started.** That ordering means there is never a moment where two generations are both being awaited on `wardHeartbeat` — the variable is simply reassigned, dropping the reference to the old heartbeat. If the old generation truly is wedged, its goroutine just keeps running abandoned in the background with nobody listening — which is exactly the "don't block waiting for it to exit" requirement made concrete: the steward abandons it, it doesn't wait on it.
-- **`close(wardDone)` is always non-blocking**, which is precisely why it's the right primitive for "ask a possibly-wedged goroutine to stop without waiting to find out if it listened." Closing a channel is guaranteed to return immediately regardless of what's on the other end, unlike sending a value, which could block forever against a wedged reader.
-- **Why `time.After` rather than a reused `time.Timer`.** Go 1.23 changed timer channels so a receive after `Reset` cannot observe a value from the previous timer setting; this module targets Go 1.25, so the old stale-value warning no longer applies. A fresh `time.After(timeout)` is still a clean fit here because each generation gets a deadline that needs no explicit stop or reset state. The cost is one timer allocation per pulse, which is appropriate for a heartbeat-frequency loop.
-- **The nil-channel disable for a closed `wardHeartbeat`.** `mockward.go`'s `MockWard` never closes its heartbeat channel (a wedged generation just goes silent, as the comment there explains: closing it would look like an infinite stream of pulses to a reader, the opposite of a deadlock), so this branch is never exercised by the test suite as written. But `StartGoroutineFn` as a general contract doesn't forbid a well-behaved ward from closing its heartbeat on a graceful exit, and a receive on an already-closed channel succeeds *every single time* without blocking. An earlier draft of this solution `continue`d straight through on `ok == false` — that turns the case into a hot spin, selected on every loop iteration. Under `synctest` that's worse than wasted CPU: a goroutine that's always immediately runnable holds the fake clock back from ever advancing, so `timeoutC` would never get a chance to fire and the test would hang inside the `synctest.Test` bubble instead of failing fast. Setting `wardHeartbeat = nil` disables that case (a receive on a nil channel blocks forever), leaving the `timeoutC` case to do the actual restart once the deadline elapses — the standard idiom for turning off one arm of a `select`.
-- **Forwarding must not stall monitoring.** The one-slot heartbeat buffer plus non-blocking send coalesces pulses when the consumer falls behind. A blocking send would make an absent consumer pause the steward's own select loop, so neither `wardHeartbeat` nor the timeout would be watched and a wedge could go undetected. The tradeoff is that a very slow reader may observe fewer pulses, but health detection remains live.
-- **Why the test suite can catch "restarts correctly, but reuses `done` as every generation's `wardDone`" as a distinct bug.** `MockWard` exits its generation's goroutine autonomously the moment it wedges (it just `return`s; it never waits to observe `wardDone` being closed), so a subtly-wrong steward that restarts right on schedule but reuses the caller's own `done` for every generation's `wardDone` would still make `TestStewardRestartsWedgedWard` pass — pulses keep flowing and `Generations()` still climbs past 1, regardless of what `wardDone` value each generation actually got. `mockward.go` closes that gap with `Dones() []<-chan struct{}`, which records the exact `done` channel each generation was started with, in order. `TestStewardUsesFreshPerGenerationDone` uses it to assert directly that no generation's recorded `done` equals the steward's own incoming `done`, and that no two generations share the same `done` value — catching the reused-`done` bug even though `MockWard` itself never reacts differently based on what `wardDone` it was given.
-- **Why `TestStewardStopsOnDone` also asserts `Generations() == 1` on a healthy ward.** A steward that restarts on a fixed cadence (e.g. every `timeout`, via a `time.Ticker` that's never reset on a pulse) instead of genuinely tracking time-since-last-pulse would still pass `TestStewardRestartsWedgedWard` — a wedged ward gets restarted on schedule either way — and used to pass `TestStewardStopsOnDone` too, since that test only read a handful of pulses before closing `done` and never checked how many generations had run. `TestStewardStopsOnDone` now reads 40 pulses (four full `timeout` periods) from a ward that never stalls and asserts `Generations() == 1` throughout: a correctly-implemented steward resets its "time since last pulse" clock on every forwarded pulse and so never restarts a healthy ward, while a fixed-cadence steward would already show more than one generation well before the 40th pulse.
+- **One monitoring goroutine owns all mutable state.** `wardDone`, `wardHeartbeat`, and `timeoutC` are local variables inside one `for`/`select` loop. It shares no state with the caller, so no mutex is needed.
+- **Close the old `wardDone` before starting a new generation.** At each loop point, the variables name one live generation. Reassigning `wardHeartbeat` drops the old heartbeat. The steward abandons the old wedged goroutine and does not wait for it.
+- **`close(wardDone)` never blocks.** This asks a possibly wedged ward to stop. Closing a channel returns immediately. A send could block forever.
+- **Use `time.After` for each generation deadline.** A fresh `time.After(timeout)` needs no stop or `Reset` state. Unlike a reused `time.Timer`, it needs no reuse logic. Go 1.23 removed the stale-value problem after `Timer.Reset`. The module uses Go 1.25.
+- **Set `wardHeartbeat = nil` if the ward closes it.** The old code used `ok == false`. A receive from a closed channel succeeds every time. A `continue` would become a hot loop and stop `synctest`'s clock. A nil channel blocks that `select` arm, leaving `timeoutC` active.
+- **The old loop could hang under `synctest.Test`.** The test would wait forever instead of failing fast.
+- **Do not let heartbeat forwarding stall monitoring.** The one-slot
+  buffer and non-blocking send combine pulses when the consumer is slow.
+  A blocking send could hide a wedge.
+  `TestStewardKeepsMonitoringWithoutAReader` checks this directly.
+- **`Dones()` catches a reused `done`.** `MockWard` calls `return` when it wedges. A steward can restart correctly but reuse `done`. `Dones() []<-chan struct{}` records each generation's channel in order. `TestStewardUsesFreshPerGenerationDone` checks that each channel is new.
+- **`TestStewardStopsOnDone` catches restarts on a fixed interval.** It reads 40 pulses, or four full `timeout` periods, from a healthy ward. It calls `Generations()` and checks `Generations() == 1`. A steward that resets its time since the last pulse passes. A fixed-interval steward restarts the healthy ward.
 
 ### Alternative worth naming: composing `wardDone` with `done` via `or()`
 
-The book's own implementation of this pattern doesn't close `wardDone` explicitly on the `done`-closed path; instead it starts every generation with `or(wardDone, done)` — an "or-done channel" that closes the moment *either* input channel closes — so a single incoming `done` closing automatically tears down whatever generation is currently running, with no separate `close(wardDone)` call needed on that path.
+The book's version does not close `wardDone` on the `done` path. It starts each generation with `or(wardDone, done)`. This "or-done channel" closes when either input closes. The steward's `done` therefore stops the current generation.
 
-This exercise's spec is explicit that the steward itself must close the current generation's `wardDone` when its own `done` is closed, rather than relying on composition to do it implicitly — which is what this solution does instead. Both approaches produce the same externally observable behavior for a direct steward; the `or()` version additionally makes the composed-steward case ("a steward watching a steward") self-cleaning without an extra explicit close in the outer steward's own `done` case, at the cost of needing readers to understand the `or()` idiom and pulling in one more helper. This solution took the simpler, spec-literal one: an explicit `close(wardDone)` sitting right there in the `done` case, no extra composition helper required.
+This exercise requires the steward to close `wardDone` itself. This solution follows that rule.
+
+Both versions behave the same for a direct steward. The `or()` version also cleans up composed stewards. It needs readers to know the `or()` pattern.
 
 ## Verified
 
-Confirmed the naive `main.go` fails first — both in the repo's own `29-healing-goroutines/` and in a scratch copy of it — with `go test -v ./...` producing the two failures shown above (`TestStewardRestartsWedgedWard` and `TestStewardUsesFreshPerGenerationDone`; `TestStewardStopsOnDone` passing, as expected, since it never exercises a wedge or a restart), and `go test -race -v ./...` showing the identical two clean failures with no hang, no panic, and no race.
+The naive `main.go` fails three tests: `TestStewardRestartsWedgedWard`,
+`TestStewardUsesFreshPerGenerationDone`, and
+`TestStewardKeepsMonitoringWithoutAReader`. `TestStewardStopsOnDone`
+passes because it never wedges. Use `go test -v ./...` or
+`go test -race -v ./...` to see this.
 
-Copied the exercise into a throwaway scratch directory (with its own standalone `go.mod`, `go 1.25.6`) and dropped this `NewSteward` in. `go build ./...`, `go vet ./...`, and `gofmt -l .` are all clean. `go test -race -count=5 ./...` passed with zero flakes across all three tests (`TestStewardRestartsWedgedWard`, `TestStewardUsesFreshPerGenerationDone`, `TestStewardStopsOnDone`); while writing up the design notes, the nil-channel-disable bug described above was found and fixed (an initial `continue`-only version on a closed `wardHeartbeat` would hot-spin and hang under `synctest` — not exercised by `MockWard`, so `go test -race -count=5` alone had not caught it). After the fix, re-ran `go test -race -count=20 ./...` — 20 repetitions, zero flakes.
+The scratch module has `go.mod` pinned to `go 1.25.6`. `go build ./...`,
+`go vet ./...`, and `gofmt -l .` are clean. The
+`go test -race -count=5` run passes all four tests every time.
 
-Also verified the two specific gaps these tests exist to close, using two deliberately-wrong hand-written variants (not committed anywhere): a steward with fully correct restart-on-stall logic that reuses the caller's own `done` as every generation's `wardDone` instead of minting a fresh one fails only `TestStewardUsesFreshPerGenerationDone`, cleanly, on the "started with the steward's own incoming done" message; and a steward that restarts on a fixed cadence (a `time.Ticker` on `timeout`, never reset on a pulse) instead of tracking time-since-last-pulse fails only `TestStewardStopsOnDone`'s `Generations() == 1` assertion. Both confirm the new tests catch exactly the bug they're meant to.
+An earlier `continue`-only version kept using CPU in a tight loop on a closed `wardHeartbeat`. `MockWard` does not test that case. The `go test -race -count=5` repetition alone did not catch it. After setting the channel to nil, `go test -race -count=20 ./...` passed 20 times. The full `go test -race -count=5 ./...` run also passed after the fix.
 
-`go run .` was also run manually against the fixed `NewSteward` and printed pulses continuing past the point the first generation wedges, ending with a `ward generations started:` count of more than one (the exact count is timing-dependent since `main` runs on the real clock, not fake time — typically 2-3 for the constants in the scaffold) — confirming an actual restart rather than a fluke of timing.
+Two wrong variants confirmed the tests. Reusing the caller's `done` fails only `TestStewardUsesFreshPerGenerationDone`. A `time.Ticker` on `timeout` that never resets fails only `TestStewardStopsOnDone`.
 
-The real repo's `29-healing-goroutines/main.go` was left untouched as the original naive version throughout — every fix iteration happened only in the scratch copy.
+`go run .` also printed pulses after the first wedge. It ended with a `ward generations started:` count above one. The exact count changes with real-clock timing, usually 2 to 3.
+
+The real `29-healing-goroutines/main.go` stayed unchanged. All fix iterations used a scratch copy.

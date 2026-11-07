@@ -126,16 +126,16 @@ const today: Model = {
     wg: waitgroup({ label: "wg", pos: SEAT.wg! }),
   },
   insight:
-    "Every philosopher locks its left fork, then pauses 1 ms. The pause lets all five take a left fork before any reaches right, so each waits on the fork its neighbour holds. The waits close a ring, and Dine never returns.",
+    "Every philosopher locks the left fork, then pauses for 1 ms. All five take a left fork before anyone takes a right fork. Each right fork is held by a neighbor. The waits form a ring, so Dine never returns.",
   stops: [
     {
       when: { op: "lock", g: "p4", nth: 1 },
-      say: "Each philosopher takes its left fork at once: P0 holds F0, P1 holds F1, and so on round the table.",
+      say: "Each philosopher takes its left fork at once. P0 holds F0, P1 holds F1, and so on around the table.",
     },
     {
       // The fifth wait after the pause, whoever reaches last, closes the ring.
       when: { op: "block", t: REACH_MS, nth: N },
-      say: "After the 1 ms pause all five reach right. Each right fork is a neighbour's left fork, so the last wait closes the ring.",
+      say: "After the 1 ms pause, all five reach right. Each right fork is a neighbor's left fork. The last wait closes the ring.",
     },
   ],
   code: {
@@ -179,11 +179,11 @@ const ordered: Model = {
     wg: waitgroup({ label: "wg", pos: SEAT.wg! }),
   },
   insight:
-    "Every philosopher locks the lower-indexed fork first. P4 sits between F4 and F0, so it reaches for F0 first, the same fork P0 wants first. One of them waits holding nothing, so the ring can never close.",
+    "Every philosopher locks the lower-indexed fork first. P4 sits between F4 and F0. So P4 reaches for F0 first, which P0 also wants. One of them waits holding nothing. The ring cannot close.",
   stops: [
     {
       when: { op: "block", g: "p4", nth: 1 },
-      say: "P4's lower fork is F0, which P0 holds. P4 waits holding nothing, so no ring can close through it.",
+      say: "P4's lower fork is F0. P0 holds it. P4 waits holding nothing, so no ring can close through P4.",
     },
   ],
   code: {
@@ -226,14 +226,14 @@ export default defineViz({
       id: "today",
       chip: "Today",
       tier: "today",
-      summary: "Every philosopher takes its left fork, pauses, then waits forever for the right fork its neighbour holds, so Dine never returns.",
+      summary: "Every philosopher takes the left fork and pauses. Then each waits for a right fork held by a neighbor. Dine never returns.",
       model: today,
     },
     {
       id: "order",
       chip: "Order",
       tier: "inside",
-      summary: "Each philosopher locks its lower-indexed fork first, so P4 waits for F0 instead of holding F4, and every meal gets eaten.",
+      summary: "Each philosopher locks the lower-indexed fork first. P4 waits for F0 instead of holding F4. Every meal gets eaten.",
       model: ordered,
     },
   ],

@@ -1,10 +1,10 @@
 # Limit Service Time for Free-Tier Users — Suggested Solutions
 
-> **Spoiler warning.** This file contains full worked solutions for `03-limit-service-time/`. Try solving it yourself first — come back here if you're stuck or want to compare approaches.
+> **Spoiler warning.** This file contains full worked solutions for `03-limit-service-time/`. Try solving it yourself first. Come back if you are stuck or want to compare approaches.
 
 ## The problem
 
-The starting point is deliberately empty of any limiting logic:
+The starting point has no limit logic:
 
 ```go
 type User struct {
@@ -19,26 +19,36 @@ func HandleRequest(process func(), u *User) bool {
 }
 ```
 
-`HandleRequest` must:
+`HandleRequest` must follow these rules:
 
-- Let **premium** users run `process` for as long as they like — never killed.
-- Let a **free** user run for up to **10 seconds total, accumulated across all of their requests** (not just 10s per call). Once a request would push a free user's *lifetime* usage over 10s, it must be killed as soon as the 10s mark is hit — not allowed to run to completion.
-- Track only the time a free user's process *actually* used before being killed, not a full timeout's worth, and not the process's own (unknowable in advance) full duration.
-- Be safe to call **concurrently** for the same user without double-spending the quota — two 6s requests racing against a 10s quota must not both succeed.
-- Judge a concurrent request against the *actual* usage of an in-flight request, not a pessimistic "it might run forever" guess — a request must not be rejected just because a sibling is still running if that sibling turns out to finish quickly.
+- Premium users can run `process` for as long as they want.
+- A free user gets 10 seconds in total across all requests.
+- Kill a free request when it reaches the 10 second limit.
+- Track only the time a free request actually uses.
+- Calls for the same user must be safe at the same time.
+- Two 6 second requests must not both use a 10 second quota.
+- Judge a request by the real use of a running request. Do not guess its
+  worst case. Do not reject a request just because another one is running.
 
-Go gives you no way to forcibly kill a running goroutine. The only thing you can do is **race a timeout against completion** with a goroutine + `select`, and stop waiting once the timeout wins — the process goroutine itself is left to finish in the background, orphaned.
+Go cannot force a goroutine to stop. You can start `process` in a
+goroutine. Then use `select` to wait for completion or a timeout. If the
+timeout wins, stop waiting. The `process` goroutine keeps running.
 
 ## Why the naive version is wrong
 
-`HandleRequest` just calls `process()` synchronously and always returns `true`. It:
+`HandleRequest` calls `process()` and always returns `true`. It has these
+problems:
 
-- Never kills anything, so a free user's 11s job runs the full 11s and reports success.
-- Never distinguishes premium from free.
-- Has no per-user state to accumulate usage across calls, so quota can never be "used up."
-- Isn't safe for concurrent calls (nothing serializes access to a shared counter, and there's no counter anyway).
+- It never stops a free user's long job.
+- It does not separate premium users from free users.
+- It has no per-user state to track quota.
+- It can double-spend quota during concurrent calls.
 
-Verified: running the current `check_test.go` against this stub fails `TestHandleRequest_FreeUser_SlowProcessKilled`, `TestHandleRequest_FreeUser_AccumulatedTimeExceeded`, `TestHandleRequest_FreeUser_QuotaIsPerUser`, and `TestHandleRequest_FreeUser_ConcurrentRequestsDoNotDoubleSpendQuota`.
+The current `check_test.go` fails these tests:
+`TestHandleRequest_FreeUser_SlowProcessKilled`,
+`TestHandleRequest_FreeUser_AccumulatedTimeExceeded`,
+`TestHandleRequest_FreeUser_QuotaIsPerUser`, and
+`TestHandleRequest_FreeUser_ConcurrentRequestsDoNotDoubleSpendQuota`.
 
 ## Approach 1: `context.WithTimeout` racing `process` in a goroutine, one mutex per user
 
@@ -115,47 +125,61 @@ func main() {
 
 Design notes:
 
-- **Premium bypasses everything.** No goroutine, no timeout, no lock — `process()` runs inline and always returns `true`, exactly matching "premium users are never limited."
-- **`TimeUsed` is a `time.Duration`**, not seconds-as-`int64`, so partial-second usage (e.g. "killed ~2s in") accumulates precisely instead of being truncated to whole seconds.
-- **One `sync.Mutex` embedded per `User`** (zero-value-usable, so `&User{ID: ..., IsPremium: ...}` composite literals from the tests still work untouched) serializes *all* requests for that user — including the racing goroutine and the quota update. This is what makes the design correct under concurrency:
-  - Two concurrent 6s requests against a fresh 10s quota can't both slip through a check-then-spend race, because the second request can't even start its own quota check until the first has finished its whole `HandleRequest` call (goroutine race + `TimeUsed` update) and released the lock. By the time the second checks `remaining`, the first's usage is already recorded.
-  - This also makes the "don't judge on a worst-case guess" test pass for free: since the second request simply *waits* for the first's real, already-recorded usage rather than reserving worst-case quota up front, it never has to guess.
-- **`remaining := freeQuota - u.TimeUsed`** computed while holding the lock is the amount of quota left *right now*. If it's `<= 0`, we don't even bother starting `process` — immediate kill, matching the "killed immediately, no waiting" expectation.
-- **On timeout, `u.TimeUsed += remaining`** (not some open-ended "however long it ran") because by construction the select fires at exactly `remaining` elapsed — that's the actual time used before it was cut off, no more.
-- The orphaned goroutine from a killed request keeps running to real completion in the background (unavoidable in Go), but it holds no reference to `u.mu`, so it can't block subsequent requests once `HandleRequest` has returned.
+- **Premium users skip the limit.** `process()` runs inline. It uses no
+  timeout and no lock.
+- **`TimeUsed` is a `time.Duration`.** The starting field is `int64`,
+  which loses partial seconds. `time.Duration` keeps them.
+- A job killed after 2.1s adds 2.1s, not 2s.
+- **Each `User` has one `sync.Mutex`.** Zero values work, so test literals
+  like `&User{ID: ..., IsPremium: ...}` still work. The lock makes all
+  requests for one user run one at a time. The quota update is protected
+  too.
+- Two 6s requests cannot both use a fresh 10s quota. The second request
+  waits for the first to finish and record its real use. The second then
+  checks `remaining`. It does not reserve worst-case quota in advance.
+- `remaining := freeQuota - u.TimeUsed` is computed under the lock. It is
+  the quota left now. If it is `<= 0`, `process` does not start.
+- On timeout, run `u.TimeUsed += remaining`. The timeout fires after
+  exactly that much time. Do not guess a longer duration.
+- A killed request leaves its goroutine running. Go cannot stop it. That
+  goroutine does not use `u.mu`, so it cannot block later requests.
 
-**Verified**: copied this exercise into a throwaway scratch directory, confirmed the naive stub fails the current `check_test.go`, then dropped in this solution and ran `go vet ./...` (clean) and `go test -race -count=3 ./...` — all tests pass repeatably, including the synctest-based tests and the two real-clock concurrency tests.
+**Verified:** the naive stub fails the current `check_test.go`. This
+solution passes `go vet ./...` and `go test -race -count=3 ./...`. It
+passes all tests, including the synctest tests and the two real-clock
+concurrency tests.
 
 ## Variant: `time.Timer` instead of `context`
 
-Same design, one line different: `timer := time.NewTimer(remaining)` +
-`defer timer.Stop()` + `<-timer.C` in place of `context.WithTimeout` +
-`defer cancel()` + `<-ctx.Done()`. Since `process` is a plain `func()`
-with nothing downstream that accepts a `context.Context`, neither
-option is more "correct" than the other here — pick whichever you'd
-rather have in the diff.
+This version uses `timer := time.NewTimer(remaining)`,
+`defer timer.Stop()`, and `<-timer.C`. It replaces
+`context.WithTimeout`, `defer cancel()`, and `<-ctx.Done()`.
+`process` is a plain `func()`. It does not accept a `context.Context`.
+Both versions are correct here.
 
-A **genuinely different** approach worth naming, even though the test
-suite deliberately rules it out: reserve `remaining` under the lock,
-*release the lock*, run the race unlocked, then re-lock to refund
-whatever was left over. That would let two concurrent requests for the
-same user run without serializing behind each other's `process()` call
-— better throughput. But it means a second request has to reserve
-against the *worst case* (the first might run the full `remaining`),
-so it gets rejected in situations where the first actually finishes
-early and plenty of quota was available.
-`TestHandleRequest_FreeUser_ConcurrentRequestNotRejectedOnEarlierEarlyFinish`
-exists specifically to reject that tradeoff: this exercise chooses
-"correct against real usage" over "concurrent throughput for the same
-user," which is why Approach 1 holds the lock for the whole call
-instead of just around the bookkeeping.
+Another design reserves `remaining` under the lock. It then unlocks and
+runs the race. Afterward, it locks again and refunds unused time. This
+lets calls for one user run at the same time. But the second call must
+reserve the worst case. It can be rejected even if the first call finishes
+early. `TestHandleRequest_FreeUser_ConcurrentRequestNotRejectedOnEarlierEarlyFinish`
+rejects that tradeoff. This exercise values real usage over concurrent
+calls for one user. Approach 1 therefore holds the lock for the full call.
 
 ## Key takeaways
 
-- Go cannot forcibly kill a goroutine. "Killing" a process really means racing a timeout against a `done` channel with `select` and simply walking away from the goroutine the instant the timeout wins — the orphaned goroutine keeps running to real completion, invisibly, in the background.
-- Store `TimeUsed` as a `time.Duration`, not integer seconds, so partial-second accounting (a request killed 2.1s into a 4s call) stays precise instead of getting rounded away.
-- For "accumulated across requests" quotas, compute `remaining := quota - TimeUsed` fresh on every call, and use *that* as the timeout — not the request's own requested duration.
-- On a timeout, credit the user with exactly `remaining` (the elapsed time when the timer fired), not some looser estimate — that's the only amount of processing that provably happened before the cutoff.
-- Making a whole `HandleRequest` call for a given user hold that user's mutex for its *entire* duration (check quota → race process → record usage) is what simultaneously prevents double-spending on concurrent requests *and* avoids the need for worst-case quota reservations: a second concurrent call simply waits for the first's real, already-known usage instead of guessing.
-- Keep the mutex scoped **per user** (embedded in `User` as an unexported zero-value field) rather than global, so unrelated users' requests never contend with each other.
-- Premium users should bypass the goroutine/timeout machinery entirely — call `process()` inline. Besides being simpler, it avoids ever needing a "timeout" value for a user who by definition has none.
+- Go cannot force a goroutine to stop. "Killing" means waiting for a
+  timeout or a `done` channel with `select`. Then stop waiting. The
+  goroutine keeps running.
+- Store `TimeUsed` as a `time.Duration`, not whole seconds. This keeps
+  partial seconds exact.
+- For a repeated quota, compute `remaining := quota - TimeUsed` on every
+  call. Use it as the timeout.
+- On timeout, add exactly `remaining` to usage. That is the time already
+  used.
+- Hold one user's mutex for the full `HandleRequest` call. Check quota,
+  run the race, and record usage under the lock. This stops double-spend.
+  It also avoids worst-case guesses.
+- Keep the mutex per user. Store it inside `User` as an unexported zero
+  value. Different users should not block each other.
+- Run premium `process()` inline. They have no timeout. This is simpler
+  and needs no separate path.

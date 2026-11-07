@@ -50,7 +50,7 @@ const rounds = (n: number, slots: number): number => Math.ceil(n / slots);
 const tests: Record<string, TestDef> = {
   respects: {
     name: "TestFetchAllRespectsSemaphoreLimit",
-    short: "hwm ≤ 2, no ERR",
+    short: "limit kept",
     judge: (run) => (run.vars.hwm ?? 0) <= K.hwmWant.value && (run.vars.errors ?? 0) === 0,
   },
 };
@@ -58,7 +58,7 @@ const tests: Record<string, TestDef> = {
 const speedTests: Record<string, TestDef> = {
   concurrent: {
     name: "TestFetchAllStillConcurrent",
-    short: `under ${K.budget.value} ms`,
+    short: "time limit",
     judge: (run) => run.t < K.budget.value,
   },
 };
@@ -117,10 +117,10 @@ function goal(P: Params): Model {
   const fits = slots <= K.hwmWant.value;
   const insight =
     slots === 1
-      ? `One slot keeps the API safe, but the calls run one after another and take ${t} ms. The limit is there, the concurrency is gone.`
+      ? `One slot keeps the API safe. But the calls run one after another and take ${t} ms. The limit is there, but the concurrency is gone.`
       : fits
-        ? `Each request takes a slot before it calls the API. Only ${slots} slots exist, so the rest wait here and the API never sees more than ${slots} calls. The ${N} calls run in ${rounds(N, slots)} rounds.`
-        : `${slots} slots match the API's own limit, so nothing is refused, but the high-water mark reaches ${slots}. The test allows ${K.hwmWant.value}.`;
+        ? `Each request takes a slot before it calls the API. Only ${slots} slots exist. The other requests wait here, so the API never sees more than ${slots} calls. The ${N} calls run in ${rounds(N, slots)} rounds.`
+        : `${slots} slots match the API's own limit. Nothing is refused, but the high-water mark reaches ${slots}. The test allows ${K.hwmWant.value}.`;
   return {
     nodes: {
       caller: caller(N),
@@ -145,7 +145,7 @@ function goal(P: Params): Model {
     insight,
     stops:
       slots < N
-        ? [{ when: { op: "block", g: "request" }, say: `All ${slots} slots are taken, so this request waits here, not at the API.` }]
+        ? [{ when: { op: "block", g: "request" }, say: `All ${slots} slots are full, so this request waits here. It does not reach the API.` }]
         : [],
     tests,
     clock: { unit: "ms" },
@@ -179,9 +179,9 @@ function speed(P: Params): Model {
       sem: channel({ label: "sem", pos: [1, 2], cap: slots }),
     },
     insight: fast
-      ? `The ${n} calls pass through ${slots} slot${slots === 1 ? "" : "s"} in ${rounds(n, slots)} rounds of ${K.latency.value} ms, so the batch ends at ${t} ms, inside the ${K.budget.value} ms budget.`
-      : `With one slot the ${n} calls run one after another and end at ${t} ms. That passes the API's limit and fails the speed test: a semaphore caps concurrency, it must not remove it.`,
-    stops: [{ when: { op: "block", g: "request" }, say: `The slots are full, so the other requests wait on sem <-.` }],
+      ? `The ${n} calls pass through ${slots} slot${slots === 1 ? "" : "s"} in ${rounds(n, slots)} rounds of ${K.latency.value} ms. The batch ends at ${t} ms, inside the ${K.budget.value} ms budget.`
+      : `With one slot, the ${n} calls run one after another and end at ${t} ms. That passes the API's limit but fails the speed test. A semaphore caps concurrency. It must not remove it.`,
+    stops: [{ when: { op: "block", g: "request" }, say: "The slots are full, so the other requests wait on `sem <-`." }],
     tests: speedTests,
     clock: { unit: "ms", budget: { at: K.budget.value, label: "budget" } },
     code: {
@@ -230,7 +230,7 @@ export default defineViz({
       id: "today",
       chip: "Today",
       tier: "today",
-      summary: `FetchAll starts ${N} goroutines that call the API at once. It refuses everything past ${K.apiMax.value} calls with ERROR, and the high-water mark passes ${K.hwmWant.value}.`,
+      summary: `FetchAll starts ${N} goroutines. All call the API at once. The API refuses calls past ${K.apiMax.value} with ERROR, and the high-water mark passes ${K.hwmWant.value}.`,
       model: {
         nodes: {
           caller: caller(N),
@@ -249,15 +249,15 @@ export default defineViz({
           errors,
           highWaterMark,
         },
-        insight: `All ${N} requests call the API in the same instant. It takes ${K.apiMax.value}, refuses the other ${N - K.apiMax.value} on the spot with ERROR, and its high-water mark climbs past the ${K.hwmWant.value} the test allows.`,
+        insight: `All ${N} requests call the API at the same instant. It accepts ${K.apiMax.value}. It refuses the other ${N - K.apiMax.value} at once with ERROR. The high-water mark climbs past ${K.hwmWant.value}, which the test allows.`,
         stops: [
           {
             when: { op: "return", g: "request", nth: 1 },
-            say: `The API already holds ${K.apiMax.value} calls, so this one is refused at once. Nothing queues.`,
+            say: `The API already holds ${K.apiMax.value} calls. This one is refused at once. Nothing queues.`,
           },
           {
             when: { op: "end" },
-            say: `At ${K.latency.value} ms the ${K.apiMax.value} accepted calls end. ${N - K.apiMax.value} of ${N} results are ERR, and the test fails.`,
+            say: `At ${K.latency.value} ms the ${K.apiMax.value} accepted calls end. ${N - K.apiMax.value} of ${N} results are ERR. The test fails.`,
           },
         ],
         tests,
@@ -295,7 +295,7 @@ export default defineViz({
       id: "goal",
       chip: "Goal",
       tier: "goal",
-      summary: `Each request takes one of a few slots before it calls the API, so the API sees at most that many calls and refuses none.`,
+      summary: "Each request takes one slot before it calls the API. The API sees at most that many calls, so it refuses none.",
       knobs: [{ key: "slots", label: "slots", options: [1, K.hwmWant.value, K.apiMax.value], value: K.hwmWant.value }],
       model: goal,
     },
@@ -303,7 +303,7 @@ export default defineViz({
       id: "speed",
       chip: "Speed",
       tier: "inside",
-      summary: `Under the speed test, ${K.speedReqs.value} calls pass through the slots; one slot ends at ${K.speedReqs.value * K.latency.value} ms, over the ${K.budget.value} ms budget.`,
+      summary: `Under the speed test, ${K.speedReqs.value} calls pass through the slots. One slot takes ${K.speedReqs.value * K.latency.value} ms, over the ${K.budget.value} ms budget.`,
       knobs: [{ key: "cap", label: "maxInFlight", options: [1, K.maxInFlight.value, K.apiMax.value], value: K.maxInFlight.value }],
       model: speed,
     },

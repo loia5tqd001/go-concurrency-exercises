@@ -1,10 +1,10 @@
-# Replicated Requests: Racing Redundant Calls for Lower Tail Latency - Suggested Solutions
+# Replicated Requests: Racing Calls to Reduce Tail Latency - Suggested Solutions
 
-> **Spoiler warning.** This file contains full worked solutions for `28-replicated-requests/`. Try solving it yourself first — come back here if you're stuck or want to compare approaches.
+> **Spoiler warning.** This file has full solutions for `28-replicated-requests/`. Try the exercise first. Come back if you are stuck or want to compare approaches.
 
 ## The problem
 
-The starting point is a `FetchFastest` that fans out the same request to several redundant `Replica` handlers concurrently and is supposed to return whichever one answers first, so that no single replica's unpredictable tail latency slows the caller down:
+The starting `FetchFastest` sends one request to several `Replica` handlers at once. It should return the first answer. This prevents one slow replica from delaying the caller:
 
 ```go {17}
 type Replica func(done <-chan struct{}) (string, error)
@@ -37,15 +37,17 @@ func FetchFastest(done <-chan struct{}, replicas ...Replica) (string, error) {
 }
 ```
 
-It already gets the headline behavior right: it starts one goroutine per replica and returns the first value/error that arrives on `results`, so a test that only checks "does it return the right value" passes against it as-is.
+The code already starts one goroutine per replica. It returns the first value or error on `results`. It passes tests that only check the returned value.
 
-The `Replica` type and the `FetchFastest(done <-chan struct{}, replicas ...Replica) (string, error)` signature must stay identical.
+Keep the `Replica` type and the `FetchFastest(done <-chan struct{}, replicas ...Replica) (string, error)` signature unchanged.
 
 ## Why the naive version is wrong
 
-Look at the goroutine each replica runs in: `r(nil)`. Every replica is handed a `nil` done channel — not the caller's `done`, not any channel `FetchFastest` controls. A `nil` channel blocks forever on either send or receive, so from inside a `Replica`, `case <-done` (where `done` is `nil`) never fires. Once `FetchFastest` has its winner and returns, every losing replica has absolutely no way to find out. It just keeps sleeping out its own artificial latency (or doing whatever work it was doing) to the very end, wastefully, with nobody left listening for the result — a goroutine leak per call that self-heals only because the mock's timer eventually fires on its own.
+Each replica goroutine calls `r(nil)`. It gets a `nil` done channel, not the caller's `done`. A `nil` channel blocks forever on send or receive. `case <-done` can therefore never fire inside `Replica`.
 
-Verified: running the current `check_test.go` against this naive `main.go` fails two tests, and for exactly this reason - every in-flight replica keeps running to completion because it was handed a `nil` done, whether a replica already won or the caller's own `done` fired first:
+After `FetchFastest` returns a winner, each loser keeps working. No receiver remains for its result. This is a goroutine leak on every call. It clears only when the mock's timer fires.
+
+Verified: the naive `main.go` fails two tests. Every replica runs to completion because it received a `nil` done channel. This happens whether a replica wins or the caller's `done` closes first:
 
 ```
 === RUN   TestFetchFastestReturnsFastestValue
@@ -66,9 +68,15 @@ Verified: running the current `check_test.go` against this naive `main.go` fails
 FAIL
 ```
 
-(`TestFetchFastestNoReplicas` and `TestFetchFastestConcurrentSafety` now call `FetchFastest` through a `fetchFastestWithTimeout` helper in `check_test.go` that bounds the call itself - added so a subtly-wrong fix that wedges `FetchFastest` fails in a few seconds instead of hanging toward Go's default 10-minute test timeout; it changes nothing about what a correct `FetchFastest` needs to do.)
+`TestFetchFastestNoReplicas` and `TestFetchFastestConcurrentSafety` use `fetchFastestWithTimeout` from `check_test.go`. This helper limits the call. A broken fix fails in seconds instead of waiting for Go's 10-minute timeout. It does not change correct behavior.
 
-`TestFetchFastestReturnsWinnerError`, `TestFetchFastestNoReplicas`, and `TestFetchFastestConcurrentSafety` all pass against the naive version — none of them inspect what happens to the *losing* replicas, only that `FetchFastest` itself answers correctly (value, winner's error, or the no-replicas error) and doesn't race. `TestFetchFastestReturnsFastestValue` and `TestFetchFastestClosedDoneCancelsEarly` are the ones that specifically check the losers' fate (`ObservedCancellation()` / `RanToCompletion()`) - one for the "a replica won" cancellation trigger, the other for the "caller's own `done` fired with no winner" trigger - and both catch the naive version. That's the point of the exercise: the naive version's answer is right, its cleanup is not.
+`TestFetchFastestReturnsWinnerError`, `TestFetchFastestNoReplicas`, and `TestFetchFastestConcurrentSafety` still pass. They do not check losing replicas.
+
+`TestFetchFastestReturnsFastestValue` and `TestFetchFastestClosedDoneCancelsEarly` check the losers with `ObservedCancellation()` and `RanToCompletion()`. A cancelled loser makes `ObservedCancellation()` return `true`. One test covers a replica win. The other covers the caller's `done` closing first. Both fail on the naive code.
+
+Both tests run under `synctest.Test` from `testing/synctest`.
+
+The naive answer is correct. Its cleanup is not.
 
 ## Approach 1: a single shared `stop` channel, closed via `defer`
 
@@ -153,15 +161,20 @@ func main() {
 
 Design notes:
 
-- **One channel, closed once, does double duty for both cancellation sources.** `stop` is what every replica goroutine actually receives as its own `done`. `defer close(stop)` fires on *every* return path out of `FetchFastest` — whether the `select` took the "a replica won" branch or the "caller's `done` fired" branch — so there is exactly one place that decides "everyone stop now," and it's impossible to add a future return path that forgets to close it.
-- **The `results` channel's buffer size (`len(replicas)`) is not incidental — it's what makes the fix actually leak-free.** After `stop` closes, every losing replica wakes up from its `case <-done` branch and still runs `results <- replicaResult{...}`. If `results` were unbuffered, every one of those sends would block forever with nobody left to receive them — you'd have swapped a *timer* leak for a *channel-send* leak, and the goroutines would still never exit even though `ObservedCancellation()` now (correctly) reports `true`. Buffering to `len(replicas)` guarantees every send — the eventual winner's and every loser's — always has room, so no goroutine ever blocks on that send. (The equally correct alternative, if you didn't want to size the buffer to match the fan-out, is to make each goroutine's send itself cancellable: `select { case results <- r: case <-stop: }`.) Under `testing/synctest`, getting this wrong doesn't show up as a failing assertion — it surfaces as a hard panic. Confirmed by actually making `results` unbuffered (`make(chan replicaResult)`) in a throwaway scratch build against this fix and running `TestFetchFastestReturnsFastestValue`: it panics with `deadlock: main bubble goroutine has exited but blocked goroutines remain`, with the reported blocked goroutines sitting at exactly the `results <- replicaResult{...}` send, tagged `chan send (durable)` — a goroutine blocked forever on an unbuffered send is exactly the kind of durably-blocked goroutine synctest refuses to let the bubble close around.
-- **A replica only ever needs to know "stop," never "who won" or "why."** `stop` carries no payload and is never inspected for a reason — it's a pure "close = stop" signal, so every `Replica` implementation only needs one `select` arm (`case <-done:`) to be well-behaved, regardless of whether it lost to another replica or the caller gave up on all of them.
+- **One channel handles both cancellation sources.** Every replica receives `stop` as its `done`. `defer close(stop)` runs on every return path from `FetchFastest`. A future return path cannot forget to stop the replicas.
+- **The `select` chooses the first result.** A caller cancellation or a replica result both end the call.
+- **Buffer `results` to `len(replicas)`.** A losing replica still sends `results <- replicaResult{...}`. An unbuffered channel would block every loser forever. The goroutine would still not exit. The buffer guarantees room for every send.
+- **A cancellable send is another correct option.** Use `select { case results <- r: case <-stop: }`.
+- **Incorrect buffering fails hard under `synctest`.** An unbuffered `results` uses `make(chan replicaResult)`. That makes `TestFetchFastestReturnsFastestValue` panic with `deadlock: main bubble goroutine has exited but blocked goroutines remain`. The blocked goroutines sit at `results <- replicaResult{...}`. Their tag is `chan send (durable)`.
+- **Replicas only need the stop signal.** `stop` has no payload and no reason. One `case <-done:` arm is enough.
 
-**Verified**: ran the current `check_test.go` against this naive `main.go` in a throwaway scratch copy and confirmed the failure above, then dropped in this fix (in the same scratch copy — the real repo's `28-replicated-requests/main.go` was never modified). `go build ./...` and `go vet ./...` are clean, and `go test -race -count=5 ./...` and a further `go test -race -count=15 ./...` both passed with zero flakes across all five tests — including `TestFetchFastestReturnsFastestValue` and `TestFetchFastestClosedDoneCancelsEarly`, which both run inside `synctest.Test` with fake time and specifically check `ObservedCancellation()`/`RanToCompletion()` on every loser (the former for the "a replica won" trigger, the latter for the "caller's own `done` fired with no winner" trigger), `TestFetchFastestReturnsWinnerError`, which checks that the winner's own error is propagated rather than discarded, and `TestFetchFastestConcurrentSafety`, which hammers `FetchFastest` from 20 concurrent goroutines under `-race`.
+**Verified:** `go build ./...` and `go vet ./...` are clean. `go test -race -count=5 ./...` and `go test -race -count=15 ./...` pass all five tests every time. The real `28-replicated-requests/main.go` stayed unchanged.
+
+The runs include the two `synctest` cancellation tests. They also include `TestFetchFastestReturnsWinnerError` and the 20-goroutine `TestFetchFastestConcurrentSafety`.
 
 ## Approach 2: `context.WithCancel` with a bridge goroutine (alternative)
 
-A genuinely different cancellation primitive: instead of a raw `chan struct{}` you control directly, use a `context.Context` and hand each replica `ctx.Done()`.
+This version uses a `context.Context`. Each replica receives `ctx.Done()` instead of a raw `chan struct{}`.
 
 ```go {40-46,52}
 package main
@@ -248,20 +261,27 @@ func main() {
 }
 ```
 
-Design notes and honest tradeoffs versus Approach 1:
+Design notes and differences from Approach 1:
 
-- **`ctx.Done()` already has type `<-chan struct{}`**, which is exactly the type `Replica` expects — so replicas plug in with zero adaptation. What context buys you elsewhere (deadlines, `context.WithTimeout`, propagating request-scoped values, wiring straight into an HTTP client via `req.WithContext`) is real, but nothing here actually uses any of it: this version calls `context.WithCancel`, never `WithTimeout` or `WithValue`.
-- **The cost of using context here is the bridge goroutine.** `FetchFastest`'s own cancellation source is the caller's `done chan struct{}` — a plain channel, not a context — because that's what the exercise's signature requires. Since `context.Context` has no "cancel me when this arbitrary channel closes" constructor, the only way to make the caller's `done` also cancel `ctx` is a dedicated goroutine whose entire job is `select { case <-done: cancel() case <-ctx.Done(): }`. That's an extra goroutine, doing nothing but translating one cancellation shape into another, that Approach 1 simply doesn't need — there, the caller's `done` and the replicas' `stop` both feed the same `select` in `FetchFastest` directly, no bridge required.
-- **Verifying the bridge goroutine doesn't leak is its own small proof obligation.** It has to exit on both of `FetchFastest`'s return paths: if a replica wins, `defer cancel()` fires, satisfying the goroutine's `case <-ctx.Done()`; if the caller's `done` fires first, the goroutine's own `case <-done` fires and calls `cancel()` (redundantly making the deferred `cancel()` a no-op, which is fine — `cancel` is idempotent). Either way it exits before `FetchFastest` returns to its caller. This is exactly the kind of extra invariant that context buys you nothing for here — Approach 1's `stop` needs no analogous proof because there's no bridge to have one.
-- **When it's worth it:** if `Replica` took a `context.Context` instead of a raw channel — e.g. because replicas were real network calls behind an HTTP client or gRPC stub that already accept a `Context` for deadline propagation — `context.WithCancel` (or `WithTimeout`) would be the natural, idiomatic choice with no bridge needed, since the caller's context would just *be* the cancellation source, no translation goroutine required. Given the signature as specified (`done <-chan struct{}`), Approach 1's shared channel is the simpler, more direct fit; reach for context only if the surrounding code already speaks in contexts.
+- **`ctx.Done()` already has type `<-chan struct{}`.** That is the type `Replica` expects. Replicas need no change.
+- **`Context` can carry deadlines and request values.**
+  `context.WithTimeout` adds a deadline. This prose also calls it
+  `WithTimeout`. `WithValue` adds a request value. It can connect to
+  `req.WithContext`. This version uses only `context.WithCancel`.
+- **This version needs a bridge goroutine.** The caller provides a `done chan struct{}`. `context.Context` cannot cancel when that channel closes. The bridge waits on `case <-ctx.Done()`. Use `select { case <-done: cancel() case <-ctx.Done(): }`.
+- **The bridge must exit on both return paths.** A replica win runs `defer cancel()`. That makes `ctx.Done()` fire. If the caller's `done` closes first, the bridge calls `cancel()`. Calling `cancel` more than once is safe.
+- **The `ctx` value is local to one call.** Cancel it with `defer`.
+- **You need no `if` or `else` for cleanup.** One deferred call covers both return paths.
+- **Use context when the surrounding code already uses it.** A real HTTP or gRPC call can take a `context.Context` directly. With this exercise's `done <-chan struct{}` signature, one shared channel is simpler.
 
-One naive variant worth naming even though it isn't a full second approach: giving each replica its **own** `done` channel (a `[]chan struct{}` sized to `len(replicas)`, closed one by one in a loop once there's a winner) behaves identically to a single shared `stop` but needs more state and more code to get there — a shared channel already means "everyone stop," so a per-replica channel buys nothing except a slice to manage and a loop to get right.
+A per-replica `done` channel also works. Use a `[]chan struct{}` sized to `len(replicas)` and close each one in a loop. It behaves like one shared `stop`, but needs more state and code. One shared channel already tells every replica to stop.
 
-**Verified**: same scratch-directory protocol as Approach 1 — dropped this version into the same throwaway copy in place of the `defer close(stop)` version, confirmed `go build ./...` and `go vet ./...` are clean, and ran `go test -race -count=10 ./...`, which passed with zero flakes across all five tests, including the two `synctest`-driven cancellation tests, the winner-error test, and the 20-goroutine concurrent-safety test.
+**Verified:** `go build ./...` and `go vet ./...` are clean. `go test -race -count=10 ./...` passes all five tests every time. The runs include the cancellation, winner-error, and 20-goroutine tests.
 
 ## Key takeaways
 
-- A `Replica`'s own `done` and the caller's `done` are two different cancellation *sources* that both need to reach the same place: every in-flight replica goroutine. The naive bug isn't really "forgot to cancel" — it's "handed replicas a channel (`nil`) that can never signal anything at all," which is a strict subset of a working implementation, not an alternative one.
-- `defer close(stop)` (or `defer cancel()` for the context version) is the cheapest correct way to make "however we leave this function, tell everyone still running to stop" true on every return path, including ones added later — there's no `if`/`else` to keep in sync.
-- Buffering the results-collection channel to `len(replicas)` (or making each send itself `select`-cancellable) is not a minor tuning detail — it's the difference between "the losers stop *and* actually exit" and "the losers stop looping but now block forever on a send nobody will ever receive," which is the same leak with a different cause. `-race` won't catch this; only checking that goroutines actually terminate (or, as here, that `testing/synctest` doesn't deadlock/panic on a still-blocked goroutine) will.
-- Prefer the primitive that matches what the signature already speaks in: `Replica` takes a raw `<-chan struct{}`, so a raw `chan struct{}` you control is the direct fit; reach for `context.Context` only when you actually want its extra features (deadlines, values, idiomatic propagation into a call that already accepts a `Context`) or the surrounding code already hands you one — otherwise it's an extra goroutine spent converting one cancellation shape into another for no functional gain.
+- The caller's `done` and each replica's `done` are two cancellation sources. Both must reach every active replica.
+- The bug is not a missing cancel call. The code passes `nil`, so cancellation can never reach a replica.
+- `defer close(stop)` runs on every return path. Use `defer cancel()` with a context.
+- Buffer `results` to `len(replicas)`, or make each send cancellable. Otherwise, losers stop working but block forever on a send.
+- `-race` does not catch this leak. Check that goroutines actually exit.

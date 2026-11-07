@@ -1,17 +1,14 @@
 # Concurrent Map-Reduce: Parallel Word Count
 
-Given is a function `WordCount` that is supposed to count word
-occurrences across many text chunks, using the map-reduce pattern: a
-"map" phase that processes each chunk independently and concurrently
-into its own partial count, and a "reduce" phase that merges all the
-partials into one final result - all without multiple goroutines ever
-writing to the same shared map at the same time (which would race).
-The current implementation instead processes chunks sequentially, one
-at a time, merging each chunk's words directly into a single shared
-result map as it goes - which is correct, but leaves all the
-chunk-level parallelism on the table, since chunk 2 can't even start
-being tokenized until chunk 1's tokenizing (simulated by
-`time.Sleep(ProcessDelay)` per chunk) has fully finished.
+`WordCount` counts words across many text chunks. It uses map-reduce.
+The map phase counts each chunk on its own. The reduce phase merges all
+the counts. Two goroutines must never write to the same map at the same
+time.
+
+Today, `WordCount` handles chunks one at a time. It puts every chunk's
+words into one shared map. The result is correct. But the chunks cannot
+run together. Each chunk also waits for `time.Sleep(ProcessDelay)`
+before the next chunk starts.
 
 ```
 today: 1 goroutine, 10 chunks x 30ms each            ~300ms wall clock
@@ -24,11 +21,10 @@ goal: 10 map goroutines, then 1 reduce goroutine       ~30ms wall clock
   chunk9 ─30ms─▶ local map9 ─┘
 ```
 
-Your task is to reimplement `WordCount` as true map-reduce. Chunk work
-must overlap, and the map phase must not mutate one shared result map
-concurrently. The reduce phase starts only after every map result is
-available, then merges those results without racing the final map.
-Keep the signature the same:
+Your task is to make `WordCount` use true map-reduce. Chunk work must
+overlap. Each map must use its own result. The reduce phase starts after
+all maps finish. It then merges the maps without a race. Keep the
+signature the same:
 
 ```go
 func WordCount(chunks []string) map[string]int
@@ -36,7 +32,7 @@ func WordCount(chunks []string) map[string]int
 
 ## Test your solution
 
-To complete this exercise, you must pass the tests:
+The tests must pass:
 
 ```
 go test

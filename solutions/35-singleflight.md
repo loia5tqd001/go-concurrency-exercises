@@ -1,10 +1,10 @@
-# Your Own singleflight: Deduping In-Flight Duplicate Calls — Suggested Solution
+# Your Own singleflight: Share In-Flight Duplicate Calls — Suggested Solution
 
-> **Spoiler warning.** Try solving it yourself first — come back if you're stuck.
+> **Spoiler warning.** Try the exercise first. Come back if you are stuck.
 
 ## The problem
 
-`Do` currently just calls `fn` directly — no dedup, no sharing:
+`Do` calls `fn` directly. It does not deduplicate or share work:
 
 ```go
 type Group struct{}
@@ -15,26 +15,26 @@ func (g *Group) Do(key string, fn func() (int, error)) (v int, err error, shared
 }
 ```
 
-`shared` is always `false`, which happens to be "correct" here for the
-worst possible reason: nothing is ever shared. `Do` must make at most
-one call to `fn` in flight per key, have every other concurrent caller
-for that key wait and share the result — value **and** error — and
-forget the key entirely once that call finishes (unlike
-[17](../17-future-promise)'s permanent `Future`).
+`shared` is always `false`. That is technically correct for a bad
+reason: nothing is shared. `Do` must follow three rules. First, it
+makes at most one call to `fn` in flight per key. Second, every other
+concurrent caller for that key waits and shares the value **and** the
+error. Third, it forgets the key when the call finishes. This differs
+from [17](../17-future-promise), whose `Future` is permanent.
 
-**Verified**: running `check_test.go` against this naive `main.go` in
-a throwaway scratch copy fails two of the four tests:
+**Verified**: I ran `check_test.go` against this naive `main.go` in a
+scratch copy. It fails two of the four tests:
 
 ```
 --- FAIL: TestDoDedupesConcurrentCallers (20 callers reported shared=false, want 1; Call ran 20 times, want 1)
 --- FAIL: TestDoPropagatesErrorToAllWaiters (Call ran 20 times, want 1)
 ```
 
-(`TestDoReturnsCorrectResult` and `TestDoForgetsAfterCompletion` pass
-trivially — a single uncontended call is correct, and "forgets" is
-vacuously true when nothing is ever remembered.)
+`TestDoReturnsCorrectResult` and `TestDoForgetsAfterCompletion` pass
+trivially. A single uncontended call is correct. "Forgets" is vacuously
+true when nothing is stored.
 
-## The fix: mutex-guarded map, `sync.WaitGroup` as the join point
+## The fix: a mutex-guarded map and `sync.WaitGroup` as the join point
 
 ```go {18,20,33}
 type call struct {
@@ -87,42 +87,40 @@ Do("k")   Do("k")   Do("k")            leader:
           returns c.v, c.err, shared=true      leader returns shared=false
 ```
 
-- **The mutex only ever guards the map** — lookup-or-insert, or
-  delete. Never held across `fn`, so unrelated keys never wait on each
-  other.
-- **Whoever inserts `key`'s `*call` is the leader**; everyone who looks
-  it up while the leader is still running `fn` joins it instead.
-- **`sync.WaitGroup` is the broadcast/join primitive**, playing the
-  role `close(done)` played in 17: `Done()` establishes a
-  happens-before edge with every `Wait()` it releases, so joiners are
-  guaranteed to see `c.v`/`c.err` with no extra lock needed.
-- **Errors ride along for free** — `c.err` is just a second field on
-  the same struct as `c.v`, so there's no separate success/failure
-  path to keep in sync.
-- **Delete right after finishing** is what makes this transient instead
-  of a permanent cache: the next `Do(key, ...)` finds nothing and
-  becomes a brand new leader.
+- **The mutex protects only the map.** It covers lookup, insert, and
+  delete. Never hold it during `fn`, so unrelated keys do not wait for
+  each other.
+- **Leader:** The goroutine that inserts `key`'s `*call` is the leader.
+  Anyone who finds that call while `fn` runs joins it instead.
+- **`sync.WaitGroup` is the join primitive.** It plays the role that
+  `close(done)` played in 17. `Done()` creates a happens-before edge
+  with every `Wait()` it releases. Joiners then see `c.v` and `c.err`
+  without another lock.
+- **Errors ride along.** `c.err` is another field in the same struct as
+  `c.v`. There is no separate success or failure path to keep in sync.
+- **Delete the entry after the call finishes.** This makes the work
+  transient, not a cache. The next `Do(key, ...)` finds nothing and
+  becomes a new leader.
 
-**Verified**: naive `main.go` fails as shown above; the fix is
-`go vet` clean and passed `go test -race -count=1` cleanly across 3
-separate runs, including 20 concurrent callers producing exactly 1
-`Call` and exactly 1 `shared=false`, both for a successful key and for
-one where `fn` always errors.
+**Verified**: the naive `main.go` fails as shown above. The fix is
+`go vet` clean. It passed `go test -race -count=1` in three separate
+runs. In each run, 20 concurrent callers produced exactly 1 `Call` and
+exactly 1 `shared=false`. This held for a successful key and for a key
+where `fn` always errors.
 
 ## Key takeaways
 
-- **This is `golang.org/x/sync/singleflight`, by hand** — mutex-guarded
-  map + per-key `WaitGroup` + delete-on-completion, minus panic
-  recovery/re-propagation.
-- **"Dedupe while in flight" ≠ "cache forever"**, despite sharing a
-  shape. 17's `Future` never deletes its entry (correct there — the
-  point is permanent memoization). Here, deleting on completion *is*
-  the point — a stampede fix that outlived its stampede would silently
-  serve stale results forever.
-- **A `WaitGroup` (or `close()`-based `done`) is a general "let N
-  goroutines observe one goroutine's result" primitive**, independent
-  of whether that result is kept afterward. Lifetime policy is a layer
-  on top, not baked into the join mechanism.
-- **Sharing an error isn't a special case if the result type already
-  has room for one** — `call{v, err}` means the joiner path doesn't
-  need to know or care whether `fn` succeeded.
+- **This is `golang.org/x/sync/singleflight`, by hand.** It uses a
+  mutex-guarded map, one `WaitGroup` per key, and delete-on-completion.
+  It omits panic recovery and re-propagation.
+- **"Dedupe while in flight" is not "cache forever."** The two ideas
+  look similar. 17's `Future` never deletes its entry because permanent
+  memoization is the point there. Here, deleting on completion is the
+  point. A stampede fix that outlives its stampede would serve stale
+  results forever.
+- **Join primitive:** A `WaitGroup` or `close()`-based `done` channel
+  can let many goroutines observe one result. The mechanism does not
+  decide how long to keep the result. Lifetime policy sits on top.
+- **Errors:** With `call{v, err}`, the result type can hold the error.
+  The joiner path needs no special case. It does not care whether `fn`
+  succeeded.
