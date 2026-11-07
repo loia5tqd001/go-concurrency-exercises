@@ -1944,9 +1944,15 @@ body.sim-lock {
 .sim-tests li {
   display: inline-flex;
   gap: 5px;
-  align-items: baseline;
+  align-items: center;
 }
 .sim-test-mark {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 1em;
+  min-width: 1em;
+  line-height: 1;
   font-weight: 700;
 }
 .sim-tests .is-pending {
@@ -1973,14 +1979,18 @@ body.sim-lock {
   font-size: 12px;
   color: var(--fg-muted);
 }
+.sim-legend li {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+}
 .sim-legend i {
-  display: inline-block;
+  display: block;
+  flex: none;
   width: 12px;
   height: 12px;
   border-radius: 4px;
   border: 2px solid;
-  margin-right: 5px;
-  vertical-align: -2px;
 }
 .sim-legend .is-run {
   background: var(--viz-run-fill);
