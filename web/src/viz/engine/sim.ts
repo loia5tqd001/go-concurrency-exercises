@@ -197,6 +197,13 @@ interface MuRT {
   key: Token;
 }
 
+interface CondRT {
+  id: string;
+  label: string;
+  mu: string;
+  waiters: string[];
+}
+
 interface WgRT {
   id: string;
   label: string;
@@ -216,6 +223,7 @@ class Sim {
   timers = new Map<string, TimerRT>();
   contexts = new Map<string, CtxRT>();
   mutexes = new Map<string, MuRT>();
+  conds = new Map<string, CondRT>();
   wgs = new Map<string, WgRT>();
   slices = new Map<string, (Token | null)[]>();
   facts = new Map<string, Value>();
@@ -272,6 +280,9 @@ class Sim {
           this.mutexes.set(id, { id, label: def.label, waiters: [], key });
           break;
         }
+        case "cond":
+          this.conds.set(id, { id, label: def.label, mu: def.mu, waiters: [] });
+          break;
         case "waitgroup":
           this.wgs.set(id, { id, label: def.label, n: 0, waiters: [] });
           break;
@@ -445,6 +456,8 @@ class Sim {
     for (const [id, w] of this.wgs) wg[id] = { n: w.n, waiters: w.waiters.length };
     const mu: World["mu"] = {};
     for (const [id, m] of this.mutexes) mu[id] = { holder: m.holder, waiters: m.waiters.length, key: m.key.id };
+    const cond: World["cond"] = {};
+    for (const [id, c] of this.conds) cond[id] = { waiters: c.waiters.length };
     const timer: World["timer"] = {};
     for (const [id, tm] of this.timers) {
       timer[id] = { state: tm.state, fireAt: tm.fireAt, pending: tm.pending?.id };
@@ -460,6 +473,7 @@ class Sim {
       ch,
       wg,
       mu,
+      cond,
       timer,
       ctx,
       slice,
@@ -669,6 +683,12 @@ class Sim {
         return this.lock(g, op.mu);
       case "unlock":
         return this.unlock(g, op.mu);
+      case "condWait":
+        return this.condWait(g, op.cond);
+      case "condSignal":
+        return this.condSignal(g, op.cond, false);
+      case "condBroadcast":
+        return this.condSignal(g, op.cond, true);
       case "start":
       case "reset":
       case "stop":
@@ -687,6 +707,8 @@ class Sim {
         if (last + 1 >= cells.length) this.fatal(`${who} appends past the end of ${op.slice}; raise its size`);
         return this.put(g, op.slice, last + 1, op.v, "append");
       }
+      case "shift":
+        return this.shift(g, op.slice);
       case "set":
       case "inc": {
         if (!this.facts.has(op.fact)) this.fatal(`${who} sets ${op.fact}, which is not a fact node`);
@@ -1069,19 +1091,86 @@ class Sim {
       this.panicG(g, `fatal error: sync: unlock of unlocked mutex ${m.label}`);
       return PARK;
     }
+    const next = this.releaseLock(m);
+    this.emit(
+      g.key,
+      "unlock",
+      next === undefined
+        ? `${who} unlocks ${m.label}.`
+        : `${who} unlocks ${m.label}, and ${this.name(next)} gets it.`,
+      { node: id },
+    );
+    return undefined;
+  }
+
+  releaseLock(m: MuRT): string | undefined {
     if (m.waiters.length > 0) {
       // sync.Mutex promises no order, so the next holder is any waiter.
       const next = this.pick(m.waiters);
       m.waiters = m.waiters.filter((key) => key !== next);
       m.holder = next;
-      this.move(m.key, { node: next }, id);
+      this.move(m.key, { node: next }, m.id);
       this.wake(next, undefined);
-      this.emit(g.key, "unlock", `${who} unlocks ${m.label}, and ${this.name(next)} gets it.`, { node: id });
-    } else {
-      m.holder = undefined;
-      this.move(m.key, { node: id });
-      this.emit(g.key, "unlock", `${who} unlocks ${m.label}.`, { node: id });
+      return next;
     }
+    m.holder = undefined;
+    this.move(m.key, { node: m.id });
+    return undefined;
+  }
+
+  condWait(g: GRT, id: string): unknown {
+    const who = this.name(g.key);
+    const c = this.conds.get(id);
+    if (c === undefined) this.fatal(`${who} waits on ${id}, which is not a cond node`);
+    const m = this.mutexes.get(c.mu);
+    if (m === undefined) this.fatal(`${who} waits on ${c.label}, whose mutex ${c.mu} is not a mutex node`);
+    if (m.holder !== g.key) {
+      this.panicG(g, `sync: ${c.label}.Wait called without holding ${m.label}`);
+      return PARK;
+    }
+    this.edge(id, g.id, "sync", "Wait()");
+    // Cond.Wait atomically releases the associated mutex and parks on the
+    // condition. This simulator does not inject spurious wakeups.
+    this.releaseLock(m);
+    this.park(g, `${c.label}.Wait()`);
+    c.waiters.push(g.key);
+    this.emit(g.key, "condWait", `${who} waits on ${c.label} and releases ${m.label}.`, { node: id, parked: true });
+    return PARK;
+  }
+
+  condSignal(g: GRT, id: string, broadcast: boolean): unknown {
+    const who = this.name(g.key);
+    const c = this.conds.get(id);
+    if (c === undefined) this.fatal(`${who} signals ${id}, which is not a cond node`);
+    const m = this.mutexes.get(c.mu);
+    if (m === undefined) this.fatal(`${who} signals ${c.label}, whose mutex ${c.mu} is not a mutex node`);
+    this.edge(g.id, id, "sync", broadcast ? "Broadcast()" : "Signal()");
+
+    const waking = broadcast ? this.shuffle([...c.waiters]) : c.waiters.length > 0 ? [this.pick(c.waiters)] : [];
+    if (broadcast) c.waiters = [];
+    else c.waiters = c.waiters.filter((key) => key !== waking[0]);
+
+    for (const key of waking) {
+      const w = this.goroutines.get(key)!;
+      this.park(w, `${m.label}.Lock()`);
+      w.waitMu = c.mu;
+      if (m.holder === undefined) {
+        m.holder = key;
+        this.move(m.key, { node: key });
+        this.wake(key, undefined);
+      } else {
+        m.waiters.push(key);
+      }
+    }
+
+    const op = broadcast ? "condBroadcast" : "condSignal";
+    const text =
+      waking.length === 0
+        ? `${who} signals ${c.label}; nobody is waiting.`
+        : broadcast
+          ? `${who} broadcasts ${c.label}, waking ${waking.length} waiter${waking.length === 1 ? "" : "s"}.`
+          : `${who} signals ${c.label}, waking ${this.name(waking[0]!)}.`;
+    this.emit(g.key, op, text, { node: id });
     return undefined;
   }
 
@@ -1166,6 +1255,27 @@ class Sim {
     return undefined;
   }
 
+  shift(g: GRT, id: string): RecvResult {
+    const who = this.name(g.key);
+    const cells = this.slices.get(id);
+    if (cells === undefined) this.fatal(`${who} shifts ${id}, which is not a slice node`);
+    const tok = cells[0];
+    if (tok === null || tok === undefined) this.fatal(`${who} shifts empty ${id}`);
+    for (let i = 1; i < cells.length; i++) {
+      const moved = cells[i];
+      if (moved !== null && moved !== undefined) this.move(moved, { node: id, slot: i - 1 });
+    }
+    cells.copyWithin(0, 1);
+    cells[cells.length - 1] = null;
+    this.move(tok, { node: g.key });
+    this.edge(id, g.id, "data");
+    this.emit(g.key, "shift", `${who} takes ${valueText(tok.v)} from the head of ${this.label(id)}.`, {
+      node: id,
+      v: tok.v,
+    });
+    return { ok: true, v: tok.v, tok };
+  }
+
   panicG(g: GRT, text: string): void {
     g.status = "panicked";
     g.panic = text;
@@ -1192,6 +1302,7 @@ class Sim {
     for (const tm of this.timers.values()) tm.recvq = [];
     for (const c of this.contexts.values()) c.recvq = [];
     for (const m of this.mutexes.values()) m.waiters = [];
+    for (const c of this.conds.values()) c.waiters = [];
     for (const w of this.wgs.values()) w.waiters = [];
     this.halted = "exit";
     this.haltText = text;
@@ -1338,6 +1449,12 @@ function autoNeedles(op: Op, label: (id: string) => string): string[] {
       return [`${label(op.mu)}.Lock()`];
     case "unlock":
       return [`${label(op.mu)}.Unlock()`];
+    case "condWait":
+      return [`${label(op.cond)}.Wait()`];
+    case "condSignal":
+      return [`${label(op.cond)}.Signal()`];
+    case "condBroadcast":
+      return [`${label(op.cond)}.Broadcast()`];
     case "reset":
       return [`${label(op.timer)}.Reset(`];
     case "stop":
@@ -1348,6 +1465,8 @@ function autoNeedles(op: Op, label: (id: string) => string): string[] {
       return [`${label(op.slice)}[`];
     case "append":
       return [`append(${label(op.slice)}`];
+    case "shift":
+      return [`${label(op.slice)} = ${label(op.slice)}[1:]`];
     case "print":
       return ["fmt.Print"];
     default:

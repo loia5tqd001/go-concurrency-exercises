@@ -1735,6 +1735,7 @@ body.sim-lock {
   stroke-dasharray: 4 3;
 }
 .sim-pill.is-mu .sim-shape,
+.sim-pill.is-cond .sim-shape,
 .sim-pill.is-timer .sim-shape,
 .sim-pill.is-ctx .sim-shape {
   stroke-dasharray: none;

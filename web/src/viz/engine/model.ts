@@ -92,12 +92,16 @@ export type Op = OpBase &
     | { op: "wait"; wg: string }
     | { op: "lock"; mu: string }
     | { op: "unlock"; mu: string }
+    | { op: "condWait"; cond: string }
+    | { op: "condSignal"; cond: string }
+    | { op: "condBroadcast"; cond: string }
     | { op: "start"; timer: string }
     | { op: "reset"; timer: string }
     | { op: "stop"; timer: string }
     | { op: "cancel"; ctx: string }
     | { op: "put"; slice: string; i: number; v: Sendable }
     | { op: "append"; slice: string; v: Sendable }
+    | { op: "shift"; slice: string }
     | { op: "set"; fact: string; v: Value }
     | { op: "inc"; fact: string; n: number }
     | { op: "print"; v: Sendable }
@@ -155,6 +159,12 @@ export interface MutexNode extends NodeBase {
   kind: "mutex";
 }
 
+export interface CondNode extends NodeBase {
+  kind: "cond";
+  // The mutex Locker passed to sync.NewCond.
+  mu: string;
+}
+
 export interface SliceNode extends NodeBase {
   kind: "slice";
   size: number;
@@ -188,6 +198,7 @@ export type NodeDef =
   | ChannelNode
   | WaitGroupNode
   | MutexNode
+  | CondNode
   | SliceNode
   | TimerNode
   | ContextNode
@@ -228,7 +239,7 @@ export interface Match {
   op?: OpName | "return" | "block" | "fire" | "end";
   // The goroutine node id, or a member such as worker[3].
   g?: string;
-  // The channel, wait group, mutex, timer, context, slice, or fact.
+  // The channel, wait group, mutex, cond, timer, context, slice, or fact.
   node?: string;
   // The nth match, counting from 1.
   nth?: number;
@@ -373,6 +384,7 @@ export interface World {
   ch: Record<string, ChannelView>;
   wg: Record<string, { n: number; waiters: number }>;
   mu: Record<string, { holder?: string; waiters: number; key: number }>;
+  cond: Record<string, { waiters: number }>;
   timer: Record<string, TimerView>;
   ctx: Record<string, { done: boolean; cause?: "deadline" | "cancel"; waiters: number }>;
   slice: Record<string, (number | null)[]>;

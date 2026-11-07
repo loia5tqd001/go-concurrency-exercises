@@ -365,6 +365,8 @@ function nodeSize(def: NodeDef, room: number, portrait: boolean): { w: number; h
       return { w: fit(Math.max(78, (def.label.length + 3) * CHAR + 18), 64), h: 30 };
     case "mutex":
       return { w: fit(Math.max(74, def.label.length * CHAR + 44), 64), h: 30 };
+    case "cond":
+      return { w: fit(Math.max(92, def.label.length * CHAR + 54), 72), h: 30 };
     case "timer":
       return { w: fit(Math.max(110, def.label.length * CHAR + 70), 84), h: 34 };
     case "context":

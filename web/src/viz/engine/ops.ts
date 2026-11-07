@@ -16,6 +16,7 @@ import type {
   ContextNode,
   FactNode,
   GoroutineNode,
+  CondNode,
   MutexNode,
   Op,
   OpBase,
@@ -47,6 +48,7 @@ export const goroutine = (def: Def<GoroutineNode>): GoroutineNode => ({ kind: "g
 export const channel = (def: Def<ChannelNode>): ChannelNode => ({ kind: "channel", ...def });
 export const waitgroup = (def: Def<WaitGroupNode>): WaitGroupNode => ({ kind: "waitgroup", ...def });
 export const mutex = (def: Def<MutexNode>): MutexNode => ({ kind: "mutex", ...def });
+export const cond = (def: Def<CondNode>): CondNode => ({ kind: "cond", ...def });
 export const slice = (def: Def<SliceNode>): SliceNode => ({ kind: "slice", ...def });
 export const timer = (def: Def<TimerNode>): TimerNode => ({ kind: "timer", ...def });
 export const context = (def: Def<ContextNode>): ContextNode => ({ kind: "context", ...def });
@@ -93,6 +95,9 @@ export const wait = (wg: string, o: Opts = {}): Op => ({ op: "wait", wg, ...o })
 
 export const lock = (mu: string, o: Opts = {}): Op => ({ op: "lock", mu, ...o });
 export const unlock = (mu: string, o: Opts = {}): Op => ({ op: "unlock", mu, ...o });
+export const condWait = (c: string, o: Opts = {}): Op => ({ op: "condWait", cond: c, ...o });
+export const condSignal = (c: string, o: Opts = {}): Op => ({ op: "condSignal", cond: c, ...o });
+export const condBroadcast = (c: string, o: Opts = {}): Op => ({ op: "condBroadcast", cond: c, ...o });
 
 export const start = (t: string, o: Opts = {}): Op => ({ op: "start", timer: t, ...o });
 export const reset = (t: string, o: Opts = {}): Op => ({ op: "reset", timer: t, ...o });
@@ -104,6 +109,8 @@ export const cancel = (ctx: string, o: Opts = {}): Op => ({ op: "cancel", ctx, .
 export const put = (s: string, i: number, v: Sendable, o: Opts = {}): Op => ({ op: "put", slice: s, i, v, ...o });
 // s = append(s, v)
 export const append = (s: string, v: Sendable, o: Opts = {}): Op => ({ op: "append", slice: s, v, ...o });
+// values = values[1:], returning the removed head for forwarding.
+export const shift = (s: string, o: Opts = {}): Op => ({ op: "shift", slice: s, ...o });
 
 export const set = (f: string, v: Value, o: Opts = {}): Op => ({ op: "set", fact: f, v, ...o });
 export const inc = (f: string, n = 1, o: Opts = {}): Op => ({ op: "inc", fact: f, n, ...o });

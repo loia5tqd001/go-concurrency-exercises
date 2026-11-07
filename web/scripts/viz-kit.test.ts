@@ -8,8 +8,13 @@ import { layout } from "../src/viz/engine/layout.ts";
 import type { Model, NodeDef, RecvResult, SelectResult } from "../src/viz/engine/model.ts";
 import {
   add,
+  append,
   channel,
   close,
+  cond,
+  condBroadcast,
+  condSignal,
+  condWait,
   context,
   done,
   exit,
@@ -28,6 +33,7 @@ import {
   reset,
   select,
   send,
+  shift,
   sleep,
   slice,
   start,
@@ -360,6 +366,167 @@ test("a mutex has one holder, and its key token travels to the holder", () => {
   assert.equal(waiting.world.mu.mu!.holder, "a");
   const key = waiting.world.mu.mu!.key;
   assert.equal(waiting.world.tokens[key]!.at.node, "a");
+});
+
+test("a cond wait releases its mutex and reacquires it after Signal", () => {
+  const run = runModel(
+    model({
+      wg: waitgroup({ label: "wg", pos: at() }),
+      mu: mutex({ label: "mu", pos: at() }),
+      ready: cond({ label: "ready", pos: at(), mu: "mu" }),
+      waiter: goroutine({
+        label: "waiter",
+        pos: at(),
+        spawned: true,
+        program: function* () {
+          yield lock("mu");
+          yield condWait("ready");
+          yield unlock("mu");
+          yield done("wg");
+        },
+      }),
+      signaler: goroutine({
+        label: "signaler",
+        pos: at(),
+        spawned: true,
+        program: function* () {
+          yield sleep(5);
+          yield lock("mu");
+          yield condSignal("ready");
+          yield unlock("mu");
+        },
+      }),
+      main: goroutine({
+        label: "main",
+        pos: at(),
+        main: true,
+        program: function* () {
+          yield lock("mu");
+          yield add("wg", 1);
+          yield go("waiter");
+          yield go("signaler");
+          yield unlock("mu");
+          yield wait("wg");
+        },
+      }),
+    }),
+  );
+  assert.equal(run.outcome, "ok");
+  const waitingIndex = run.steps.findIndex((step) => step.event.op === "condWait");
+  const waiting = run.steps[waitingIndex]!;
+  assert.equal(waiting.world.cond.ready!.waiters, 1);
+  assert.equal(waiting.world.mu.mu!.holder, undefined);
+  assert.equal(
+    run.steps.slice(0, waitingIndex).some((step) => step.event.g === "waiter" && step.event.op === "unlock"),
+    false,
+    "Wait releases the mutex atomically rather than recording a separate Unlock",
+  );
+  const signaling = run.steps.find((step) => step.event.op === "condSignal")!;
+  assert.equal(signaling.world.cond.ready!.waiters, 0);
+  assert.equal(signaling.world.g.waiter!.status, "blocked");
+  assert.match(signaling.world.g.waiter!.why!, /mu\.Lock\(\)/);
+});
+
+test("a cond Broadcast wakes every waiter and each reacquires the mutex", () => {
+  const run = runModel(
+    model({
+      wg: waitgroup({ label: "wg", pos: at() }),
+      mu: mutex({ label: "mu", pos: at() }),
+      ready: cond({ label: "ready", pos: at(), mu: "mu" }),
+      waiter: goroutine({
+        label: "waiter",
+        pos: at(),
+        count: 2,
+        spawned: true,
+        program: function* () {
+          yield lock("mu");
+          yield condWait("ready");
+          yield unlock("mu");
+          yield done("wg");
+        },
+      }),
+      signaler: goroutine({
+        label: "signaler",
+        pos: at(),
+        spawned: true,
+        program: function* () {
+          yield sleep(5);
+          yield lock("mu");
+          yield condBroadcast("ready");
+          yield unlock("mu");
+        },
+      }),
+      main: goroutine({
+        label: "main",
+        pos: at(),
+        main: true,
+        program: function* () {
+          yield lock("mu");
+          yield add("wg", 2);
+          yield go("waiter[*]");
+          yield go("signaler");
+          yield unlock("mu");
+          yield wait("wg");
+        },
+      }),
+    }),
+  );
+  assert.equal(run.outcome, "ok");
+  const broadcast = run.steps.find((step) => step.event.op === "condBroadcast")!;
+  assert.equal(broadcast.world.cond.ready!.waiters, 0);
+  assert.equal(
+    Object.entries(broadcast.world.g).filter(([key, g]) => key.startsWith("waiter[") && g.status === "blocked").length,
+    2,
+  );
+});
+
+test("a cond Wait without its associated mutex panics", () => {
+  const run = runModel(
+    model({
+      mu: mutex({ label: "mu", pos: at() }),
+      ready: cond({ label: "ready", pos: at(), mu: "mu" }),
+      g: goroutine({
+        label: "g",
+        pos: at(),
+        main: true,
+        program: function* () {
+          yield condWait("ready");
+        },
+      }),
+    }),
+  );
+  assert.equal(run.outcome, "panic");
+  assert.match(run.verdict, /Wait called without holding mu/);
+});
+
+test("a slice shift removes and returns its head", () => {
+  let first = -1;
+  let second = -1;
+  const run = runModel(
+    model({
+      q: slice({ label: "q", pos: at(), size: 3 }),
+      g: goroutine({
+        label: "g",
+        pos: at(),
+        main: true,
+        program: function* () {
+          yield append("q", 1);
+          yield append("q", 2);
+          const a: RecvResult = yield shift("q");
+          first = Number(a.v);
+          const b: RecvResult = yield shift("q");
+          second = Number(b.v);
+        },
+      }),
+    }),
+  );
+  assert.equal(run.outcome, "ok");
+  assert.equal(first, 1);
+  assert.equal(second, 2);
+  assert.deepEqual(run.world.slice.q, [null, null, null]);
+  const firstShift = run.steps.find((step) => step.event.op === "shift")!;
+  const remaining = firstShift.world.slice.q.find((token) => token !== null)!;
+  assert.equal(firstShift.world.tokens[remaining]!.at.slot, 0);
 });
 
 test("a timer fires after its delay, and reset discards an unread tick", () => {

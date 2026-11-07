@@ -134,6 +134,14 @@ function NodeShape(props: NodeProps) {
       return <PillShape {...props} text={`${node.def.label} ${props.world.wg[node.id]?.n ?? 0}`} kind="wg" />;
     case "mutex":
       return <MutexShape {...props} />;
+    case "cond":
+      return (
+        <PillShape
+          {...props}
+          text={`${node.def.label} ${props.world.cond[node.id]?.waiters ?? 0}`}
+          kind="cond"
+        />
+      );
     case "timer":
       return <TimerShape {...props} />;
     case "context":

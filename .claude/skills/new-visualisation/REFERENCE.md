@@ -54,6 +54,7 @@ On a narrow screen the grid turns, so data flows top to bottom.
 | `channel` | `label`, `pos`, `cap` | A box with `cap` slots (one dashed slot when `cap: 0`). Values sit in receive order: the leftmost leaves next. "closed" when closed. |
 | `waitgroup` | `label`, `pos` | A dashed pill with the counter. |
 | `mutex` | `label`, `pos` | A pill with a key. The key flies to the goroutine that holds the lock. |
+| `cond` | `label`, `pos`, `mu` | A pill showing its waiter count. `mu` names the mutex passed to `sync.NewCond`. |
 | `slice` | `label`, `pos`, `size` | A strip of cells, filled by `put` and `append`. |
 | `timer` | `label`, `pos`, `after` | A pill with a countdown bar. A tick flies out when it fires. |
 | `context` | `label`, `pos`, `deadline?` | A pill: time left, "deadline passed", or "cancelled". |
@@ -94,9 +95,10 @@ on `wg`) in the lines the goroutine owns.
 | `go(id)` | `go f()` | Starts a `spawned` goroutine: `go("closer")`, `go("worker[3]")`, `go("worker[*]")`. |
 | `add(wg, n)`, `done(wg)`, `wait(wg)` | `sync.WaitGroup` | Counter; `wait` blocks until 0; below 0 panics. |
 | `lock(mu)`, `unlock(mu)` | `sync.Mutex` | One holder. The next holder is any waiter: Go promises no order. Unlocking a free mutex is fatal. |
+| `condWait(c)`, `condSignal(c)`, `condBroadcast(c)` | `sync.Cond` | `Wait` requires the associated mutex, releases it, and parks. `Signal` wakes one waiter; `Broadcast` wakes all. A woken waiter must reacquire the mutex before `Wait` returns. No spurious wakeups are injected. |
 | `start(t)`, `reset(t)`, `stop(t)` | `time.NewTimer`, `Reset`, `Stop` | Arms, re-arms, or stops the timer. A tick nobody received is discarded (Go 1.23). |
 | `cancel(ctx)` | `cancel()` | Closes `Done`; waiters wake. |
-| `put(s, i, v)`, `append(s, v)` | `s[i] = v`, `s = append(s, v)` | Fills a slice cell. |
+| `put(s, i, v)`, `append(s, v)`, `shift(s)` | `s[i] = v`, `s = append(s, v)`, `s = s[1:]` | Fill a slice cell, append at its tail, or remove its head and return the token. `shift` is for FIFO queues; shifting an empty slice is fatal. |
 | `set(f, v)`, `inc(f, n)` | A measured fact | Sets or grows a fact node. |
 | `print(v)` | `fmt.Println(v)` | The value flies to the output strip under the graph. |
 | `pass(test)`, `fail(test)` | A test verdict | Marks a test at that moment. Mark it only where the real test can reach its verdict. |
@@ -188,7 +190,7 @@ the learner can see that a buffer of 20 brings the gap back.
 `when: { op?, g?, node?, nth?, t? }`. `op` is an operation name, `"return"`,
 `"fire"` (a timer or a deadline), `"end"`, or `"block"` (any operation that
 blocked). `g` is a goroutine node id or a member (`worker[3]`). `node` is the
-channel, wait group, mutex, timer, context, slice, or fact. `nth` counts
+channel, wait group, mutex, cond, timer, context, slice, or fact. `nth` counts
 matches from 1. `t` matches at or after that time.
 
 ## Commands
