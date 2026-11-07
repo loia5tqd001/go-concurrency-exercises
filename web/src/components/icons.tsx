@@ -21,12 +21,10 @@ export const PlayIcon = (p: P) => (
   </svg>
 );
 
-// Two connected nodes: a visualisation of a flow, rather than a share graph.
+// A trace over time: legible at sidebar size without implying share or play.
 export const VisualisationIcon = (p: P) => (
   <svg {...base(p)}>
-    <rect x="2" y="7" width="6" height="10" rx="1" />
-    <rect x="16" y="7" width="6" height="10" rx="1" />
-    <path d="M8 12h8m-3-3 3 3-3 3" />
+    <path d="M2 14c2-6 4-6 6 0s4 6 6 0 4-6 6 0" />
   </svg>
 );
 
