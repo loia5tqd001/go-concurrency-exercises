@@ -335,7 +335,10 @@ function groupGrid(n: number, w: number): { perRow: number; cell: number; gap: n
 }
 
 function sliceCell(n: number, w: number): number {
-  return Math.max(6, Math.min(22, (w - 12 - (n - 1) * 2) / n));
+  const gaps = Math.max(0, n - 1);
+  const wide = (w - 12 - gaps * 3) / n;
+  if (wide >= 12) return Math.min(22, wide);
+  return Math.max(6, Math.min(22, (w - 12 - gaps * 2) / n));
 }
 
 function nodeSize(def: NodeDef, room: number, portrait: boolean): { w: number; h: number } {
@@ -357,8 +360,10 @@ function nodeSize(def: NodeDef, room: number, portrait: boolean): { w: number; h
       return { w: fit(Math.max(58, n * 26 + 14), 50), h: 30 };
     }
     case "slice": {
-      const want = def.size * 20 + 12;
-      const w = fit(Math.max(want, 60), 56);
+      const gaps = Math.max(0, def.size - 1);
+      const minimum = def.size * 6 + gaps * 2 + 12;
+      const want = def.size * 20 + gaps * 3 + 12;
+      const w = Math.max(minimum, Math.min(want, room - 10));
       return { w, h: Math.max(22, sliceCell(def.size, w) + 10) };
     }
     case "waitgroup":

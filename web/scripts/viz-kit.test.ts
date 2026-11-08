@@ -750,3 +750,23 @@ test("a scaled-down layout keeps the orientation chosen at the real width", () =
   };
   assert.equal(layout(model(nodes), [], 274).portrait, true);
 });
+
+test("slice cells stay inside their background", () => {
+  for (const width of [300, 640, 1200]) {
+    const lay = layout(
+      model({
+        values: slice({ label: "values", pos: [0, 0], size: 20 }),
+      }),
+      [],
+      width,
+    );
+    const node = lay.nodes.values!;
+    const slots = lay.slots.values!;
+    for (const slot of slots) {
+      assert.ok(slot.x - slot.w / 2 >= node.x - node.w / 2, `${width}px: left cell outside background`);
+      assert.ok(slot.x + slot.w / 2 <= node.x + node.w / 2, `${width}px: right cell outside background`);
+      assert.ok(slot.y - slot.h / 2 >= node.y - node.h / 2, `${width}px: top cell outside background`);
+      assert.ok(slot.y + slot.h / 2 <= node.y + node.h / 2, `${width}px: bottom cell outside background`);
+    }
+  }
+});
