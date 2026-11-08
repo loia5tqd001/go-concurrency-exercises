@@ -95,7 +95,6 @@ const testWG = () => waitgroup({ label: "wg", pos: [1, 2] });
 const callWG = () => waitgroup({ label: "c.wg", pos: [2, 2] });
 const callCount = () => fact({ label: "Call", pos: [3, 0], value: 0, limit: K.one.value });
 const sharedSlice = () => slice({ label: "shareds", pos: [3, 1], size: N });
-const errSlice = () => slice({ label: "errs", pos: [3, 2], size: N });
 
 const SOLUTION_CODE = `
 @caller type call struct {
@@ -162,11 +161,9 @@ const admit: Program = function* ({ i, vars }) {
     yield unlock("mu", { at: "g.mu.Unlock()" });
 
     vars.notShared = (vars.notShared ?? 0) + 1;
-    yield put("shareds", i, "F", { at: "return c.v, c.err, false" });
   } else {
     yield wait("callwg", { at: "c.wg.Wait()" });
     vars.sharedCount = (vars.sharedCount ?? 0) + 1;
-    yield put("shareds", i, "T", { at: "return c.v, c.err, true" });
   }
 
   yield done("wg");
@@ -202,7 +199,6 @@ const propagateError: Program = function* ({ i, vars }) {
   }
 
   vars.errCount = (vars.errCount ?? 0) + 1;
-  yield put("errs", i, "E", { at: "return c.v, c.err, true" });
   yield done("wg");
 };
 
@@ -305,7 +301,6 @@ export default defineViz({
           entry: fact({ label: "entry", pos: [2, 1], value: "none", states: ["none", "call", "gone"] }),
           callwg: callWG(),
           Call: callCount(),
-          shareds: sharedSlice(),
         },
         insight: `The leader inserts one call and unlocks before fn runs. Joiners find the entry and wait on its WaitGroup. They return shared=true. Only the leader returns shared=false.`,
         stops: [
@@ -389,12 +384,11 @@ export default defineViz({
           callwg: callWG(),
           ErrUnavailable: fact({ label: "ErrUnavailable", pos: [3, 0], value: "nil", states: ["nil", "set"] }),
           Call: fact({ label: "Call", pos: [3, 1], value: 0, limit: K.one.value }),
-          errs: errSlice(),
         },
         insight: `The leader stores the error beside the value in the same call. It then releases c.wg. All ${N} callers return ErrUnavailable. Call still runs once.`,
         stops: [
           { when: { op: "set", node: "ErrUnavailable" }, say: "The failed fn returns through the same result field. Success and error use one path." },
-          { when: { op: "put", node: "errs", nth: N }, say: `All ${N} callers now carry the shared error; Call stayed at ${K.one.value}.` },
+          { when: { op: "done", node: "wg", nth: N }, say: `All ${N} callers now carry the shared error; Call stayed at ${K.one.value}.` },
         ],
         tests: errorTests,
         clock: { unit: "ms" },

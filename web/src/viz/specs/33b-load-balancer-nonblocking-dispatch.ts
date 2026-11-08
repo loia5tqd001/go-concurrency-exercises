@@ -310,7 +310,7 @@ function scaffoldNodes(): Record<string, NodeDef> {
     ...workerNodes(),
     result: channel({ label: "result", pos: [4, 2], cap: 1 }),
     done: channel({ label: "done", pos: [3, 3], cap: 0 }),
-    timeout: timer({ label: "timeout", pos: [1, 1], after: K.sendTimeoutS.value * 1000 }),
+    timeout: timer({ label: "time.After", pos: [1, 1], after: K.sendTimeoutS.value * 1000 }),
     wg: waitgroup({ label: "wg", pos: [1, 2] }),
     pool: slice({ label: "pool", pos: [2, 2], size: W }),
   };

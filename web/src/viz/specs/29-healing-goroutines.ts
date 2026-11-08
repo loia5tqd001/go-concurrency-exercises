@@ -198,7 +198,7 @@ export default defineViz({
               }
             },
           }),
-          ownHeartbeat: channel({ label: "own heartbeat", pos: [3, 0], cap: 0 }),
+          ownHeartbeat: channel({ label: "output", pos: [3, 0], cap: 0 }),
           caller: goroutine({
             label: "caller",
             pos: [4, 0],

@@ -209,7 +209,7 @@ function solved(opts: { historyMs: number; deadlineMs: number; ample: boolean })
       },
     }),
     caller: goroutine({
-      label: "caller",
+      label: "Construct",
       pos: [3, 2],
       main: true,
       program: function* ({ vars }) {
@@ -273,7 +273,7 @@ export default defineViz({
           },
           wg: waitgroup({ label: "wg", pos: [1, 4] }),
           caller: goroutine({
-            label: "caller",
+            label: "Construct",
             pos: [2, 2],
             main: true,
             program: function* () {
@@ -325,7 +325,7 @@ export default defineViz({
             cap: K.components.value,
           }),
           caller: goroutine({
-            label: "caller",
+            label: "Construct",
             pos: [3, 2],
             main: true,
             program: function* ({ vars }) {
@@ -384,7 +384,7 @@ export default defineViz({
             size: K.components.value,
           },
           caller: goroutine({
-            label: "caller",
+            label: "Construct",
             pos: [2, 2],
             main: true,
             program: function* ({ vars }) {

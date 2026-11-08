@@ -115,10 +115,8 @@ export default defineViz({
           file: "main.go",
           text: `
 @main func main() {
-@main 	// Create a process
 @main 	proc := MockProcess{}
 @main
-@main 	// Run the process (blocking)
 @main 	proc.Run()
 @main }`,
         },

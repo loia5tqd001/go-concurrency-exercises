@@ -88,7 +88,7 @@ const net = timer({ label: "time.After", pos: [3, 2], after: K.net.value });
 
 const shared = () => ({
   mu: mutex({ label: "b.mu", pos: [0, 0] }),
-  chFast: channel({ label: "fast", pos: [1, 0], cap: 0 }),
+  chFast: channel({ label: "chFast", pos: [1, 0], cap: 0 }),
   chStalled: channel({ label: "stalled", pos: [1, 2], cap: 0 }),
   reader: goroutine({ label: "reader", pos: [2, 0], spawned: true, program: drain }),
   done: channel({ label: "done", pos: [2, 1], cap: 0 }),
@@ -179,7 +179,7 @@ export default defineViz({
             },
           }),
           ...shared(),
-          chFast: channel({ label: "fast", pos: [1, 0], cap: CAP }),
+          chFast: channel({ label: "chFast", pos: [1, 0], cap: CAP }),
           chStalled: channel({ label: "stalled", pos: [1, 2], cap: CAP }),
         },
         insight: `The stalled channel takes ${CAP} events into its buffer. It drops the other ${N - CAP} because the buffer is full and nobody reads it. Publish never waits. Each call unlocks b.mu and returns, so all ${N} calls finish at once. The fast reader stays parked afterwards. That is the test's own loop, not a leak in the bus.`,

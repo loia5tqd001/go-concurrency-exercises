@@ -99,9 +99,9 @@ function pool(workers: number, lines: boolean): Pick<Model, "nodes"> {
           yield* range("resultCh", function* () {}, at("range resultCh"));
         },
       }),
-      wg: waitgroup({ label: "WaitGroup", pos: [2, 1] }),
+      wg: waitgroup({ label: "exits", pos: [2, 1] }),
       closer: goroutine({
-        label: "coordinating",
+        label: "close",
         pos: [3, 1],
         spawned: true,
         program: function* () {

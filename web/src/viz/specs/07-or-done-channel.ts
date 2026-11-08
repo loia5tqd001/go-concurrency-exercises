@@ -86,7 +86,7 @@ export default defineViz({
       summary: `orDone returns c, so out is c. Closing done reaches nobody. out never closes, so the test waits ${K.netMs.value} ms and fails.`,
       model: {
         nodes: {
-          feed: goroutine({ label: "feed", pos: [0, 1], spawned: true, program: feed }),
+          feed: goroutine({ label: "stream", pos: [0, 1], spawned: true, program: feed }),
           c: channel({ label: "c", pos: [1, 1], cap: 0 }),
           done: channel({ label: "done", pos: [1, 0], cap: 0 }),
           main: goroutine({
@@ -127,7 +127,7 @@ export default defineViz({
       summary: "A forwarder waits on c or done. It also waits on out or done. Closing done wakes it, and it closes out.",
       model: {
         nodes: {
-          feed: goroutine({ label: "feed", pos: [0, 1], spawned: true, program: feed }),
+          feed: goroutine({ label: "stream", pos: [0, 1], spawned: true, program: feed }),
           c: channel({ label: "c", pos: [1, 1], cap: 0 }),
           forwarder: goroutine({
             label: "forwarder",

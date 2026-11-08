@@ -281,7 +281,7 @@ function wakeModel(): Model {
           yield exit("test process ends");
         },
       }),
-      signal: channel({ label: "signal", pos: [1, 0], cap: 1 }),
+      signal: channel({ label: "wake", pos: [1, 0], cap: 1 }),
       queueMu: mutex({ label: "mutex", pos: [1, 1] }),
       worker: goroutine({
         label: "worker",
@@ -374,7 +374,7 @@ export default defineViz({
           priority: fact({ label: "priority", pos: [2, 0], value: K.lowPriority.value }),
           done: channel({ label: "done", pos: [3, 1], cap: K.queueCap.value }),
           completed: completed(N, [3, 2]),
-          signal: channel({ label: "signal", pos: [2, 2], cap: 0 }),
+          signal: channel({ label: "wake", pos: [2, 2], cap: 0 }),
         },
         insight:
           "Job 7 does not interrupt the running job. At the next pick, it wins on priority. Jobs 2-6 keep their arrival order.",
@@ -403,7 +403,7 @@ export default defineViz({
           seq: fact({ label: "seq", pos: [3, 0], value: 0 }),
           done: channel({ label: "done", pos: [3, 1], cap: K.queueCap.value }),
           completed: completed(TIES, [3, 2]),
-          signal: channel({ label: "signal", pos: [2, 2], cap: 0 }),
+          signal: channel({ label: "wake", pos: [2, 2], cap: 0 }),
         },
         insight:
           "Equal priorities use seq as the tie-break. The earliest sequence is smallest. The heap pops priority 5 jobs in submission order. The test passes.",

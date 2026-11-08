@@ -58,7 +58,7 @@ export default defineViz({
       model: {
         nodes: {
           caller: goroutine({
-            label: "caller",
+            label: "main",
             pos: [0, 0],
             main: true,
             program: function* () {
@@ -107,7 +107,7 @@ export default defineViz({
       model: {
         nodes: {
           caller: goroutine({
-            label: "caller",
+            label: "main",
             pos: [0, 1],
             main: true,
             program: function* () {

@@ -376,7 +376,7 @@ export default defineViz({
               yield wait("wg");
             },
           }),
-          submitted: waitgroup({ label: "submitted", pos: [0, 0] }),
+          submitted: waitgroup({ label: "submit", pos: [0, 0] }),
           delivered: waitgroup({ label: "done", pos: [1, 4] }),
           wg: waitgroup({ label: "wg", pos: [3, 4] }),
           caller: callerProgram(function* ({ i }: { i: number }) {

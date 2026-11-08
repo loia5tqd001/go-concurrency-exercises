@@ -150,7 +150,7 @@ const fundsNodes = () => ({
   reply3: channel({ label: "reply-3", pos: [4, 3], cap: 0 }),
   reply4: channel({ label: "reply-4", pos: [4, 4], cap: 0 }),
   successes: fact({ label: "successes", pos: [5, 1], value: 0, limit: FUNDS_MAX_SUCCESSES }),
-  balanceReply: channel({ label: "reply channel", pos: [5, 3], cap: 0 }),
+  balanceReply: channel({ label: "reply", pos: [5, 3], cap: 0 }),
 });
 
 const ACTOR_LOOP = `

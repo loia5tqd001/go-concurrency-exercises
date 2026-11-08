@@ -89,7 +89,7 @@ function workers(withDone: boolean): ReturnType<typeof goroutine> {
 
 function scanner(): ReturnType<typeof goroutine> {
   return goroutine({
-    label: "helper",
+    label: "Start",
     pos: [0, 1],
     spawned: true,
     program: function* () {
@@ -104,7 +104,7 @@ function scanner(): ReturnType<typeof goroutine> {
 
 function starter(): ReturnType<typeof goroutine> {
   return goroutine({
-    label: "helper",
+    label: "Start",
     pos: [0, 1],
     spawned: true,
     program: function* () {

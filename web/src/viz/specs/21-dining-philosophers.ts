@@ -149,7 +149,6 @@ const today: Model = {
 @p0,p1,p2,p3,p4 		time.Sleep(time.Millisecond)
 @p0,p1,p2,p3,p4 		p.rightFork.mu.Lock()
 @p0,p1,p2,p3,p4
-@p0,p1,p2,p3,p4 		// eat
 @p0,p1,p2,p3,p4 		time.Sleep(10 * time.Microsecond)
 @p0,p1,p2,p3,p4 		atomic.AddInt32(mealsEaten, 1)
 @p0,p1,p2,p3,p4

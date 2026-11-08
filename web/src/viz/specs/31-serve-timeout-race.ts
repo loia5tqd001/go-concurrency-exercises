@@ -113,6 +113,9 @@ export default defineViz({
   exercise: "31-serve-timeout-race",
   // One README fence draws both states, so both Problem tiers pin it.
   diagrams: { today: "fnv1a:d1b61a7a", goal: "fnv1a:d1b61a7a" },
+  spoilerOk: {
+    "ctx.Done": "the context's completion signal; this is how Go spells the wait",
+  },
   constants: K,
   scenes: [
     {
