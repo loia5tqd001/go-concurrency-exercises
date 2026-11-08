@@ -1,11 +1,44 @@
 <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64">
-  <rect width="64" height="64" rx="14" fill="#0b1d26"/>
-  <g fill="none" stroke="#6f93a3" stroke-width="4.5" stroke-linecap="round">
+  <defs>
+    <linearGradient id="bg" x1="4" y1="2" x2="60" y2="62" gradientUnits="userSpaceOnUse">
+      <stop stop-color="#007d9c"/>
+      <stop offset=".48" stop-color="#006b84"/>
+      <stop offset="1" stop-color="#00495c"/>
+    </linearGradient>
+    <linearGradient id="scan" x1="0" y1="64" x2="64" y2="0" gradientUnits="userSpaceOnUse">
+      <stop stop-color="#bff7ff" stop-opacity="0"/>
+      <stop offset=".46" stop-color="#bff7ff" stop-opacity=".18"/>
+      <stop offset="1" stop-color="#bff7ff" stop-opacity="0"/>
+    </linearGradient>
+  </defs>
+  <rect width="64" height="64" rx="14" fill="url(#bg)"/>
+  <path d="M-10 54L54-10" fill="none" stroke="url(#scan)" stroke-width="11"/>
+  <g fill="none" stroke="#bff7ff" stroke-opacity=".15" stroke-width=".7">
+    <path d="M3 11L17 6L31 13L45 7L60 15"/>
+    <path d="M8 27L23 21L39 29L55 22L63 29"/>
+    <path d="M3 43L17 37L32 45L48 38L61 47"/>
+    <path d="M10 58L26 51L43 59L57 54"/>
+    <path d="M17 6L23 21L17 37L26 51"/>
+    <path d="M31 13L39 29L32 45L43 59"/>
+    <path d="M45 7L55 22L48 38L57 54"/>
+    <path d="M8 27L3 43M23 21L32 45M39 29L48 38M55 22L61 47"/>
+  </g>
+  <g fill="#bff7ff" fill-opacity=".22">
+    <circle cx="3" cy="11" r=".9"/><circle cx="17" cy="6" r=".9"/>
+    <circle cx="31" cy="13" r=".9"/><circle cx="45" cy="7" r=".9"/>
+    <circle cx="8" cy="27" r=".9"/><circle cx="23" cy="21" r=".9"/>
+    <circle cx="39" cy="29" r=".9"/><circle cx="55" cy="22" r=".9"/>
+    <circle cx="3" cy="43" r=".9"/><circle cx="17" cy="37" r=".9"/>
+    <circle cx="32" cy="45" r=".9"/><circle cx="48" cy="38" r=".9"/>
+    <circle cx="10" cy="58" r=".9"/><circle cx="26" cy="51" r=".9"/>
+    <circle cx="43" cy="59" r=".9"/><circle cx="57" cy="54" r=".9"/>
+  </g>
+  <g fill="none" stroke="#dcf7fa" stroke-opacity=".82" stroke-width="4.5" stroke-linecap="round">
     <path d="M8 20h5c9 0 9 16 17 16"/>
     <path d="M8 36h22"/>
     <path d="M8 52h5c9 0 9-16 17-16"/>
   </g>
-  <path d="M30 36c12 0 11-17 23-17" fill="none" stroke="#00add8" stroke-width="6.5" stroke-linecap="round"/>
+  <path d="M30 36c12 0 11-17 23-17" fill="none" stroke="#9cf4ff" stroke-width="6.5" stroke-linecap="round"/>
   <circle cx="53" cy="19" r="6.5" fill="#00add8" stroke="#fff" stroke-width="2.5"/>
   <circle cx="30" cy="36" r="7.5" fill="#fff"/>
   <circle cx="30" cy="36" r="3.3" fill="#ffc857"/>
