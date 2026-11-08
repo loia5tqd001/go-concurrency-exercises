@@ -322,8 +322,8 @@ a:focus-visible {
   gap: 6px;
 }
 
-/* The mark supplies the "Go" cue, so the title drops it and keeps the
-   accent colour. */
+/* The wordmark already reads "Go", so the title drops it and takes the
+   wordmark's colour instead. */
 .brand {
   display: inline-flex;
   align-items: center;
@@ -332,11 +332,6 @@ a:focus-visible {
   font-weight: 700;
   font-size: 16px;
   text-decoration: none;
-}
-
-.brand-logo {
-  display: block;
-  flex: none;
 }
 
 .nav-toggle {
