@@ -169,6 +169,39 @@ const admit: Program = function* ({ i, vars }) {
   yield done("wg");
 };
 
+// The README's join shape: one caller claims the entry and runs fn. The
+// other callers wait on the same result, then all callers return.
+const joinGoal: Program = function* ({ vars }) {
+  let leader = false;
+
+  yield lock("gate");
+  if ((vars.entry ?? 0) === 0) {
+    leader = true;
+    vars.entry = 1;
+    yield add("wait", 1);
+    yield set("entry", "call");
+  }
+  yield unlock("gate");
+
+  if (leader) {
+    yield work(K.latency.value, "fn()");
+    vars.callCount = K.one.value;
+    vars.notShared = K.one.value;
+    yield inc("Call", 1);
+    yield done("wait");
+
+    yield lock("gate");
+    vars.entry = 0;
+    yield set("entry", "gone");
+    yield unlock("gate");
+  } else {
+    yield wait("wait");
+    vars.sharedCount = (vars.sharedCount ?? 0) + 1;
+  }
+
+  yield done("wg");
+};
+
 // TestDoPropagatesErrorToAllWaiters uses the same admission path. The leader
 // stores ErrUnavailable in the shared call before releasing the waiters.
 const propagateError: Program = function* ({ i, vars }) {
@@ -254,29 +287,19 @@ export default defineViz({
       summary: `One caller runs fn. The other ${N - K.one.value} wait. Everyone then gets the same result with the correct shared flag.`,
       model: {
         nodes: {
-          caller: goroutine({
-            label: "caller",
-            pos: [0, 1],
-            main: true,
-            program: function* ({ vars }) {
-              yield work(K.latency.value, "fn()", { at: "fn func()" });
-              vars.callCount = K.one.value;
-              vars.notShared = K.one.value;
-              vars.sharedCount = N - K.one.value;
-              yield inc("Call", 1);
-              yield set("wait", 0);
-              yield set("shared", "1F 19T");
-            },
-          }),
-          wait: fact({ label: "wait", pos: [1, 0], value: N - K.one.value, unit: "callers" }),
+          test: testRunner(N),
+          wg: testWG(),
+          caller: callerGroup(N, joinGoal),
+          gate: mutex({ label: "Do", pos: [1, 0] }),
+          entry: fact({ label: "entry", pos: [2, 0], value: "none", states: ["none", "call", "gone"] }),
+          wait: waitgroup({ label: "wait", pos: [2, 1] }),
           Call: callCount(),
-          shared: fact({ label: "shared", pos: [1, 1], value: "pending" }),
         },
-        insight: `One caller runs fn. The other ${N - K.one.value} wait. When the result is ready, all ${N} return. One reports shared=false and ${N - K.one.value} report shared=true.`,
+        insight: `One caller claims the entry and runs fn. The other ${N - K.one.value} wait on the same result. When fn returns, one caller reports shared=false and ${N - K.one.value} report shared=true.`,
         stops: [
-          { when: { op: "work", g: "caller", nth: K.one.value }, say: "One caller runs fn. Every duplicate waits instead of starting another backend call." },
-          { when: { op: "set", node: "wait" }, say: `The result releases all ${N - K.one.value} waiters together. They share the same value and error.` },
-          { when: { op: "set", node: "shared" }, say: "The leader gets shared=false. The joiners get shared=true." },
+          { when: { op: "set", node: "entry" }, say: "The first caller claims the entry. It owns the one fn call." },
+          { when: { op: "block", g: "caller", nth: N - K.one.value }, say: `One caller runs fn. The other ${N - K.one.value} wait instead of starting another call.` },
+          { when: { op: "done", node: "wait" }, say: `fn returns once. The wait ends and all ${N} callers receive the same result.` },
         ],
         tests: dedupeTests,
         clock: { unit: "ms" },
