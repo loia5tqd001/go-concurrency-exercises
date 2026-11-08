@@ -49,7 +49,7 @@ jobs:
       - name: Build the site
         run: npx vite build
         working-directory: web
-      - name: Loading and loaded layouts stay stable
+      - name: Loading layout and saved progress stay stable
         run: npm run check-layout
         working-directory: web
       - name: Every scaffold builds and fails in the browser runner

@@ -53,11 +53,19 @@ Some exercises have an animated visualisation. A spec, `src/viz/specs/<id>.ts`, 
 
 The sidebar opens on **Recommended**, a curated browser-runnable, visual-backed path through the system. **All exercises** keeps the complete numbered catalogue. Search always covers all exercises, and opening a non-recommended exercise switches the list to **All exercises**.
 
+## Progress storage
+
+Progress is stored only in this browser under `gce:v1:status:<exercise-id>`. Saved code uses `gce:v1:code:<exercise-id>`. These keys do not contain the commit, generated asset hashes, the exercise count, or the scaffold hash. A normal code deploy therefore keeps existing progress and saved code.
+
+Saved code also records a scaffold hash. If `main.go` changes, the app shows the existing keep-mine/reset banner instead of discarding the learner's work. Progress is not cleared by that banner.
+
+Renaming an exercise folder changes its ID and is a breaking storage change. Clearing site data, using another browser or origin, or blocking local storage can also remove access to progress. `scripts/storage.test.ts` locks the current key contract.
+
 The language tests read every rendered exercise README, solution file, scene summary, insight, and stop caption. No prose sentence may exceed 20 words, and hard filler words are rejected. `npm run audit-language` prints the Markdown report for review.
 
 The Problem tab mounts the player on the README's own ASCII diagram. The diagram stays the default view; a "▶ Today" or "▶ Goal" chip swaps in the animation at the same top edge, and the Diagram chip swaps the fence back. A spec pins one fence per Problem tier. Inside scenes appear at the top of the Solution tab after the existing reveal. In development, a stale pin shows its scenes below the README with a strip that says why; a production build omits them. The door plays on open; the Solution block starts paused; reduced motion never autoplays and jumps between steps instead of flying values.
 
-`npm run check-visuals` proves each spec's constants and anchors against `git HEAD`, every `diagrams` pin against the working-tree README, code excerpts verbatim against the committed scaffold or the solution doc, no code in a goal scene, the vocabulary and spoiler rules for Problem scenes, the budgets, and a layout with no overlapping nodes at 300 and 640 px. It runs every scene, for every knob setting, under 12 seeds, and each run must end with the outcome, test results, and time the scene expects. `npm run test-web` adds the recommended-path contract, then tests the scheduler's Go rules and plants faults the checker must catch. `npm run check-layout` measures the exercise skeleton and loaded page in headless Chrome, so a late tab, badge, toolbar, or pane move fails the check. Run these after `prepare-data`.
+`npm run check-visuals` proves each spec's constants and anchors against `git HEAD`, every `diagrams` pin against the working-tree README, code excerpts verbatim against the committed scaffold or the solution doc, no code in a goal scene, the vocabulary and spoiler rules for Problem scenes, the budgets, and a layout with no overlapping nodes at 300 and 640 px. It runs every scene, for every knob setting, under 12 seeds, and each run must end with the outcome, test results, and time the scene expects. `npm run test-web` adds the recommended-path contract, then tests the scheduler's Go rules and plants faults the checker must catch. `npm run check-layout` measures the exercise skeleton and loaded page in headless Chrome, then reloads saved progress and old code in an isolated profile. Run these after `prepare-data`.
 
 `npm run viz -- shots [id ...]` renders every Problem and Solution scene at 300 px and 640 px, in light and dark, checks five points of each run, and saves the last frame under `node_modules/.cache/viz-shots/` (git ignores that path). It fails on horizontal overflow, a truncated label in the graph, or a control under 32 px. The command reuses a Vite server on :5173 and Chrome on :9222 when they are up; otherwise it starts and stops its own.
 

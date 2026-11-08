@@ -50,7 +50,7 @@ function chromeBinary(): string {
   return found;
 }
 
-async function measure(route: string, width: number, preferredPort: number): Promise<Frame[]> {
+async function measure(route: string, width: number, preferredPort: number, checkProgress = false): Promise<Frame[]> {
   const profile = fs.mkdtempSync(path.join(os.tmpdir(), "exercise-layout-chrome-"));
   const debugPort = preferredPort + 400;
   const preview = spawn(
@@ -179,6 +179,44 @@ async function measure(route: string, width: number, preferredPort: number): Pro
     }
     await sleep(500);
     const loaded = await readFrame();
+
+    if (checkProgress) {
+      const status = JSON.stringify("passed");
+      const saved = JSON.stringify(
+        JSON.stringify({
+          code: "package main\n\nfunc main() {}\n",
+          base: "old-scaffold",
+        }),
+      );
+      await evaluate(`localStorage.setItem("gce:v1:status:08-pipeline", ${status}); localStorage.setItem("gce:v1:code:08-pipeline", ${saved}); true`);
+      await send("Page.reload", { ignoreCache: true });
+      for (let attempt = 0; attempt < 100; attempt++) {
+        const ready = await evaluate(`document.querySelector(".workspace:not(.workspace-loading)") !== null`);
+        if (ready === true) break;
+        await sleep(100);
+      }
+      await sleep(500);
+      const progress = JSON.parse(
+        String(
+          await evaluate(`JSON.stringify({
+            sidebar: document.querySelector(".sidebar-foot span")?.textContent.replace(/\\s+/g, " ").trim() ?? "",
+            docPassed: document.querySelector(".doc-tabs .badge.pass") !== null,
+            rowPassed: document.querySelector('.ex-list a[href="/08-pipeline"] .ex-status.pass') !== null,
+            stale: [...document.querySelectorAll(".banner")].some((element) =>
+              element.textContent.includes("This exercise changed since you saved your code.")
+            ),
+          })`),
+        ),
+      ) as { sidebar: string; docPassed: boolean; rowPassed: boolean; stale: boolean };
+      if (
+        !progress.sidebar.startsWith("1 of ") ||
+        !progress.docPassed ||
+        !progress.rowPassed ||
+        !progress.stale
+      ) {
+        throw new Error(`layout-check: saved progress did not survive reload: ${JSON.stringify(progress)}`);
+      }
+    }
     return [loading, loaded];
   } finally {
     socket?.close();
@@ -229,7 +267,7 @@ function compareNarrow(route: string, [loading, loaded]: Frame[]): string[] {
 async function main(): Promise<void> {
   const failures: string[] = [];
   for (const [index, route] of ["/00-limit-crawler", "/04-graceful-sigint", "/08-pipeline"].entries()) {
-    failures.push(...compareDesktop(route, await measure(route, 1300, 4300 + index)));
+    failures.push(...compareDesktop(route, await measure(route, 1300, 4300 + index, route === "/08-pipeline")));
   }
   failures.push(...compareNarrow("/08-pipeline", await measure("/08-pipeline", 800, 4310)));
   failures.push(...compareNarrow("/08-pipeline", await measure("/08-pipeline", 500, 4311)));
@@ -239,7 +277,7 @@ async function main(): Promise<void> {
     process.exitCode = 1;
     return;
   }
-  console.log("layout-check: loading and loaded geometry are stable");
+  console.log("layout-check: loading geometry and saved progress are stable");
 }
 
 await main();

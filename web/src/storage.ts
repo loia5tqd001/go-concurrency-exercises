@@ -1,6 +1,8 @@
 // Per-browser progress and preferences. Every access is guarded: storage can
 // be missing or throw (private windows, blocked site data), and the app must
 // keep working without it.
+// Exercise IDs are the progress contract. Do not put a commit, asset hash, or
+// exercise count in these keys; a normal deploy must keep existing progress.
 const prefix = "gce:v1:";
 
 function get(key: string): string | null {

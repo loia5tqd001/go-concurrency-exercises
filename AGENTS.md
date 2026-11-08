@@ -29,7 +29,7 @@ exists. So:
 | `make check` | Everything the commit gate checks | Before you commit |
 | `cd web && npm run smoke` | Every scaffold builds and fails in the browser runner | After you change `web/` or a test |
 | `make web-data` | Rebuilds the site's exercise data from committed files | After you commit an exercise README or a diagram |
-| `make web-check` | Rebuilds the data, then checks visualisation specs, web tests, the build, and loading/loaded geometry | Before you rely on the web version |
+| `make web-check` | Rebuilds the data, then checks visualisation specs, web tests, the build, loading geometry, and saved progress | Before you rely on the web version |
 | `make web-shots EX="08 22 28"` | The 300/640 px pixel checks and last-frame review shots | Before a visualisation review |
 
 ## Guardrails
