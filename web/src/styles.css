@@ -2054,6 +2054,10 @@ body.sim-lock {
 .sim-code-hint {
   color: var(--fg-muted);
 }
+.sim-code-focus {
+  color: var(--fg);
+  font: 700 12px var(--mono);
+}
 .sim-code-body {
   margin: 0;
   padding: 4px 0 10px;
@@ -2073,10 +2077,11 @@ body.sim-lock {
   padding: 0;
 }
 .sim-line.is-owned {
-  background: var(--accent-soft);
+  border-left-color: color-mix(in srgb, var(--accent) 45%, transparent);
 }
 .sim-line.is-current {
-  border-left-color: var(--fg);
+  background: var(--accent-soft);
+  border-left-color: var(--accent);
 }
 .sim-line.is-gap {
   color: var(--fg-muted);

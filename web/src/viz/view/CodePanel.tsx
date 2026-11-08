@@ -26,12 +26,22 @@ export function CodePanel({ model, lines, world, focus, onFocus }: Props) {
     at.set(view.line, [...(at.get(view.line) ?? []), { key, view }]);
   }
   const file = model.code?.file === "solution" ? "solution" : (model.code?.file ?? "");
+  const focusOwnsLines = focus !== null && lines.some((line) => line.owners.includes(focus));
+  const focusLabel = focusOwnsLines ? (model.nodes[focus]?.label ?? goName(model, focus)) : undefined;
 
   return (
     <details className="sim-code" open>
       <summary>
         <span className="sim-code-file">{file}</span>
-        <span className="sim-code-hint">The dot shows where each goroutine is.</span>
+        <span className="sim-code-hint">
+          {focusLabel === undefined ? (
+            "The dot shows where each goroutine is."
+          ) : (
+            <>
+              Showing <span className="sim-code-focus">{focusLabel}</span>. The dot marks its current line.
+            </>
+          )}
+        </span>
       </summary>
       <pre className="sim-code-body">
         {lines.map((line, n) => {
