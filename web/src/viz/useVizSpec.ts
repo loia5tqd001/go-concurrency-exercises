@@ -1,29 +1,58 @@
 import { useEffect, useState } from "react";
 import type { VizSpec } from "./engine/model.ts";
-import { loadViz } from "./registry.ts";
+import { hasViz, loadViz } from "./registry.ts";
 
-// One lazy spec chunk per exercise. The Problem tab mounts its door on the
-// README fence and the Solution tab shows the inside scenes, so both read the
-// same loaded spec rather than fetching it twice.
-export function useVizSpec(id: string): VizSpec | null {
-  const [spec, setSpec] = useState<VizSpec | null>(null);
+export interface VizSpecState {
+  spec: VizSpec | null;
+  loading: boolean;
+}
+
+// Resolved chunks stay here for the rest of the session. Returning one
+// synchronously prevents a loading flash when the learner revisits a page.
+const loaded = new Map<string, VizSpec>();
+
+function initialState(id: string): VizSpecState {
+  const spec = loaded.get(id);
+  return spec === undefined ? { spec: null, loading: hasViz(id) } : { spec, loading: false };
+}
+
+// One lazy spec chunk per exercise. The exercise view starts this import in
+// parallel with its JSON request and does not mount the workspace until the
+// result is settled. A late spec therefore cannot insert the door under text
+// that is already on screen.
+export function useVizSpec(id: string): VizSpecState {
+  const [state, setState] = useState<VizSpecState>(() => initialState(id));
 
   useEffect(() => {
-    setSpec(null);
+    const cached = loaded.get(id);
+    if (cached !== undefined) {
+      setState({ spec: cached, loading: false });
+      return undefined;
+    }
+
     const load = loadViz(id);
-    if (!load) return undefined;
+    if (!load) {
+      setState({ spec: null, loading: false });
+      return undefined;
+    }
+
+    setState({ spec: null, loading: true });
     let live = true;
     load().then(
       (module) => {
-        if (live) setSpec(module.default);
+        loaded.set(id, module.default);
+        if (live) setState({ spec: module.default, loading: false });
       },
-      // A missing chunk is the same as no spec: no door, no inside scenes.
-      () => {},
+      // A missing chunk is the same as no spec: no door and no inside scenes.
+      // Treat it as settled so the readable exercise is not held hostage.
+      () => {
+        if (live) setState({ spec: null, loading: false });
+      },
     );
     return () => {
       live = false;
     };
   }, [id]);
 
-  return spec;
+  return state;
 }

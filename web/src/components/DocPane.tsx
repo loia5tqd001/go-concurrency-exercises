@@ -2,9 +2,9 @@ import { useEffect, useRef, useState } from "react";
 import { site, type Exercise, type ExerciseSummary } from "../data.ts";
 import { onLinkClick, routePath } from "../router.ts";
 import type { Status } from "../storage.ts";
+import type { VizSpec } from "../viz/engine/model.ts";
 import { VizSolution } from "../viz/VizDoor.tsx";
 import { hasViz } from "../viz/registry.ts";
-import { useVizSpec } from "../viz/useVizSpec.ts";
 import { CheckIcon, VisualisationIcon } from "./icons.tsx";
 import { Markdown } from "./Markdown.tsx";
 
@@ -13,14 +13,14 @@ interface Props {
   exercise: Exercise;
   tab: "problem" | "solution";
   status: Status | null;
+  spec: VizSpec | null;
   onOpenFile: (name: string) => void;
 }
 
-export function DocPane({ summary, exercise, tab, status, onOpenFile }: Props) {
+export function DocPane({ summary, exercise, tab, status, spec, onOpenFile }: Props) {
   const [revealed, setRevealed] = useState(false);
   const bodyRef = useRef<HTMLDivElement>(null);
   const id = summary.id;
-  const spec = useVizSpec(id);
   const files = exercise.files.map((f) => f.name);
   const index = site.exercises.findIndex((e) => e.id === id);
   const prev = site.exercises[index - 1];

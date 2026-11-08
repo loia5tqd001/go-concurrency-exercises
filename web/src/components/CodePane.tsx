@@ -7,8 +7,8 @@ import type { BuildMode, BuildRequest, SourceFile } from "../runner/toolchain.ts
 import { clearCode, hash, loadCode, saveCode, type Status } from "../storage.ts";
 import { navigate, routePath } from "../router.ts";
 import { openDoor, specTestNames, todaySceneId } from "../viz/doorIntent.ts";
+import type { VizSpec } from "../viz/engine/model.ts";
 import { hasViz } from "../viz/registry.ts";
-import { useVizSpec } from "../viz/useVizSpec.ts";
 import { CheckIcon, CrossIcon, FormatIcon, InfoIcon, LockIcon, PlayIcon, ResetIcon, StopIcon, TerminalIcon } from "./icons.tsx";
 import { paneFraction, Splitter } from "./Splitter.tsx";
 
@@ -20,6 +20,7 @@ interface Props {
   summary: ExerciseSummary;
   exercise: Exercise;
   status: Status | null;
+  spec: VizSpec | null;
   onStatus: (status: Status | null) => void;
   // openFile is filled in by CodePane so the docs beside it can open files.
   openFile: RefObject<OpenFile>;
@@ -28,7 +29,7 @@ interface Props {
 // One compiler diagnostic: "./main.go:12:5: undefined: x".
 const diagnosticRe = /^(?:\.\/)?([\w.-]+\.go):(\d+):(\d+): (.*)$/;
 
-export function CodePane({ summary, exercise, status, onStatus, openFile }: Props) {
+export function CodePane({ summary, exercise, status, spec, onStatus, openFile }: Props) {
   const id = summary.id;
   const dir = packageDir(id);
   const files = exercise.files;
@@ -50,9 +51,8 @@ export function CodePane({ summary, exercise, status, onStatus, openFile }: Prop
   onStatusRef.current = onStatus;
 
   // The console shows a door link only when the spec names the failing test
-  // and draws a Today scene (decision 5). The spec loads lazily, as it does
-  // for the door itself.
-  const spec = useVizSpec(id);
+  // and draws a Today scene (decision 5). ExerciseView resolves the lazy spec
+  // once for both panes, after which this component only reads it.
   const vizLink = useMemo(() => {
     if (spec === null) return null;
     const scene = todaySceneId(spec);
