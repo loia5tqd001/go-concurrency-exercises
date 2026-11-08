@@ -4,6 +4,7 @@ import { useEffect, useState } from "react";
 import type { BuildRequest, BuildResult, SourceFile } from "./toolchain.ts";
 
 export type ToolchainState =
+  | { phase: "idle" }
   | { phase: "loading"; loaded: number; total: number }
   | { phase: "ready" }
   | { phase: "error"; message: string };
@@ -14,14 +15,27 @@ interface Pending {
 }
 
 class GoClient {
-  state: ToolchainState = { phase: "loading", loaded: 0, total: 0 };
-  private worker = new Worker(new URL("./toolchain.worker.ts", import.meta.url), { type: "module" });
+  state: ToolchainState = { phase: "idle" };
+  private worker?: Worker;
+  private readyPromise?: Promise<void>;
+  private resolveReady?: () => void;
+  private rejectReady?: (error: Error) => void;
   private nextId = 1;
   private pending = new Map<number, Pending>();
   private listeners = new Set<(s: ToolchainState) => void>();
 
-  constructor() {
-    this.worker.onmessage = (e: MessageEvent) => {
+  private start(): Promise<void> {
+    if (this.readyPromise) return this.readyPromise;
+
+    this.readyPromise = new Promise<void>((resolve, reject) => {
+      this.resolveReady = resolve;
+      this.rejectReady = reject;
+    });
+    this.setState({ phase: "loading", loaded: 0, total: 0 });
+
+    const worker = new Worker(new URL("./toolchain.worker.ts", import.meta.url), { type: "module" });
+    this.worker = worker;
+    worker.onmessage = (e: MessageEvent) => {
       const msg = e.data;
       if (msg.type === "state") {
         this.setState(msg.state);
@@ -33,9 +47,10 @@ class GoClient {
       if (msg.error) p.reject(new Error(msg.error));
       else p.resolve(msg.result as never);
     };
-    this.worker.onerror = (e) => {
+    worker.onerror = (e) => {
       this.setState({ phase: "error", message: e.message || "the toolchain worker failed to start" });
     };
+    return this.readyPromise;
   }
 
   subscribe(fn: (s: ToolchainState) => void): () => void {
@@ -43,31 +58,44 @@ class GoClient {
     return () => this.listeners.delete(fn);
   }
 
-  build(req: BuildRequest): Promise<BuildResult> {
+  async build(req: BuildRequest): Promise<BuildResult> {
+    await this.start();
     return this.call({ type: "build", req });
   }
 
-  format(src: string): Promise<{ output?: string; error?: string }> {
+  async format(src: string): Promise<{ output?: string; error?: string }> {
+    await this.start();
     return this.call({ type: "format", src });
   }
 
   private setState(s: ToolchainState) {
     this.state = s;
     for (const fn of this.listeners) fn(s);
+    if (s.phase === "ready") {
+      this.resolveReady?.();
+      this.resolveReady = undefined;
+      this.rejectReady = undefined;
+    } else if (s.phase === "error") {
+      this.rejectReady?.(new Error(s.message));
+      this.resolveReady = undefined;
+      this.rejectReady = undefined;
+    }
   }
 
   private call<T>(msg: object): Promise<T> {
+    const worker = this.worker;
+    if (!worker) return Promise.reject(new Error("the toolchain worker is not running"));
     const id = this.nextId++;
     return new Promise<T>((resolve, reject) => {
       this.pending.set(id, { resolve: resolve as (v: never) => void, reject });
-      this.worker.postMessage({ ...msg, id });
+      worker.postMessage({ ...msg, id });
     });
   }
 }
 
 let client: GoClient | undefined;
 
-// goClient starts the toolchain download on first use.
+// goClient constructs the client without starting its worker.
 export function goClient(): GoClient {
   return (client ??= new GoClient());
 }

@@ -142,6 +142,7 @@ function useMediaQuery(query: string): boolean {
 }
 
 function ToolchainStatus({ state }: { state: ToolchainState }) {
+  if (state.phase === "idle") return null;
   if (state.phase === "ready") {
     return (
       <span className="tc-status ready" title={`Go ${site.goVersion} is ready`}>

@@ -178,7 +178,7 @@ export function CodePane({ summary, exercise, status, spec, onStatus, openFile }
   openFile.current = switchTo;
 
   const runTests = async (only?: string) => {
-    if (busyRef.current || goClient().state.phase !== "ready") return;
+    if (busyRef.current) return;
     if (summary.unsupported) return buildOnly();
     setBusy("test");
     consoleModel.clear();
@@ -224,7 +224,7 @@ export function CodePane({ summary, exercise, status, spec, onStatus, openFile }
   };
 
   const runMain = async () => {
-    if (busyRef.current || goClient().state.phase !== "ready") return;
+    if (busyRef.current) return;
     setBusy("run");
     consoleModel.clear();
     consoleModel.command(`go run ./${id}`);
@@ -273,7 +273,8 @@ export function CodePane({ summary, exercise, status, spec, onStatus, openFile }
   const format = async () => {
     const editor = editorRef.current;
     const model = models.get("main.go");
-    if (!editor || !model || goClient().state.phase !== "ready") return;
+    if (!editor || !model || busyRef.current) return;
+    setBusy("build");
     const src = model.getValue();
     try {
       const res = await goClient().format(src);
@@ -286,6 +287,8 @@ export function CodePane({ summary, exercise, status, spec, onStatus, openFile }
       }
     } catch {
       // Formatting is a convenience; the code is saved either way.
+    } finally {
+      setBusy(null);
     }
     saveCode(id, model.getValue(), scaffold);
   };
@@ -481,7 +484,7 @@ export function CodePane({ summary, exercise, status, spec, onStatus, openFile }
           <button
             className="btn ghost"
             onClick={format}
-            disabled={!ready}
+            disabled={!!busy || toolchain.phase === "error"}
             aria-label="Format main.go"
             title={`Format main.go with gofmt (${modKey}+S)`}
           >
@@ -518,7 +521,7 @@ export function CodePane({ summary, exercise, status, spec, onStatus, openFile }
         <Splitter axis="y" target={splitRef} cssVar="--editor-frac" prefKey="editor-frac" min={0.15} max={0.85} />
         <div className="console">
           <div className="console-toolbar">
-            {busy && busy !== "build" ? (
+            {busy && busy !== "build" && toolchain.phase === "ready" ? (
               <button className="btn danger" onClick={stop}>
                 <StopIcon /> Stop
               </button>
@@ -526,7 +529,7 @@ export function CodePane({ summary, exercise, status, spec, onStatus, openFile }
               <button
                 className="btn primary"
                 onClick={() => runTests()}
-                disabled={!ready || !!busy}
+                disabled={!!busy || toolchain.phase === "error"}
                 aria-label={summary.unsupported ? "Build only, tests require local Go" : undefined}
                 title={summary.unsupported ? "Compile main.go and the tests" : `go test -v (${modKey}+Enter)`}
               >
@@ -537,7 +540,7 @@ export function CodePane({ summary, exercise, status, spec, onStatus, openFile }
             <button
               className="btn"
               onClick={runMain}
-              disabled={!ready || !!busy}
+              disabled={!!busy || toolchain.phase === "error"}
               aria-label="Run main"
               title={`go run (${modKey}+Shift+Enter)`}
             >
@@ -551,6 +554,7 @@ export function CodePane({ summary, exercise, status, spec, onStatus, openFile }
               <div className="popover">
                 <p>
                   <strong>Real Go {site.goVersion}.</strong> The Go compiler runs in this tab. Your code stays in this browser.
+                  It starts when you first run or format code.
                 </p>
                 <p>
                   <strong>No race detector.</strong> The browser cannot run <code>-race</code>. Run{" "}
@@ -576,7 +580,7 @@ export function CodePane({ summary, exercise, status, spec, onStatus, openFile }
                   key={t}
                   className={`chip ${tests[t] ?? "idle"}`}
                   onClick={() => runTests(t)}
-                  disabled={!ready || !!busy}
+                  disabled={!!busy || toolchain.phase === "error"}
                   title={`Run only ${t}`}
                 >
                   {tests[t] === "pass" ? <CheckIcon width={12} height={12} /> : tests[t] === "fail" ? <CrossIcon width={12} height={12} /> : <span className="chip-dot" />}
