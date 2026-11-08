@@ -42,14 +42,13 @@ export function Player({ spec, scenes, hideChips = false, autoplay = false }: Pr
   const [knobs, setKnobs] = useState<Record<string, Params>>({});
   // One object per knob setting: a new P would rerun the scene every render.
   const P = useMemo(() => knobs[scene.id] ?? defaultParams(scene), [knobs, scene]);
-  const [seed, setSeed] = useState(1);
 
   const model = useMemo(() => resolveModel(scene, P), [scene, P]);
-  const run = useMemo(() => runModel(model, { P, seed }), [model, P, seed]);
+  const run = useMemo(() => runModel(model, { P, seed: 1 }), [model, P]);
   const slow = useMemo(() => model.clock?.slow ?? specSlow(spec, scene), [spec, scene, model]);
   const timeline = useMemo(() => buildTimeline(run, slow), [run, slow]);
   const lines = useMemo(() => parseCode(model.code), [model]);
-  const varies = useMemo(() => scheduleVaries(model, P), [model, P]);
+  const orderMayVary = useMemo(() => scheduleVaries(model, P), [model, P]);
 
   const [width, setWidth] = useState(0);
   const stageRef = useRef<HTMLDivElement>(null);
@@ -371,20 +370,6 @@ export function Player({ spec, scenes, hideChips = false, autoplay = false }: Pr
           ))}
         </div>
         <div className="sim-tools">
-          {varies && (
-            <button
-              type="button"
-              className="sim-btn"
-              onClick={() => {
-                setSeed((s) => s + 1);
-                setPlaying(!reduce);
-              }}
-              aria-label="Try another order"
-              title="Try another valid order"
-            >
-              <Icon name="shuffle" />
-            </button>
-          )}
           <button
             type="button"
             className="sim-btn"
@@ -503,7 +488,10 @@ export function Player({ spec, scenes, hideChips = false, autoplay = false }: Pr
           </ul>
         )}
         <p className="sim-insight">{inlineCode(model.insight)}</p>
-        <Legend world={world} />
+        <div className="sim-meta">
+          <Legend world={world} />
+          {orderMayVary && <span className="sim-order-vary">order may vary</span>}
+        </div>
       </div>
 
       {lines.length > 0 && <CodePanel model={model} lines={lines} world={world} focus={focus} onFocus={onFocus} />}
@@ -639,7 +627,7 @@ function specSlow(spec: VizSpec, scene: SceneDef): number {
   return slowFor(longest);
 }
 
-// Does another seed give another order? Then the shuffle button means something.
+// Does another seed give another event order? Then the scene can say so.
 function scheduleVaries(model: ReturnType<typeof resolveModel>, P: Params): boolean {
   const sign = (seed: number): string =>
     runModel(model, { P, seed })
