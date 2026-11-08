@@ -415,32 +415,6 @@ a:focus-visible {
 .workspace-loading {
   background: var(--bg-elev);
 }
-.loading-tabbar {
-  display: flex;
-  align-items: stretch;
-  min-height: 41px;
-  padding: 0 12px;
-  border-bottom: 1px solid var(--border);
-}
-.loading-tab {
-  display: inline-flex;
-  align-items: center;
-  padding: 10px 8px 9px;
-  border-bottom: 2px solid transparent;
-  color: var(--fg-muted);
-  font-weight: 550;
-}
-.loading-tab.is-active {
-  border-color: var(--accent);
-  color: var(--fg);
-}
-.loading-pill {
-  align-self: center;
-  width: 54px;
-  height: 20px;
-  border-radius: 999px;
-  background: var(--bg-sunken);
-}
 .loading-doc {
   display: grid;
   align-content: start;
@@ -467,6 +441,9 @@ a:focus-visible {
   width: 82%;
   height: 24px;
   margin: 2px 0 6px;
+}
+.loading-line.is-file {
+  width: 64px;
 }
 .loading-line.is-button {
   width: 104px;
@@ -1325,6 +1302,13 @@ a:focus-visible {
   .workspace {
     display: flex;
     flex-direction: column;
+  }
+  /* In the stacked layout the README's height is not known yet. Showing the
+     code pane under a short skeleton would move it far down when the real
+     document arrives. Keep that below-fold pane out until the page settles. */
+  .workspace-loading .code-pane,
+  .workspace-loading > .splitter-x {
+    display: none;
   }
   .doc-body {
     padding: 14px 16px 20px;

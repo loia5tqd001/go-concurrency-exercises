@@ -10,6 +10,7 @@ import { openDoor, specTestNames, todaySceneId } from "../viz/doorIntent.ts";
 import type { VizSpec } from "../viz/engine/model.ts";
 import { hasViz } from "../viz/registry.ts";
 import { CheckIcon, CrossIcon, FormatIcon, InfoIcon, LockIcon, PlayIcon, ResetIcon, StopIcon, TerminalIcon } from "./icons.tsx";
+import { LocalBanner } from "./LocalBanner.tsx";
 import { paneFraction, Splitter } from "./Splitter.tsx";
 
 type Busy = null | "test" | "run" | "build";
@@ -492,15 +493,7 @@ export function CodePane({ summary, exercise, status, spec, onStatus, openFile }
         </div>
       </div>
 
-      {summary.unsupported && (
-        <div className="banner local-banner" role="status">
-          <InfoIcon />
-          <span>
-            <strong>Run the tests on your computer.</strong> The browser can build this exercise, but not run its tests.{" "}
-            {summary.unsupported}.
-          </span>
-        </div>
-      )}
+      <LocalBanner unsupported={summary.unsupported} />
 
       {stale && (
         <div className="banner" role="status">

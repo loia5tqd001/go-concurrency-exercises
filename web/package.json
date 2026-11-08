@@ -16,6 +16,7 @@
     "check-visuals": "node scripts/viz-check.ts",
     "test-web": "node --test scripts/language-audit.test.ts scripts/recommended.test.ts scripts/spec-language.test.ts scripts/viz-kit.test.ts scripts/viz-check.test.ts",
     "test-visuals": "node --test scripts/viz-kit.test.ts scripts/viz-check.test.ts",
+    "check-layout": "node scripts/layout-check.ts",
     "viz": "node scripts/viz.ts"
   },
   "dependencies": {

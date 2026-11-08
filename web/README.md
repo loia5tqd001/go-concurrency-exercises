@@ -57,7 +57,7 @@ The language tests read every rendered exercise README, solution file, scene sum
 
 The Problem tab mounts the player on the README's own ASCII diagram. The diagram stays the default view; a "▶ Today" or "▶ Goal" chip swaps in the animation at the same top edge, and the Diagram chip swaps the fence back. A spec pins one fence per Problem tier. Inside scenes appear at the top of the Solution tab after the existing reveal. In development, a stale pin shows its scenes below the README with a strip that says why; a production build omits them. The door plays on open; the Solution block starts paused; reduced motion never autoplays and jumps between steps instead of flying values.
 
-`npm run check-visuals` proves each spec's constants and anchors against `git HEAD`, every `diagrams` pin against the working-tree README, code excerpts verbatim against the committed scaffold or the solution doc, no code in a goal scene, the vocabulary and spoiler rules for Problem scenes, the budgets, and a layout with no overlapping nodes at 300 and 640 px. It runs every scene, for every knob setting, under 12 seeds, and each run must end with the outcome, test results, and time the scene expects. `npm run test-web` adds the recommended-path contract, then tests the scheduler's Go rules and plants faults the checker must catch. Run both after `prepare-data`.
+`npm run check-visuals` proves each spec's constants and anchors against `git HEAD`, every `diagrams` pin against the working-tree README, code excerpts verbatim against the committed scaffold or the solution doc, no code in a goal scene, the vocabulary and spoiler rules for Problem scenes, the budgets, and a layout with no overlapping nodes at 300 and 640 px. It runs every scene, for every knob setting, under 12 seeds, and each run must end with the outcome, test results, and time the scene expects. `npm run test-web` adds the recommended-path contract, then tests the scheduler's Go rules and plants faults the checker must catch. `npm run check-layout` measures the exercise skeleton and loaded page in headless Chrome, so a late tab, badge, toolbar, or pane move fails the check. Run these after `prepare-data`.
 
 `npm run viz -- shots [id ...]` renders every Problem and Solution scene at 300 px and 640 px, in light and dark, checks five points of each run, and saves the last frame under `node_modules/.cache/viz-shots/` (git ignores that path). It fails on horizontal overflow, a truncated label in the graph, or a control under 32 px. The command reuses a Vite server on :5173 and Chrome on :9222 when they are up; otherwise it starts and stops its own.
 
@@ -107,6 +107,7 @@ npm run smoke      # every scaffold through the runner under Node; each must bui
 npm run smoke -- --solutions ..   # your local main.go files instead; each must pass
 npm run audit-language            # report long or hard-to-read prose across exercise and solution Markdown
 npm run test-web   # recommended-path contract and visual-engine tests
+npm run check-layout              # loading and loaded page geometry must match
 npm run viz -- shots              # pixel check every spec; PNGs under node_modules/.cache/viz-shots
 npm run viz -- shots 06           # pixel check one spec, by id or leading number
 npm run viz -- shots 06 --themes light   # just the light review frames

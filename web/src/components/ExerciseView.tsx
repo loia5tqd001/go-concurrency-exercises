@@ -4,6 +4,8 @@ import type { Status } from "../storage.ts";
 import { useVizSpec } from "../viz/useVizSpec.ts";
 import { CodePane, type OpenFile } from "./CodePane.tsx";
 import { DocPane } from "./DocPane.tsx";
+import { DocTabs } from "./DocTabs.tsx";
+import { LocalBanner } from "./LocalBanner.tsx";
 import { paneFraction, Splitter } from "./Splitter.tsx";
 
 interface Props {
@@ -35,7 +37,7 @@ export function ExerciseView({ summary, tab, status, onStatus }: Props) {
   // The README's visualisation chips are inserted by a layout effect. Keep
   // the whole workspace off screen until both requests settle, so a late
   // spec cannot open a second layout pass under visible text.
-  if (!exercise || viz.loading) return <LoadingWorkspace summary={summary} tab={tab} />;
+  if (!exercise || viz.loading) return <LoadingWorkspace summary={summary} tab={tab} status={status} />;
 
   return (
     <div
@@ -57,7 +59,7 @@ export function ExerciseView({ summary, tab, status, onStatus }: Props) {
   );
 }
 
-function LoadingWorkspace({ summary, tab }: Pick<Props, "summary" | "tab">) {
+function LoadingWorkspace({ summary, tab, status }: Pick<Props, "summary" | "tab" | "status">) {
   return (
     <div
       className="workspace workspace-loading"
@@ -65,12 +67,7 @@ function LoadingWorkspace({ summary, tab }: Pick<Props, "summary" | "tab">) {
       style={{ "--doc-frac": `${paneFraction("doc-frac", 0.4) * 100}%` } as CSSProperties}
     >
       <section className="doc-pane" aria-label={`${tab === "problem" ? "Problem" : "Solution"} loading`}>
-        <div className="loading-tabbar" aria-hidden="true">
-          <span className={`loading-tab${tab === "problem" ? " is-active" : ""}`}>Problem</span>
-          <span className={`loading-tab${tab === "solution" ? " is-active" : ""}`}>Solution</span>
-          <span className="spacer" />
-          <span className="loading-pill" />
-        </div>
+        <DocTabs summary={summary} tab={tab} status={status} />
         <div className="doc-body loading-doc" aria-hidden="true">
           <span className="loading-line is-short" />
           <span className="loading-line is-title" />
@@ -85,9 +82,16 @@ function LoadingWorkspace({ summary, tab }: Pick<Props, "summary" | "tab">) {
       <div className="splitter splitter-x" aria-hidden="true" />
       <section className="code-pane" aria-label="Code loading">
         <div className="code-toolbar" aria-hidden="true">
-          <span className="loading-tab is-active">main.go</span>
-          <span className="loading-tab">check_test.go</span>
+          <div className="file-tabs">
+            <span className="file-tab active">
+              <span className="loading-line is-file" />
+            </span>
+            <span className="file-tab">
+              <span className="loading-line is-file" />
+            </span>
+          </div>
         </div>
+        <LocalBanner unsupported={summary.unsupported} />
         <div className="split-y">
           <div className="editor-host loading-surface" aria-hidden="true" />
           <div className="splitter splitter-y" aria-hidden="true" />

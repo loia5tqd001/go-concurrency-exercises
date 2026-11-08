@@ -34,7 +34,7 @@ web-data:
 	cd web && npm run prepare-data
 
 web-check: web-data
-	cd web && npm run check-visuals && npm run test-web
+	cd web && npm run check-visuals && npm run test-web && npx vite build && npm run check-layout
 
 # EX="08 22 28": the 300/640 px pixel checks and last-frame review shots.
 # Needs Chrome; the script starts or reuses Vite and headless Chrome.
